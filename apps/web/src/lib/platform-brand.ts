@@ -4,7 +4,7 @@ export const PLATFORM_DESCRIPTION = 'Manage your equipment fleet, quotations, di
 
 export function platformHeadTags(origin: string): string {
   const canonical = `${origin}/`;
-  const image = `${origin}/images/platform-inventory.webp`;
+  const image = `${origin}/images/platform-dashboard.webp`;
   const structured = {
     '@context': 'https://schema.org',
     '@graph': [

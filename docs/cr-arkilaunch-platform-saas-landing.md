@@ -20,7 +20,7 @@
 
 ## Assets and maintenance
 
-`scripts/capture-platform-preview.mjs` opens the actual inventory route with intercepted sample API responses, then exports a full-height, six-category 1440px capture and responsive 800px WebP using Python Pillow. This lets the landing page laptop screen scroll through the sample fleet. Run with the local Vite server available. No production records or authentication credentials are used. The page labels the screenshot as sample data. ArkiLaunch owns the app screenshot; no external photography is included.
+`scripts/capture-platform-preview.mjs` opens the actual dashboard route with intercepted sample API responses, then exports a landscape 1440px capture and responsive 800px WebP using Python Pillow. Run with the local Vite server available. No production records or authentication credentials are used. The page labels the screenshot as sample data. ArkiLaunch owns the app screenshot; no external photography is included.
 
 Featured partner selection stays in a small frontend configuration. Company branding and membership always come from the live catalog. New featured companies require an editorial entry; all active companies already appear in the directory.
 

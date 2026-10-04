@@ -585,20 +585,10 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
 }
 
 function ProductPreview() {
-  const [ref, visible] = useScrollReveal<HTMLElement>();
   return (
-    <figure ref={ref} data-scroll-reveal={visible ? 'visible' : 'hidden'} className="platform-reveal platform-reveal-hero min-w-0 py-2">
-      <div className="laptop-preview">
-        <div className="laptop-bezel">
-          <span className="laptop-camera" aria-hidden="true" />
-          <div className="laptop-screen">
-            <img src="/images/platform-inventory.webp" srcSet="/images/platform-inventory-small.webp 800w, /images/platform-inventory.webp 1440w" sizes="(min-width: 1024px) 55vw, 95vw" width={1440} fetchPriority="high" alt="Sample ArkiLaunch fleet inventory with excavators, earthmoving equipment, availability and maintenance status." className="block h-auto w-full" />
-          </div>
-        </div>
-        <div className="laptop-deck" aria-hidden="true"><span className="laptop-trackpad" /></div>
-        <div className="laptop-foot" aria-hidden="true" />
-      </div>
-      <figcaption className="flex items-center justify-between gap-3 px-1 pt-3 text-xs text-text-muted"><span>Fleet inventory preview</span><span>Illustrative sample data</span></figcaption>
+    <figure className="min-w-0 py-2">
+      <img src="/images/platform-dashboard.webp" srcSet="/images/platform-dashboard-small.webp 800w, /images/platform-dashboard.webp 1440w" sizes="(min-width: 1024px) 55vw, 95vw" width={1440} fetchPriority="high" alt="Sample ArkiLaunch dashboard showing invoicing, fleet utilization, weather advisories and field logs for review." className="block h-auto w-full rounded-md shadow-md" />
+      <figcaption className="pt-3 text-right text-xs text-text-muted">ArkiLaunch dashboard · illustrative sample data</figcaption>
     </figure>
   );
 }

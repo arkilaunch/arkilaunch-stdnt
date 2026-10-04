@@ -1,7 +1,7 @@
 # Change Record: Platform landing scroll reveals
 
 **Date:** 2026-10-04
-**Status:** Applied
+**Status:** Applied for content sections; product-image motion superseded by `cr-arkilaunch-platform-landing-dashboard-image`.
 **Trigger:** Owner requested scroll animation on the platform landing, especially on the hero image.
 **Docs touched:** DSD public landing motion; DESIGN.md materialization; index.
 

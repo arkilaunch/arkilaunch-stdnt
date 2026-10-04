@@ -7,7 +7,7 @@ describe('platform marketing metadata', () => {
     const doc = new DOMParser().parseFromString(`<head>${html}</head>`, 'text/html');
     expect(doc.querySelector('link[rel="canonical"]')?.getAttribute('href')).toBe('https://arkilaunch.app/');
     expect(doc.querySelector('meta[property="og:title"]')?.getAttribute('content')).toBe(PLATFORM_TITLE);
-    expect(doc.querySelector('meta[property="og:image"]')?.getAttribute('content')).toBe('https://arkilaunch.app/images/platform-inventory.webp');
+    expect(doc.querySelector('meta[property="og:image"]')?.getAttribute('content')).toBe('https://arkilaunch.app/images/platform-dashboard.webp');
     const data = JSON.parse(doc.querySelector('script')!.textContent!);
     expect(data['@graph'].map((item: { '@type': string }) => item['@type'])).toEqual(['Organization', 'SoftwareApplication']);
     expect(html).not.toMatch(/aggregateRating|offers|review/);

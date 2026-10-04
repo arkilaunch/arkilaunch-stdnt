@@ -1,7 +1,7 @@
 # Change Record: Platform landing laptop preview
 
 **Date:** 2026-10-04
-**Status:** Applied
+**Status:** Superseded by `cr-arkilaunch-platform-landing-dashboard-image`.
 **Trigger:** Owner clarified that the laptop itself should reveal as the visitor scrolls the page; the product screenshot should not be an inner scroll area.
 **Docs touched:** DSD public landing; DESIGN.md materialization; platform landing asset guidance; index.
 
@@ -24,3 +24,7 @@ The presentation uses CSS scroll-driven animation documented by [MDN](https://de
 ## Rollback
 
 Restore the prior inventory preview and simple open-card feature scenes. No API, data or service changes are involved.
+
+## Superseded
+
+On 2026-10-04, the owner asked to replace the laptop presentation. See `cr-arkilaunch-platform-landing-dashboard-image` for the current static dashboard image.

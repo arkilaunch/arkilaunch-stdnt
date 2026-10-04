@@ -1,4 +1,4 @@
-// Captures the actual inventory UI with local sample responses, never production data.
+// Captures the actual dashboard UI with local sample responses, never production data.
 // Run with the web dev server up: node scripts/capture-platform-preview.mjs
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -36,25 +36,48 @@ try {
     maintenanceIntervalHours: 250,
     accumulatedHours: 80,
   })));
+  const fleet = items.slice(0, 6).map(({ id, model, serialNo, equipmentTypeId, availabilityStatus }) => ({ id, model, serialNo, equipmentTypeId, availabilityStatus }));
+  const sites = [
+    { id: '77777777-7777-4777-8777-777777777777', latitude: 14.5995, longitude: 120.9842, latestSeverity: 'none', city: 'Manila', province: 'Metro Manila', observedAt: '2026-10-04T08:30:00.000Z', activeUnits: 3, upcomingUnits: 1, nextArrival: '2026-10-05T00:00:00.000Z', customerName: 'Sample Construction' },
+    { id: '88888888-8888-4888-8888-888888888888', latitude: 14.5547, longitude: 121.0244, latestSeverity: 'watch', city: 'Makati', province: 'Metro Manila', observedAt: '2026-10-04T08:15:00.000Z', activeUnits: 2, upcomingUnits: 0, nextArrival: null, customerName: 'Sample Builders' },
+  ];
+  const reviewItems = [
+    { id: '99999999-9999-4999-8999-999999999991', equipmentId: items[0].id, reportDate: '2026-10-02' },
+    { id: '99999999-9999-4999-8999-999999999992', equipmentId: items[1].id, reportDate: '2026-10-02' },
+    { id: '99999999-9999-4999-8999-999999999993', equipmentId: items[3].id, reportDate: '2026-10-01' },
+  ];
   await page.route('**/api/**', async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     let body;
     if (path.endsWith('/auth/refresh')) body = { accessToken, refreshToken: 'sample-only' };
     else if (path.endsWith('/catalog/tenant')) body = { name: 'Sample rental company', slug: 'almara', primaryColor: null, headerColor: null, logoUrl: null, iconUrl: null, font: 'inter' };
     else if (path.endsWith('/users/me')) body = { id: 'sample-admin', name: 'Sample administrator', email: 'sample@example.com', tenantName: 'Sample rental company', role: 'admin' };
-    else if (path.endsWith('/equipment/maintenance-windows/ending-soon')) body = [];
-    else if (path.endsWith('/equipment')) body = { items, total: items.length, categories: groups.map(({ id: equipmentTypeId, name }) => ({ equipmentTypeId, name, count: 3 })) };
+    else if (path.endsWith('/reports/utilization')) body = { period: { from: '2026-09-01', to: '2026-09-30' }, fleet: fleet.map((equipment, index) => ({ equipmentId: equipment.id, runtimeHours: [112, 94, 86, 78, 71, 64][index], utilizationPct: [92, 86, 81, 77, 70, 65][index], maintenanceDue: index === 2 })) };
+    else if (path.endsWith('/reports/financial')) body = { period: { from: '2026-09-01', to: '2026-09-30' }, invoiced: { byType: { rental: 410000, booking: 60000 }, total: 470000 }, paid: 312000, depositDeducted: 0 };
+    else if (path.endsWith('/sites')) body = { items: sites, total: 7 };
+    else if (path.endsWith('/weather/advisories')) body = { items: [], total: 0 };
+    else if (path.endsWith('/edtr')) body = url.searchParams.has('limit') ? { total: reviewItems.length } : { items: reviewItems, total: reviewItems.length };
+    else if (path.endsWith('/truck-requests')) body = { items: [], total: 2 };
+    else if (path.endsWith('/customers/review')) body = { items: [], total: 3 };
+    else if (path.endsWith('/invoices')) body = { items: [
+      { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', rentalId: null, truckRequestId: null, bookingCode: 'RNT-2409', invoiceType: 'rental', amount: 84500, status: 'issued', dueDate: '2026-10-10T00:00:00.000Z', createdAt: '2026-10-01T08:00:00.000Z' },
+      { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', rentalId: null, truckRequestId: null, bookingCode: 'RNT-2412', invoiceType: 'booking', amount: 56000, status: 'issued', dueDate: '2026-10-12T00:00:00.000Z', createdAt: '2026-10-02T08:00:00.000Z' },
+    ], total: 2 };
+    else if (path.endsWith('/incidents')) body = { items: [], total: 0 };
+    else if (path.endsWith('/reference/equipment')) body = fleet;
+    else if (path.endsWith('/notifications')) body = { items: [], total: 0 };
     else body = { items: [], total: 0 };
     await route.fulfill({ json: body });
   });
-  await page.goto(new URL('/app/inventory', origin).href);
-  await page.getByRole('heading', { name: 'Equipment', exact: true }).first().waitFor();
-  await page.getByRole('group', { name: 'VI-003', exact: true }).waitFor();
+  await page.goto(new URL('/app', origin).href);
+  await page.getByRole('heading', { name: 'Dashboard', exact: true }).waitFor();
+  await page.getByText('Invoiced', { exact: true }).waitFor();
   await page.evaluate(() => document.fonts.ready);
   mkdirSync(resolve('artifacts/platform-landing'), { recursive: true });
-  await page.screenshot({ path: resolve('artifacts/platform-landing/inventory-source.png') });
-  execFileSync('python', ['-c', "from pathlib import Path; from PIL import Image; out=Path('apps/web/public/images'); out.mkdir(exist_ok=True); img=Image.open('artifacts/platform-landing/inventory-source.png').convert('RGB'); img.save(out/'platform-inventory.webp', quality=84, method=6); img.resize((800,round(img.height*800/img.width)), Image.Resampling.LANCZOS).save(out/'platform-inventory-small.webp', quality=84, method=6)"]);
-  console.log('Captured inventory UI and exported responsive WebP assets to apps/web/public/images. Requires Python Pillow.');
+  await page.screenshot({ path: resolve('artifacts/platform-landing/dashboard-source.png') });
+  execFileSync('python', ['-c', "from pathlib import Path; from PIL import Image; out=Path('apps/web/public/images'); out.mkdir(exist_ok=True); img=Image.open('artifacts/platform-landing/dashboard-source.png').convert('RGB'); img.save(out/'platform-dashboard.webp', quality=86, method=6); img.resize((800,round(img.height*800/img.width)), Image.Resampling.LANCZOS).save(out/'platform-dashboard-small.webp', quality=86, method=6)"]);
+  console.log('Captured dashboard UI and exported responsive WebP assets to apps/web/public/images. Requires Python Pillow.');
 } finally {
   await browser.close();
 }
