@@ -231,6 +231,46 @@
   }
 }
 
+/* Public platform landing: reveal content once as it enters view. The product
+   preview gets a deeper first impression; content stays visible without IO. */
+.platform-reveal {
+  opacity: 0;
+  transform: translate3d(0, 1.25rem, 0);
+  transition:
+    opacity 560ms ease-out,
+    transform 700ms cubic-bezier(0.2, 0.7, 0.25, 1);
+}
+
+.platform-reveal[data-scroll-reveal='visible'] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.platform-reveal-item {
+  opacity: 0;
+  transform: translate3d(0, 1rem, 0);
+  transition:
+    opacity 500ms ease-out,
+    transform 600ms cubic-bezier(0.2, 0.7, 0.25, 1);
+  transition-delay: calc(var(--reveal-order, 0) * 75ms);
+}
+
+.platform-reveal-group[data-scroll-reveal='visible'] .platform-reveal-item {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .platform-reveal,
+  .platform-reveal-item,
+  .platform-reveal[data-scroll-reveal='visible'] .platform-reveal-item {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    transition-delay: 0ms !important;
+  }
+}
+
 /* Thin, quiet scrollbar for panels that scroll inside the page (notification dropdown). */
 .scroll-thin {
   scrollbar-width: thin;

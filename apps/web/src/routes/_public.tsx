@@ -1,7 +1,8 @@
-import { createRoute, Link, Outlet, type LinkProps } from '@tanstack/react-router';
+import { createRoute, Link, Outlet, redirect, type LinkProps } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { rootRoute } from './__root.js';
-import { onlyOn } from '../lib/guards.js';
+import { currentHost } from '../lib/host.js';
+import { PlatformChrome } from './platform.index.js';
 import { useTenant } from '../lib/tenant.js';
 import { FloatingNav } from '../components/floating-nav.js';
 import { SkipLink } from '../components/skip-link.js';
@@ -96,6 +97,7 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
 }
 
 function PublicLayout() {
+  if (currentHost.kind === 'platform') return <PlatformChrome><main id="main" className="mx-auto w-full max-w-shell flex-1"><Outlet /></main></PlatformChrome>;
   return (
     <MarketingChrome>
       <Outlet />
@@ -106,6 +108,8 @@ function PublicLayout() {
 export const publicLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'public-layout',
-  beforeLoad: onlyOn('tenant'),
+  beforeLoad: ({ location }) => {
+    if (currentHost.kind === 'platform' && !['/help', '/terms', '/privacy'].includes(location.pathname.replace(/\/$/, ''))) throw redirect({ to: '/' });
+  },
   component: PublicLayout,
 });

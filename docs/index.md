@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-04
 **Built on FMD:** v1.28.1
 
 ---
@@ -24,8 +24,8 @@
 | BRD · Business Requirements | [brd-arkilaunch.md](brd-arkilaunch.md) | 0.1 | Draft | 2026-07-25 | N/A |
 | UES · Unit Economics Sheet | [ues-arkilaunch.md](ues-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
 | PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-19 |
-| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-01 | 2026-10-01 |
-| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-09-29 | 2026-09-29 |
+| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
+| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
 | QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-07 |
 | SAD · Subagents | [sad-arkilaunch.md](sad-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BUILD · Build Guide | [build-arkilaunch.md](build-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
@@ -90,6 +90,12 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-platform-landing-no-feature-icons | 2026-10-04 | Remove feature-card illustrations; keep simple numbered labels and typography | Owner visual feedback | DSD public landing; DESIGN.md; index | [cr-arkilaunch-platform-landing-no-feature-icons.md](cr-arkilaunch-platform-landing-no-feature-icons.md) |
+| cr-arkilaunch-platform-landing-dashboard-image | 2026-10-04 | Replace the laptop treatment with a direct static dashboard screenshot; refresh sample asset and social preview | Owner asked to change the hero image and drop laptop effects | DSD public landing; DESIGN.md; asset capture; platform metadata; index | [cr-arkilaunch-platform-landing-dashboard-image.md](cr-arkilaunch-platform-landing-dashboard-image.md) |
+| cr-arkilaunch-platform-landing-laptop | 2026-10-04 | Scroll-driven MacBook-style laptop reveal with a static sample fleet screen; simpler unframed feature illustrations; remove hero dash and checkmark | Owner clarified desired hero scroll effect | DSD public landing; DESIGN.md; landing asset guidance; index | [cr-arkilaunch-platform-landing-laptop.md](cr-arkilaunch-platform-landing-laptop.md) |
+| cr-arkilaunch-platform-landing-branding | 2026-10-04 | Wordmark-only platform navbar and bespoke excavator, quotation, field-review and billing feature scenes | Owner visual feedback | DSD public landing; DESIGN.md; index | [cr-arkilaunch-platform-landing-branding.md](cr-arkilaunch-platform-landing-branding.md) |
+| cr-arkilaunch-platform-landing-scroll-reveal | 2026-10-04 | CSS view-progress laptop reveal that reverses with scroll, observer fallback, staggered section cards and immediate reduced-motion fallback | Owner landing animation request and hero clarification | DSD public landing motion; DESIGN.md; index | [cr-arkilaunch-platform-landing-scroll-reveal.md](cr-arkilaunch-platform-landing-scroll-reveal.md) |
+| cr-arkilaunch-platform-saas-landing | 2026-10-04 | Product-led platform landing, sanitized product preview, active pilot partner showcase, searchable directory, platform resource routes and homepage-only SEO | Owner approved SaaS landing plan; PRD-F7/F8 | DSD sections 4.1/9; SDD section 2; DESIGN.md; BRAND.md asset governance; index | [cr-arkilaunch-platform-saas-landing.md](cr-arkilaunch-platform-saas-landing.md) |
 | cr-arkilaunch-kyc-camera-auto-only | 2026-10-01 | KYC live camera fills the viewport and captures only after steady alignment, with Back and file fallback | Owner camera interaction request | DSD §4 | [cr-arkilaunch-kyc-camera-auto-only.md](cr-arkilaunch-kyc-camera-auto-only.md) |
 | cr-arkilaunch-kyc-compact-manual-capture | 2026-10-01 | KYC capture returns to a bounded wizard view and adds a manual shutter beside automatic steady-hold capture, so missed edge detection no longer blocks ID/document capture | Owner KYC capture reliability request | DSD §4; PRD-F6 | [cr-arkilaunch-kyc-compact-manual-capture.md](cr-arkilaunch-kyc-compact-manual-capture.md) |
 | cr-arkilaunch-kyc-fullscreen-capture | 2026-10-01 | ID, registration and DTI capture steps fill the viewport for camera alignment and corner correction | Owner KYC layout request | DSD §4 | [cr-arkilaunch-kyc-fullscreen-capture.md](cr-arkilaunch-kyc-fullscreen-capture.md) |

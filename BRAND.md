@@ -163,6 +163,7 @@ Verbal tone, banned phrases, and the per-document-type register live in [docs/vo
 **Brand asset version:** `1.0.0` (major = rebrand, minor = new variant, patch = file fix). This is version `0.1` of the DSD; asset production begins at DSD lock.
 **Naming:** kebab-case; `logo-primary.svg`, `logo-mark.svg`, `logo-stacked.svg`, `concept-s4-dashboard.png`.
 **Location:** brand assets in `docs/assets/brand/`; concept frames in `docs/assets/concept/`; deploy copies in `public/brand/`. Fonts self-hosted under `public/fonts/` (Latin-subset WOFF2).
+**Platform product preview (CR: platform-landing-dashboard-image):** App-owned dashboard screenshots in `apps/web/public/images/platform-dashboard.webp` (1440px) and `platform-dashboard-small.webp` (800px), captured from the actual dashboard using sample API responses by `scripts/capture-platform-preview.mjs`. Label as sample data; refresh after material dashboard UI changes. Never capture production records for public marketing.
 **Approval / retirement:** the DSD DRI (ArkiLaunch design owner) approves asset changes; superseded files retire on a version bump and are removed from `public/` once no build references them.
 
 ---

@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
@@ -36,6 +36,8 @@
 ---
 
 ## 2. High-Level Architecture
+
+**Platform marketing head (CR: platform-saas-landing, 2026-10-04).** The edge Worker writes title, description, canonical and social metadata plus Organization/SoftwareApplication JSON-LD into HTML for `/` on the configured platform domain, and sets `index, follow` only there. Metadata requires no API call; catalog failures do not affect the marketing head. Canonical URLs exclude query parameters. Other platform routes retain the shell's default noindex; the platform sitemap lists only `/`. Tenant head rewriting and sitemap generation remain host-specific. The browser preserves the homepage's served title and synchronizes platform metadata and robots on navigation, removing homepage-only tags and restoring noindex on registration and private routes. Existing `/help`, `/terms` and `/privacy` are available through platform chrome with platform support channels; tenant-only catalog/contact routes still redirect off the platform host.
 
 ```mermaid
 graph TD
