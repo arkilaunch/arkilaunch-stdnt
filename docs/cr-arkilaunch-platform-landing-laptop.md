@@ -7,7 +7,7 @@
 
 ## Decisions
 
-- Present the real ArkiLaunch fleet screen inside a lightweight CSS laptop frame. Drive the laptop's perspective, scale and opacity with the page's view-progress timeline so it opens into view as the visitor scrolls down and reverses when they scroll up. Use IntersectionObserver for browsers without CSS view timelines, and show it immediately without motion when reduced motion is requested.
+- Present the real ArkiLaunch fleet screen inside a lightweight CSS laptop frame. Drive the laptop's perspective, scale and opacity with the page's full view-progress timeline as it crosses the viewport, so it opens into view as the visitor scrolls down and reverses when they scroll up. Use IntersectionObserver for browsers without CSS view timelines, and show it immediately without motion when reduced motion is requested.
 - Keep the inventory screen static and non-focusable. Capture a landscape viewport with synthetic sample API responses and six equipment groups; ship a proportional 800px WebP. Do not embed a logged-in live application or ask visitors to scroll inside the screen.
 - Simplify the four feature illustrations and remove their filled background tiles. Remove the eyebrow dash and the separate green checkmark, keeping the surrounding hero copy.
 
@@ -18,7 +18,7 @@ The presentation uses CSS scroll-driven animation documented by [MDN](https://de
 - `pnpm.cmd --filter @arkilaunch/web typecheck` passed for the browser and Worker TypeScript projects.
 - `pnpm.cmd --filter @arkilaunch/web build` passed. Vite reports the existing large-chunk warning for application and map bundles.
 - The sample captures are 1440×810 (59,478 bytes) and 800×450 (24,762 bytes); the screen is static with no inner scroll controls.
-- Source inspection confirms the laptop reveal uses a CSS view timeline where supported, has an IntersectionObserver fallback, reverses with scroll progress, and is disabled under reduced motion.
+- Browser inspection confirms the laptop transform changes at multiple page-scroll positions using a CSS view timeline, with an IntersectionObserver fallback and no motion under reduced-motion settings.
 - No test suite was run for this visual-only change.
 
 ## Rollback

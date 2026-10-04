@@ -7,7 +7,7 @@
 
 ## Decision
 
-Use a CSS view-progress timeline for the laptop reveal where supported. As the laptop enters the viewport, scroll progress scrubs its opacity, perspective, scale and vertical position from a distant angle to a clear product view; scrolling upward reverses the reveal. Use a one-time IntersectionObserver entrance as the browser fallback. Feature and setup cards use a short stagger as their sections enter view. Preserve layout space while content animates. If observers are unavailable or `prefers-reduced-motion: reduce` is set, content starts visible without transitions. Replace the now-retired step carousel motion reference with the visible in-flow setup steps. Do not add dependencies.
+Use a CSS view-progress timeline across the laptop's passage through the viewport where supported. Page scroll scrubs its opacity, perspective, scale and vertical position from a distant angle to a clear product view; scrolling upward reverses the reveal. Use a one-time IntersectionObserver entrance as the browser fallback. Feature and setup cards use a short stagger as their sections enter view. Preserve layout space while content animates. If observers are unavailable or `prefers-reduced-motion: reduce` is set, content starts visible without transitions. Replace the now-retired step carousel motion reference with the visible in-flow setup steps. Do not add dependencies.
 
 ## Verification
 

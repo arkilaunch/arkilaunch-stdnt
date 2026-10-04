@@ -185,7 +185,7 @@ Palette is high-contrast by construction, verified for WCAG 2.2 AA at the pairin
 
 Signal hues (success/warning/error/weather/recon) hold their hue in dark theme; borders and text lift to keep AA. Theme is toggled by `data-theme` on the root; default is light.
 
-**Public landing motion (CR: platform-landing-motion; scroll-reveal refinement, CR: platform-landing-scroll-reveal; laptop correction, CR: platform-landing-laptop):** the platform landing only. Drive the laptop's perspective, scale and opacity with a CSS view-progress timeline as it enters the viewport; scrolling down reveals it and scrolling back up reverses the effect. Use IntersectionObserver for browsers without view timelines. Major content sections reveal once as they enter view, with a short stagger for feature and setup cards. The scroll-snap step carousel is retired; onboarding steps stay visible in the page flow. Under `prefers-reduced-motion`, the full laptop and all content stay visible without transform or transition.
+**Public landing motion (CR: platform-landing-motion; scroll-reveal refinement, CR: platform-landing-scroll-reveal; laptop correction, CR: platform-landing-laptop):** the platform landing only. Drive the laptop's perspective, scale and opacity with a CSS view-progress timeline across its passage through the viewport; scrolling down reveals it and scrolling back up reverses the effect. Use IntersectionObserver for browsers without view timelines. Major content sections reveal once as they enter view, with a short stagger for feature and setup cards. The scroll-snap step carousel is retired; onboarding steps stay visible in the page flow. Under `prefers-reduced-motion`, the full laptop and all content stay visible without transform or transition.
 
 
 

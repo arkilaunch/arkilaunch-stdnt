@@ -267,14 +267,14 @@
     transition: none;
     animation: laptop-scroll-reveal 1ms linear both;
     animation-timeline: view();
-    animation-range: entry 0% entry 100%;
+    animation-range: cover 50% cover 100%;
   }
 }
 
 @keyframes laptop-scroll-reveal {
   from {
     opacity: 0.25;
-    transform: perspective(1100px) translate3d(0, 3rem, 0) rotateX(32deg) scale(0.78);
+    transform: perspective(1100px) translate3d(0, 4rem, 0) rotateX(40deg) scale(0.72);
   }
   to {
     opacity: 1;
