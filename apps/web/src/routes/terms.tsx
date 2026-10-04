@@ -1,6 +1,7 @@
 import { createRoute } from '@tanstack/react-router';
 import { publicLayoutRoute } from './_public.js';
 import { EmptyState } from '../components/empty-state.js';
+import { currentHost } from '../lib/host.js';
 
 // Checkout links to #weather-monitoring.
 function TermsPage() {
@@ -8,7 +9,7 @@ function TermsPage() {
     <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 py-10 sm:px-10">
       <EmptyState title="Terms of service" description="Legal terms are being drafted and will be published here before public launch." />
 
-      <section id="weather-monitoring" aria-labelledby="weather-monitoring-title" className="flex flex-col gap-3 text-text">
+      {currentHost.kind === 'tenant' && <section id="weather-monitoring" aria-labelledby="weather-monitoring-title" className="flex flex-col gap-3 text-text">
         <h2 id="weather-monitoring-title" className="text-heading-md">
           Weather monitoring and verification
         </h2>
@@ -42,7 +43,7 @@ function TermsPage() {
         <p className="text-sm text-text-muted">
           Weather data: Open-Meteo (CC BY 4.0). Forecasts can be wrong, so always follow what you see on site and any PAGASA warnings.
         </p>
-      </section>
+      </section>}
     </div>
   );
 }

@@ -231,6 +231,149 @@
   }
 }
 
+/* Public platform landing: reveal content once as it enters view. The product
+   preview gets a deeper first impression; content stays visible without IO. */
+.platform-reveal {
+  opacity: 0;
+  transform: translate3d(0, 1.25rem, 0);
+  transition:
+    opacity 560ms ease-out,
+    transform 700ms cubic-bezier(0.2, 0.7, 0.25, 1);
+}
+
+.platform-reveal[data-scroll-reveal='visible'] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.platform-reveal-hero {
+  transform: perspective(1100px) translate3d(0, 2rem, 0) rotateX(4deg) scale(0.94);
+  transform-origin: 50% 70%;
+  transition:
+    opacity 650ms ease-out,
+    transform 1050ms cubic-bezier(0.16, 0.72, 0.22, 1);
+}
+
+.platform-reveal-hero[data-scroll-reveal='visible'] {
+  transform: perspective(1100px) translate3d(0, 0, 0) rotateX(0) scale(1);
+}
+
+/* In supporting browsers, scrub the laptop reveal directly with page scroll.
+   IntersectionObserver above remains the simple entry fallback. */
+@supports (animation-timeline: view()) {
+  .platform-reveal-hero {
+    opacity: 1;
+    transform: none;
+    transition: none;
+    animation: laptop-scroll-reveal 1ms linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 100%;
+  }
+}
+
+@keyframes laptop-scroll-reveal {
+  from {
+    opacity: 0.25;
+    transform: perspective(1100px) translate3d(0, 3rem, 0) rotateX(32deg) scale(0.78);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1100px) translate3d(0, 0, 0) rotateX(0) scale(1);
+  }
+}
+
+.platform-reveal-item {
+  opacity: 0;
+  transform: translate3d(0, 1rem, 0);
+  transition:
+    opacity 500ms ease-out,
+    transform 600ms cubic-bezier(0.2, 0.7, 0.25, 1);
+  transition-delay: calc(var(--reveal-order, 0) * 75ms);
+}
+
+.laptop-preview {
+  margin-inline: auto;
+  filter: drop-shadow(0 18px 16px rgb(16 21 27 / 12%));
+}
+
+.laptop-bezel {
+  position: relative;
+  padding: 22px 11px 11px;
+  border: 1px solid #33404d;
+  border-radius: 14px 14px 8px 8px;
+  background: #10151b;
+}
+
+.laptop-camera {
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #6b7c8e;
+  transform: translateX(-50%);
+}
+
+.laptop-screen {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #f5f2eb;
+}
+
+.laptop-deck {
+  position: relative;
+  height: 12px;
+  margin-inline: -0.55rem;
+  border: 1px solid #cfc7b6;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: linear-gradient(#ece7db 0%, #cfc7b6 100%);
+  clip-path: polygon(2% 0, 98% 0, 100% 72%, 95% 100%, 5% 100%, 0 72%);
+}
+
+.laptop-trackpad {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 19%;
+  height: 5px;
+  border: 1px solid #b8af9f;
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+  transform: translateX(-50%);
+}
+
+.laptop-foot {
+  width: 16%;
+  height: 3px;
+  margin-inline: auto;
+  border-radius: 0 0 5px 5px;
+  background: #9a917e;
+}
+
+.platform-reveal-group[data-scroll-reveal='visible'] .platform-reveal-item {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .platform-reveal,
+  .platform-reveal-hero,
+  .platform-reveal-item,
+  .platform-reveal-hero[data-scroll-reveal='visible'] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    transition-delay: 0ms !important;
+  }
+
+  .platform-reveal-hero {
+    animation: none !important;
+  }
+}
+
 /* Thin, quiet scrollbar for panels that scroll inside the page (notification dropdown). */
 .scroll-thin {
   scrollbar-width: thin;

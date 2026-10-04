@@ -5,6 +5,7 @@ import { ApiError } from '../lib/api-client.js';
 import { pageTitle } from '../lib/brand.js';
 import { currentHost, platformOrigin } from '../lib/host.js';
 import { applyTenantBrand, tenantQuery } from '../lib/tenant.js';
+import { PLATFORM_TITLE, platformHeadTags } from '../lib/platform-brand.js';
 
 function TenantNotFound() {
   return (
@@ -27,7 +28,20 @@ function RootLayout() {
   // Same titles the edge Worker writes (lib/brand.ts).
   useEffect(() => {
     if (currentHost.kind === 'platform') {
-      document.title = 'ArkiLaunch';
+      document.title = pathname === '/' ? PLATFORM_TITLE : 'ArkiLaunch';
+      document.head.querySelectorAll('[data-platform-seo]').forEach((el) => el.remove());
+      let robots = document.head.querySelector<HTMLMetaElement>('meta[name="robots"]');
+      if (!robots) {
+        robots = document.createElement('meta');
+        robots.name = 'robots';
+        document.head.append(robots);
+      }
+      robots.content = pathname === '/' ? 'index, follow' : 'noindex, nofollow';
+      if (pathname === '/') {
+        const tags = document.createElement('template');
+        tags.innerHTML = platformHeadTags(window.location.origin);
+        document.head.append(tags.content);
+      }
       return;
     }
     const title = tenant.data ? pageTitle(pathname, tenant.data.name) : null;

@@ -1,5 +1,6 @@
 import type { CatalogEquipment, CatalogTenant } from '@arkilaunch/shared';
 import { brandVars, headTags, isIndexable, pageTitle, robotsFor, sitemapXml, type PageDetail } from '../src/lib/brand.js';
+import { PLATFORM_TITLE, platformHeadTags } from '../src/lib/platform-brand.js';
 
 // Writes the tenant's own head tags into the shared SPA shell; any failure serves the untouched shell.
 
@@ -86,7 +87,15 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const slug = tenantSlug(url.hostname, env.PLATFORM_DOMAIN);
-    if (!slug) return env.ASSETS.fetch(request);
+    if (!slug) {
+      const assets = await env.ASSETS.fetch(request);
+      if (url.hostname !== env.PLATFORM_DOMAIN || url.pathname !== '/' || !assets.headers.get('Content-Type')?.includes('text/html')) return assets;
+      return new HTMLRewriter()
+        .on('title', { element: (e) => void e.setInnerContent(PLATFORM_TITLE) })
+        .on('head', { element: (e) => void e.append(platformHeadTags(url.origin), { html: true }) })
+        .on('meta[name="robots"]', { element: (e) => void e.setAttribute('content', 'index, follow') })
+        .transform(assets);
+    }
 
     if (url.pathname === '/robots.txt') {
       const res = await env.ASSETS.fetch(request);

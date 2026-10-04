@@ -1,23 +1,18 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowRight,
-  Calculator,
-  ChevronLeft,
-  ChevronRight,
-  ClipboardCheck,
+  Menu,
   Mail,
   MapPin,
   Phone,
-  Receipt,
   Store,
   X,
-  type LucideIcon,
   MessageCircle,
   Send,
 } from 'lucide-react';
-import type { CatalogTenantListItem, CatalogTenantListResponse } from '@arkilaunch/shared';
+import { CatalogTenantListResponseSchema, type CatalogTenantListItem } from '@arkilaunch/shared';
 import { Button } from '../components/button.js';
 import { Select } from '../components/select.js';
 import { SkipLink } from '../components/skip-link.js';
@@ -36,26 +31,6 @@ const PLATFORM_DOMAIN = import.meta.env.VITE_PLATFORM_DOMAIN ?? 'arkilaunch.app'
 const CONTACT_EMAIL = import.meta.env.VITE_PLATFORM_CONTACT_EMAIL || `hello@${PLATFORM_DOMAIN}`;
 const CONTACT_PHONE = import.meta.env.VITE_PLATFORM_CONTACT_PHONE;
 
-const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-
-// Without IntersectionObserver it starts true, so content is never stuck hidden.
-function useInView(ref: RefObject<Element | null>): boolean {
-  const [shown, setShown] = useState(() => typeof IntersectionObserver === 'undefined');
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || shown) return;
-    const io = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) setShown(true);
-      },
-      { threshold: 0.15 },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [ref, shown]);
-  return shown;
-}
-
 function toLabel(name: string): string {
   return name
     .toLowerCase()
@@ -64,34 +39,140 @@ function toLabel(name: string): string {
     .slice(0, 50);
 }
 
-const FEATURES: { title: string; body: string; icon: LucideIcon }[] = [
-  {
-    icon: Store,
-    title: 'A storefront with your name on it',
-    body: 'Customers browse your fleet, pick dates and book at your own address.',
-  },
-  {
-    icon: Calculator,
-    title: 'Quotes in under a minute',
-    body: 'Rate cards, trucking formulas, diesel prices and tolls add themselves up.',
-  },
-  {
-    icon: ClipboardCheck,
-    title: 'Timesheets that check themselves',
-    body: "Paper time reports are read and matched against the operator's log before anything is billed.",
-  },
-  {
-    icon: Receipt,
-    title: 'Billing without disputes',
-    body: 'Statements, deposits and payments come from the same reconciled hours.',
-  },
+function useScrollReveal<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [visible, setVisible] = useState(() =>
+    typeof IntersectionObserver === 'undefined' ||
+    (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true),
+  );
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || visible) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setVisible(true);
+          observer.unobserve(element);
+        }
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -5% 0px' },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  return [ref, visible] as const;
+}
+
+const FEATURES: { title: string; body: string; scene: 'fleet' | 'quote' | 'field-log' | 'billing' }[] = [
+  { scene: 'fleet', title: 'Know your fleet', body: 'See what is available, deployed or due for maintenance. Keep your equipment and dispatch records together.' },
+  { scene: 'quote', title: 'Prepare the next quote', body: 'Bring your rate cards, diesel prices and transport costs into a quotation you can review and send.' },
+  { scene: 'field-log', title: 'Bring field hours into focus', body: 'Capture digital or paper time reports. Compare independent logs, review differences and approve the hours.' },
+  { scene: 'billing', title: 'Keep billing connected', body: 'Trace statements, deposits and payments back to reconciled hours. A person approves before a deposit deduction.' },
 ];
 
+function FeatureScene({ scene }: { scene: (typeof FEATURES)[number]['scene'] }) {
+  const line = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  const amber = { fill: 'none', stroke: 'var(--color-primary-hover)', strokeWidth: 2.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+
+  if (scene === 'fleet') return (
+    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
+      <path {...line} d="M8 39h31l3 4H12zm7-2V26h17l6 11" />
+      <path {...amber} d="m31 27 11-13 11-3m-11 13 10 5 5-2" />
+      <circle cx="18" cy="42" r="2" fill="var(--color-primary-hover)" />
+      <circle cx="34" cy="42" r="2" fill="var(--color-primary-hover)" />
+    </svg>
+  );
+
+  if (scene === 'quote') return (
+    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
+      <path {...line} d="M15 7h27l7 7v35H15zM42 7v8h7M21 22h11m-11 8h15m-15 8h9" />
+      <path {...amber} d="M21 44h22" />
+    </svg>
+  );
+
+  if (scene === 'field-log') return (
+    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
+      <path {...line} d="M14 7h27l7 7v35H14zM41 7v8h7M21 23h14m-14 8h14m-14 8h10" />
+      <path {...amber} d="m39 36 4 4 8-9" />
+    </svg>
+  );
+
+  return (
+    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
+      <path {...line} d="M15 7h28v29H15zM21 18h8m-8 7h17m-17 6h12" />
+      <path {...amber} d="M21 43h16m5-8 3 3 6-8" />
+    </svg>
+  );
+}
+
 const STEPS = [
-  { title: 'Register', body: 'Tell us about your company: SEC, TIN and one contact person.' },
-  { title: 'Activate', body: 'Open the link we email you and set your password.' },
-  { title: 'Go live', body: 'Your storefront and back office open at your own address, in your colors.' },
+  { title: 'Register your company', body: 'Create your account and submit your company documents for review.' },
+  { title: 'Complete review and activation', body: 'Follow the activation email to set your password. Company documents are checked during review.' },
+  { title: 'Make it your own', body: 'Add your fleet, configure your rates and set up your branded storefront.' },
 ];
+
+// Editorial selection; membership and branding still come from the active public catalog.
+const FEATURED_PARTNERS = [{ slug: 'almara', query: 'Almara', label: 'Pilot partner' }];
+
+function CompanyLogo({ t, large = false }: { t: CatalogTenantListItem; large?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const size = large ? 'size-20' : 'size-14';
+  const brand = t.primaryColor ? { backgroundColor: t.primaryColor, color: onPrimaryFor(t.primaryColor) } : undefined;
+  return t.logoUrl && !failed ? (
+    <img src={t.logoUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className={`${size} shrink-0 object-contain`} />
+  ) : (
+    <span aria-hidden="true" style={brand} className={`${size} flex shrink-0 items-center justify-center rounded-md bg-primary text-heading-lg text-on-primary`}>
+      {t.name.split(/\s+/).slice(0, 2).map((word) => word.charAt(0)).join('')}
+    </span>
+  );
+}
+
+function FeaturedPartner({ partner }: { partner: (typeof FEATURED_PARTNERS)[number] }) {
+  const { data } = useQuery({
+    queryKey: ['catalog', 'featured-partner', partner.slug],
+    queryFn: async () => CatalogTenantListResponseSchema.parse(await apiGet<unknown>(`/catalog/tenants?q=${encodeURIComponent(partner.query)}&limit=100`)),
+    retry: false,
+  });
+  const t = data?.items.find((item) => item.slug === partner.slug);
+  if (!t) return null;
+  return (
+    <article className="grid gap-8 rounded-lg border border-border bg-surface p-6 sm:p-8 lg:grid-cols-[1fr_1.3fr] lg:items-center">
+      <div className="flex items-center gap-5">
+        <CompanyLogo key={t.logoUrl} t={t} large />
+        <div className="min-w-0">
+          <p className="mb-2 text-sm font-medium text-accent">{partner.label}</p>
+          <h3 className="text-heading-lg text-text">{t.name}</h3>
+          {[t.city, t.province].filter(Boolean).length > 0 && <p className="mt-2 text-sm text-text-muted">{[t.city, t.province].filter(Boolean).join(', ')}</p>}
+        </div>
+      </div>
+      <div className="flex flex-col gap-4 lg:border-l lg:border-border lg:pl-8">
+        <p className="text-body-lg text-text">A rental company. Its own identity.</p>
+        <p className="text-sm text-text-muted">{t.tagline || `${t.name} is ArkiLaunch's pilot rental partner. Explore its fleet and start a rental enquiry through its own storefront.`}</p>
+        {t.categories.length > 0 && <p className="text-sm text-text-muted">Equipment: {t.categories.slice(0, 3).join(', ')}</p>}
+        <a href={tenantOrigin(t.slug)} className="inline-flex min-h-11 items-center gap-2 self-start font-medium text-accent hover:underline">
+          Visit {t.name}’s storefront <ArrowRight aria-hidden className="size-4" />
+        </a>
+      </div>
+    </article>
+  );
+}
+
+function Partners() {
+  const [ref, visible] = useScrollReveal<HTMLElement>();
+  return (
+    <section ref={ref} data-scroll-reveal={visible ? 'visible' : 'hidden'} id="partners" aria-labelledby="partners-title" className="platform-reveal flex scroll-mt-24 flex-col gap-8">
+      <div className="max-w-2xl">
+        <p className="mb-3 text-sm font-medium text-accent">Rental partners</p>
+        <h2 id="partners-title" className="text-display-md text-text lg:text-display-lg">Their fleet. Their brand. Connected by ArkiLaunch.</h2>
+        <p className="mt-4 text-body-lg text-text-muted">Looking for equipment? Meet the rental companies on the platform. Browse and book through each company’s own storefront.</p>
+      </div>
+      {FEATURED_PARTNERS.map((partner) => <FeaturedPartner key={partner.slug} partner={partner} />)}
+      <Directory />
+    </section>
+  );
+}
 
 // `/` is also the tenant home, so the search is read loosely, not via validateSearch.
 type DirectorySearch = { q?: string | undefined; category?: string | undefined; location?: string | undefined; page?: number | undefined };
@@ -122,17 +203,7 @@ function CompanyCard({ t }: { t: CatalogTenantListItem }) {
       <span aria-hidden="true" className="h-1 shrink-0 bg-primary" style={brand} />
       <span className="flex flex-1 flex-col gap-4 p-5">
         <span className="flex gap-4">
-          {t.logoUrl ? (
-            <img src={t.logoUrl} alt="" className="size-14 shrink-0 object-contain" />
-          ) : (
-            <span
-              aria-hidden="true"
-              style={brand}
-              className="flex size-14 shrink-0 items-center justify-center rounded-sm bg-primary text-heading-lg text-on-primary"
-            >
-              {t.name.charAt(0)}
-            </span>
-          )}
+          <CompanyLogo key={t.logoUrl} t={t} />
           <span className="flex min-w-0 flex-col gap-1">
             <span className="text-heading-md text-text">{t.name}</span>
             {t.tagline && <span className="text-sm text-text-muted">{t.tagline}</span>}
@@ -160,7 +231,7 @@ function CompanyCard({ t }: { t: CatalogTenantListItem }) {
       </span>
       <span className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 text-sm transition group-hover:bg-surface-sunk">
         <span className="min-w-0 truncate font-mono text-xs text-text-muted">{new URL(href).host}</span>
-        <span className="flex shrink-0 items-center gap-1 font-medium text-accent transition duration-200 pointer-fine:translate-y-1 pointer-fine:opacity-0 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
+        <span className="flex shrink-0 items-center gap-1 font-medium text-accent">
           Visit storefront
           <ArrowRight aria-hidden className="size-4 transition-transform group-hover:translate-x-0.5" />
         </span>
@@ -181,7 +252,7 @@ function Directory() {
   const params = query.toString();
   const { data, isPending, isError, isPlaceholderData, refetch } = useQuery({
     queryKey: ['catalog', 'tenants', params] as const,
-    queryFn: () => apiGet<CatalogTenantListResponse>(`/catalog/tenants?${params}`),
+    queryFn: async () => CatalogTenantListResponseSchema.parse(await apiGet<unknown>(`/catalog/tenants?${params}`)),
     placeholderData: keepPreviousData,
   });
 
@@ -226,10 +297,10 @@ function Directory() {
   return (
     <section ref={section} aria-labelledby="directory-title" className="flex scroll-mt-20 flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h2 id="directory-title" className="text-display-md text-text lg:text-display-lg">
+        <h3 id="directory-title" className="text-heading-lg text-text">
           Find a rental company
-        </h2>
-        <p className="text-body-lg text-text-muted">Rental companies already taking bookings on ArkiLaunch.</p>
+        </h3>
+        <p className="text-body-lg text-text-muted">Explore active rental companies and visit their storefronts.</p>
       </div>
 
       <div className="flex flex-col gap-4">
@@ -254,6 +325,7 @@ function Directory() {
         </div>
 
         <SegmentedControl
+          className="[&_button]:min-h-11"
           label="Equipment"
           value={search.category ?? ''}
           onChange={(category) => apply({ category })}
@@ -368,178 +440,78 @@ function AddressPreview() {
           maxLength={200}
           className="min-h-11 flex-1 rounded-input border border-border bg-surface px-4 text-text"
         />
-        <Button type="submit">Claim this address</Button>
+        <Button type="submit">Start registration</Button>
       </div>
     </form>
   );
 }
 
 function Features() {
-  const ref = useRef<HTMLDivElement>(null);
-  const shown = useInView(ref);
+  const [ref, visible] = useScrollReveal<HTMLElement>();
   return (
-    <section aria-labelledby="features-title" className="flex flex-col gap-6">
-      <h2 id="features-title" className="text-display-md text-text lg:text-display-lg">
-        What you get
-      </h2>
-      <div ref={ref} className="grid gap-6 sm:grid-cols-2">
+    <section ref={ref} data-scroll-reveal={visible ? 'visible' : 'hidden'} id="product" aria-labelledby="features-title" className="platform-reveal platform-reveal-group flex scroll-mt-24 flex-col gap-8">
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-end">
+        <div>
+          <p className="mb-3 text-sm font-medium text-accent">From the yard to the office</p>
+          <h2 id="features-title" className="text-display-md text-text lg:text-display-lg">One place for the work behind every rental.</h2>
+        </div>
+        <p className="max-w-lg text-body-lg text-text-muted lg:justify-self-end">Keep the fleet, the field and your records connected, so your team can follow a rental from quotation to billing.</p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {FEATURES.map((f, i) => (
-          <article
-            key={f.title}
-            style={{ transitionDelay: shown ? `${i * 80}ms` : undefined }}
-            className={[
-              'flex flex-col gap-2 rounded-md border border-border bg-surface p-5 transition-opacity duration-400 ease-out',
-              shown ? 'opacity-100' : 'opacity-0',
-            ].join(' ')}
-          >
-            <h3 className="flex items-center gap-2 text-heading-md text-text">
-              <f.icon aria-hidden className="h-5 w-5 shrink-0 text-text-muted" />
-              {f.title}
-            </h3>
-            <p className="text-sm text-text-muted">{f.body}</p>
+          <article key={f.title} style={{ '--reveal-order': i } as CSSProperties} className="platform-reveal-item flex flex-col gap-5 rounded-md border border-border bg-surface p-6">
+            <div className="flex items-center justify-between">
+              <FeatureScene scene={f.scene} />
+              <span aria-hidden className="font-mono text-xs text-text-muted">0{i + 1}</span>
+            </div>
+            <div><h3 className="text-heading-md text-text">{f.title}</h3><p className="mt-3 text-sm text-text-muted">{f.body}</p></div>
           </article>
         ))}
+      </div>
+      <div className="flex flex-col gap-4 rounded-md border border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3"><Store aria-hidden className="mt-1 size-5 shrink-0 text-accent" /><p className="text-sm text-text-muted"><span className="font-medium text-text">Your business, at your own address.</span> Give customers a branded storefront to browse your fleet and request a rental.</p></div>
+        <a href="#getting-started" className="inline-flex min-h-11 shrink-0 items-center gap-2 text-sm font-medium text-accent hover:underline">See how to get started <ArrowRight aria-hidden className="size-4" /></a>
       </div>
     </section>
   );
 }
 
-function StepVisual({ step }: { step: number }) {
-  const box = 'rounded-sm border border-border bg-bg p-4 text-sm';
-  if (step === 0)
-    return (
-      <div className={`${box} flex flex-col gap-2`} aria-hidden>
-        {['Company name', 'SEC registration', 'TIN'].map((f) => (
-          <span key={f} className="rounded-input border border-border bg-surface px-3 py-2 text-text-muted">
-            {f}
-          </span>
-        ))}
-      </div>
-    );
-  if (step === 1)
-    return (
-      <div className={`${box} flex items-center gap-3`} aria-hidden>
-        <Mail className="size-5 shrink-0 text-text-muted" />
-        <span className="min-w-0 flex-1 truncate text-text">Your ArkiLaunch account is ready</span>
-        <span className="shrink-0 font-medium text-accent">Set password →</span>
-      </div>
-    );
+function GettingStarted() {
+  const [ref, visible] = useScrollReveal<HTMLElement>();
   return (
-    <div className={box} aria-hidden>
-      <span className="block truncate rounded-pill bg-surface px-4 py-2 font-mono text-text">
-        https://<strong>yourcompany</strong>.{PLATFORM_DOMAIN}
-      </span>
-    </div>
-  );
-}
-
-// The track is focusable so arrow keys scroll it natively; it stays an <ol> for screen readers.
-function StepCarousel() {
-  const track = useRef<HTMLOListElement>(null);
-  const slides = useRef<(HTMLLIElement | null)[]>([]);
-  const [active, setActive] = useState(0);
-
-  const offset = (i: number) => (slides.current[i]?.offsetLeft ?? 0) - (slides.current[0]?.offsetLeft ?? 0);
-
-  function onScroll() {
-    const t = track.current;
-    if (!t) return;
-    if (t.scrollLeft >= t.scrollWidth - t.clientWidth - 2) return setActive(STEPS.length - 1);
-    let best = 0;
-    STEPS.forEach((_, i) => {
-      if (Math.abs(offset(i) - t.scrollLeft) < Math.abs(offset(best) - t.scrollLeft)) best = i;
-    });
-    setActive(best);
-  }
-
-  function go(i: number) {
-    // scrollTo on the track, not scrollIntoView, so the page itself never jumps vertically.
-    track.current?.scrollTo({ left: offset(i), behavior: reducedMotion() ? 'auto' : 'smooth' });
-  }
-
-  const arrow =
-    'flex size-11 items-center justify-center rounded-pill border border-border-strong bg-surface text-text hover:bg-surface-sunk disabled:opacity-40 disabled:hover:bg-surface';
-
-  return (
-    <section aria-labelledby="how-title" className="flex flex-col gap-6">
-      <div className="flex items-end justify-between gap-4">
-        <h2 id="how-title" className="text-display-md text-text lg:text-display-lg">
-          Open in three steps
-        </h2>
-        <div className="hidden gap-2 sm:flex">
-          <button type="button" className={arrow} onClick={() => go(active - 1)} disabled={active === 0} aria-label="Previous step">
-            <ChevronLeft aria-hidden className="size-5" />
-          </button>
-          <button type="button" className={arrow} onClick={() => go(active + 1)} disabled={active === STEPS.length - 1} aria-label="Next step">
-            <ChevronRight aria-hidden className="size-5" />
-          </button>
-        </div>
-      </div>
-      <ol
-        ref={track}
-        tabIndex={0}
-        aria-label="Steps"
-        onScroll={onScroll}
-        className="-mx-4 flex snap-x snap-mandatory gap-6 overflow-x-auto scroll-px-4 px-4 pb-2 [scrollbar-width:none] sm:-mx-8 sm:scroll-px-8 sm:px-8 [&::-webkit-scrollbar]:hidden"
-      >
+    <section ref={ref} data-scroll-reveal={visible ? 'visible' : 'hidden'} id="getting-started" aria-labelledby="how-title" className="platform-reveal platform-reveal-group flex scroll-mt-24 flex-col gap-8">
+      <div className="max-w-2xl"><p className="mb-3 text-sm font-medium text-accent">Getting started</p><h2 id="how-title" className="text-display-md text-text lg:text-display-lg">Bring your rental business online.</h2><p className="mt-4 text-body-lg text-text-muted">Start with your company details. Build your workspace around the way your team already works.</p></div>
+      <ol className="grid gap-6 md:grid-cols-3">
         {STEPS.map((s, i) => (
-          <li
-            key={s.title}
-            ref={(el) => {
-              slides.current[i] = el;
-            }}
-            className={[
-              'flex shrink-0 basis-[85%] snap-start flex-col gap-5 rounded-lg border bg-surface p-6 transition duration-300 sm:basis-[60%] sm:p-8 lg:basis-[42%]',
-              active === i ? 'border-border-strong shadow-md' : 'border-border',
-            ].join(' ')}
-          >
-            <span className="self-start rounded-sm bg-primary px-3 py-1 font-mono text-heading-lg text-on-primary">{String(i + 1).padStart(2, '0')}</span>
-            <div>
-              <h3 className="text-heading-lg text-text">{s.title}</h3>
-              <p className="mt-2 text-base text-text-muted">{s.body}</p>
-            </div>
-            <StepVisual step={i} />
+          <li key={s.title} style={{ '--reveal-order': i } as CSSProperties} className="platform-reveal-item border-t border-border pt-6">
+            <span className="mb-4 flex size-11 items-center justify-center rounded-pill bg-primary font-mono text-sm text-on-primary">0{i + 1}</span>
+            <h3 className="text-heading-md text-text">{s.title}</h3><p className="mt-3 text-sm text-text-muted">{s.body}</p>
           </li>
         ))}
       </ol>
-      <div className="flex justify-center gap-1">
-        {STEPS.map((s, i) => (
-          <button
-            key={s.title}
-            type="button"
-            onClick={() => go(i)}
-            aria-label={`Step ${i + 1} of ${STEPS.length}: ${s.title}`}
-            aria-current={active === i ? 'step' : undefined}
-            className="flex size-11 items-center justify-center"
-          >
-            <span
-              className={[
-                'block h-2 rounded-pill transition-all duration-300',
-                active === i ? 'w-8 bg-primary' : 'w-2 bg-border-strong',
-              ].join(' ')}
-            />
-          </button>
-        ))}
-      </div>
+      <AddressPreview />
     </section>
   );
 }
 
 function ClosingCta() {
   const navigate = useNavigate();
+  const [ref, visible] = useScrollReveal<HTMLElement>();
   const link = 'inline-flex min-h-11 items-center gap-3 rounded-sm text-base hover:underline';
   return (
     <section
+      ref={ref}
+      data-scroll-reveal={visible ? 'visible' : 'hidden'}
       id="contact"
       aria-labelledby="cta-title"
-      className="grid gap-10 rounded-lg bg-nav p-8 text-text-inverse lg:grid-cols-[3fr_2fr] lg:items-center lg:p-12"
+      className="platform-reveal grid gap-10 rounded-lg bg-nav p-8 text-text-inverse lg:grid-cols-[3fr_2fr] lg:items-center lg:p-12"
     >
       <div className="flex flex-col gap-5">
         <h2 id="cta-title" className="text-display-md lg:text-display-lg">
-          Ready to launch your storefront?
+          Ready to bring your rentals together?
         </h2>
         <p className="max-w-xl text-body-lg text-text-inverse/70">
-          Register today and take your first booking at your own address this week.
+          Start your company registration and take the next step toward a connected fleet, back office and storefront.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={() => navigate({ to: '/register' })}>Register your company</Button>
@@ -575,64 +547,82 @@ function ClosingCta() {
   );
 }
 
-function PlatformLanding() {
-  const navigate = useNavigate();
-  // The reduced-motion rule in index.css overrides this back to instant.
-  useEffect(() => {
-    const html = document.documentElement;
-    html.style.scrollBehavior = 'smooth';
-    return () => {
-      html.style.scrollBehavior = '';
-    };
-  }, []);
+const navLink = 'inline-flex min-h-11 items-center rounded-sm px-3 text-sm hover:bg-current/10';
+const registerLink = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-pill bg-primary px-5 text-sm font-medium text-on-primary hover:bg-primary-hover';
+
+export function PlatformChrome({ children }: { children: ReactNode }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  function closeMenu() { setMenuOpen(false); }
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <SkipLink />
-      <header className="sticky top-0 z-50 bg-nav text-text-inverse">
-        <div className="mx-auto flex min-h-14 w-full max-w-shell items-center justify-between px-4 sm:px-8">
-        <Link to="/" className="text-base font-medium">
-          ArkiLaunch
-        </Link>
-        <nav className="flex items-center gap-1 text-sm" aria-label="Primary">
-          <a href="#contact" className="inline-flex min-h-11 items-center rounded-sm px-3 hover:bg-current/10">
-            Contact
-          </a>
-          <Link to="/login" className="inline-flex min-h-11 items-center rounded-sm px-3 hover:bg-current/10">
-            Sign in
-          </Link>
-        </nav>
+      <header className="sticky top-0 z-50 bg-nav text-text-inverse" onKeyDown={(e) => { if (e.key === 'Escape' && menuOpen) { closeMenu(); menuButton.current?.focus(); } }}>
+        <div className="mx-auto flex min-h-18 w-full max-w-shell items-center justify-between gap-4 px-4 sm:px-8">
+          <Link to="/" onClick={closeMenu} className="inline-flex min-h-11 shrink-0 items-center text-heading-md">ArkiLaunch</Link>
+          <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
+            <a href="/#product" className={navLink}>Product</a><a href="/#partners" className={navLink}>Partners</a><a href="/#contact" className={navLink}>Contact</a>
+            <Link to="/login" className={navLink}>Sign in</Link><Link to="/register" className={`${registerLink} ml-3`}>Register your company</Link>
+          </nav>
+          <button ref={menuButton} type="button" aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen} aria-controls="platform-mobile-nav" onClick={() => setMenuOpen(!menuOpen)} className="flex size-11 items-center justify-center rounded-sm hover:bg-current/10 md:hidden">{menuOpen ? <X aria-hidden className="size-5" /> : <Menu aria-hidden className="size-5" />}</button>
         </div>
+        <nav id="platform-mobile-nav" aria-label="Mobile primary" hidden={!menuOpen} className="border-t border-current/15 px-4 pb-5 md:hidden">
+          <div className="flex flex-col items-stretch" onClick={closeMenu}>
+            <a href="/#product" className={navLink}>Product</a><a href="/#partners" className={navLink}>Partners</a><a href="/#contact" className={navLink}>Contact</a><Link to="/login" className={navLink}>Sign in</Link><Link to="/register" className={`${registerLink} mt-2`}>Register your company</Link>
+          </div>
+        </nav>
       </header>
-      <main id="main" className="mx-auto flex w-full max-w-shell flex-1 flex-col gap-16 px-4 py-12 sm:px-8 lg:gap-24 lg:py-20">
-        <section className="grid items-center gap-10 lg:grid-cols-2">
-          <div className="flex min-w-0 flex-col gap-5">
-          <h1 className="text-display-lg text-text lg:text-display-xl">
-            Launch your equipment rental business
-          </h1>
-          <p className="max-w-xl text-body-lg text-text-muted">
-            Storefront, quotes, dispatch, timesheets and billing in one place, at an address with your company&apos;s
-            name on it.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Button onClick={() => navigate({ to: '/register' })}>Register your company</Button>
-            <Button variant="secondary" onClick={() => navigate({ to: '/login' })}>
-              Sign in
-            </Button>
-          </div>
-          </div>
-          <AddressPreview />
-        </section>
-
-        <Directory />
-
-        <Features />
-        <StepCarousel />
-        <ClosingCta />
-      </main>
+      {children}
       <footer className="bg-nav text-text-inverse">
-        <div className="mx-auto max-w-shell px-4 py-10 text-sm text-text-inverse/70 sm:px-8">ArkiLaunch &copy; 2026</div>
+        <div className="mx-auto grid max-w-shell gap-8 px-4 py-10 sm:px-8 md:grid-cols-[1fr_auto]">
+          <div><Link to="/" className="inline-flex min-h-11 items-center text-heading-md">ArkiLaunch</Link><p className="mt-2 max-w-sm text-sm text-text-inverse/80">Equipment rental management for the companies that keep construction moving.</p></div>
+          <nav aria-label="Footer" className="flex flex-wrap items-start gap-x-5"><Link to="/help" className={navLink}>Help</Link><Link to="/terms" className={navLink}>Terms</Link><Link to="/privacy" className={navLink}>Privacy</Link><a href="/#contact" className={navLink}>Contact</a></nav>
+          <p className="border-t border-current/15 pt-6 text-xs text-text-inverse/80 md:col-span-2">© {new Date().getFullYear()} ArkiLaunch</p>
+        </div>
       </footer>
     </div>
+  );
+}
+
+function ProductPreview() {
+  const [ref, visible] = useScrollReveal<HTMLElement>();
+  return (
+    <figure ref={ref} data-scroll-reveal={visible ? 'visible' : 'hidden'} className="platform-reveal platform-reveal-hero min-w-0 py-2">
+      <div className="laptop-preview">
+        <div className="laptop-bezel">
+          <span className="laptop-camera" aria-hidden="true" />
+          <div className="laptop-screen">
+            <img src="/images/platform-inventory.webp" srcSet="/images/platform-inventory-small.webp 800w, /images/platform-inventory.webp 1440w" sizes="(min-width: 1024px) 55vw, 95vw" width={1440} fetchPriority="high" alt="Sample ArkiLaunch fleet inventory with excavators, earthmoving equipment, availability and maintenance status." className="block h-auto w-full" />
+          </div>
+        </div>
+        <div className="laptop-deck" aria-hidden="true"><span className="laptop-trackpad" /></div>
+        <div className="laptop-foot" aria-hidden="true" />
+      </div>
+      <figcaption className="flex items-center justify-between gap-3 px-1 pt-3 text-xs text-text-muted"><span>Fleet inventory preview</span><span>Illustrative sample data</span></figcaption>
+    </figure>
+  );
+}
+
+function PlatformLanding() {
+  return (
+    <PlatformChrome>
+      <main id="main" className="mx-auto flex w-full max-w-shell flex-1 flex-col gap-16 px-4 pb-16 pt-12 sm:px-8 lg:gap-24 lg:pb-24 lg:pt-20">
+        <section className="grid items-center gap-10 lg:grid-cols-[0.85fr_1.15fr]">
+          <div className="flex min-w-0 flex-col gap-6">
+            <p className="text-sm font-medium text-accent">Built for equipment rental businesses</p>
+            <h1 className="max-w-lg text-display-lg text-text lg:text-display-xl">Run your equipment rental business in one place.</h1>
+            <p className="max-w-lg text-body-lg text-text-muted">Manage your fleet, quotations, dispatch, field timesheets and billing. Give your team one workspace and your customers a storefront with your name on it.</p>
+            <div className="flex flex-wrap gap-3"><Link to="/register" className={registerLink}>Register your company <ArrowRight aria-hidden className="size-4" /></Link><a href="#partners" className="inline-flex min-h-11 items-center gap-2 rounded-pill border border-border-strong px-5 text-sm font-medium text-text hover:bg-surface-sunk">Explore rental partners</a></div>
+            <p className="text-sm text-text-muted">Your fleet. Your rates. Your company’s identity.</p>
+          </div>
+          <ProductPreview />
+        </section>
+        <Features />
+        <Partners />
+        <GettingStarted />
+        <ClosingCta />
+      </main>
+    </PlatformChrome>
   );
 }
 

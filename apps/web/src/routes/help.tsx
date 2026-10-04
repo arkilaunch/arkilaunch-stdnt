@@ -5,23 +5,27 @@ import { useTenant } from '../lib/tenant.js';
 import { Surface } from '../components/surface.js';
 import { EmptyState } from '../components/empty-state.js';
 import { messengerHrefs } from '../components/messenger-links.js';
+import { currentHost } from '../lib/host.js';
 
 function HelpPage() {
   const tenant = useTenant();
-  const tenantName = tenant?.name ?? '';
-  const hrefs = messengerHrefs(tenant?.phone);
+  const onPlatform = currentHost.kind === 'platform';
+  const tenantName = onPlatform ? 'ArkiLaunch' : tenant?.name ?? '';
+  const phone = onPlatform ? import.meta.env.VITE_PLATFORM_CONTACT_PHONE : tenant?.phone;
+  const email = onPlatform ? import.meta.env.VITE_PLATFORM_CONTACT_EMAIL || `hello@${import.meta.env.VITE_PLATFORM_DOMAIN ?? 'arkilaunch.app'}` : tenant?.contactEmail;
+  const hrefs = messengerHrefs(phone);
   const channels = [
-    tenant?.contactEmail && { label: 'Email', detail: tenant.contactEmail, href: `mailto:${tenant.contactEmail}`, Icon: Mail },
-    tenant?.phone && { label: 'Phone', detail: tenant.phone, href: `tel:${tenant.phone}`, Icon: Phone },
-    hrefs && { label: 'Viber', detail: tenant!.phone!, href: hrefs.viber, Icon: MessageCircle },
-    hrefs && { label: 'Telegram', detail: tenant!.phone!, href: hrefs.telegram, Icon: Send },
+    email && { label: 'Email', detail: email, href: `mailto:${email}`, Icon: Mail },
+    phone && { label: 'Phone', detail: phone, href: `tel:${phone}`, Icon: Phone },
+    hrefs && { label: 'Viber', detail: phone!, href: hrefs.viber, Icon: MessageCircle },
+    hrefs && { label: 'Telegram', detail: phone!, href: hrefs.telegram, Icon: Send },
   ].filter((c) => !!c);
   return (
     <div className="flex flex-col gap-6 px-6 py-10 sm:px-10">
       <div>
         <h1 className="text-display-md text-text">Help center</h1>
         <p className="mt-1 text-sm text-text-muted">
-          Reach {tenantName} directly. Someone answers during yard hours.
+          {onPlatform ? 'Questions about registration, setup or your workspace? Contact ArkiLaunch.' : `Reach ${tenantName} directly. Someone answers during yard hours.`}
         </p>
       </div>
 
