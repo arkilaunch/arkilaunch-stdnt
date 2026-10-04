@@ -1,7 +1,7 @@
 # Change Record: Platform landing wordmark and feature scenes
 
 **Date:** 2026-10-04
-**Status:** Applied
+**Status:** Partially superseded by `cr-arkilaunch-platform-landing-no-feature-icons`; the wordmark change remains applied.
 **Trigger:** Owner requested a wordmark-only ArkiLaunch navbar and more specific feature-card imagery.
 **Docs touched:** DSD public landing; DESIGN.md materialization; index.
 

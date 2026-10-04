@@ -65,47 +65,12 @@ function useScrollReveal<T extends HTMLElement>() {
   return [ref, visible] as const;
 }
 
-const FEATURES: { title: string; body: string; scene: 'fleet' | 'quote' | 'field-log' | 'billing' }[] = [
-  { scene: 'fleet', title: 'Know your fleet', body: 'See what is available, deployed or due for maintenance. Keep your equipment and dispatch records together.' },
-  { scene: 'quote', title: 'Prepare the next quote', body: 'Bring your rate cards, diesel prices and transport costs into a quotation you can review and send.' },
-  { scene: 'field-log', title: 'Bring field hours into focus', body: 'Capture digital or paper time reports. Compare independent logs, review differences and approve the hours.' },
-  { scene: 'billing', title: 'Keep billing connected', body: 'Trace statements, deposits and payments back to reconciled hours. A person approves before a deposit deduction.' },
+const FEATURES: { title: string; body: string }[] = [
+  { title: 'Know your fleet', body: 'See what is available, deployed or due for maintenance. Keep your equipment and dispatch records together.' },
+  { title: 'Prepare the next quote', body: 'Bring your rate cards, diesel prices and transport costs into a quotation you can review and send.' },
+  { title: 'Bring field hours into focus', body: 'Capture digital or paper time reports. Compare independent logs, review differences and approve the hours.' },
+  { title: 'Keep billing connected', body: 'Trace statements, deposits and payments back to reconciled hours. A person approves before a deposit deduction.' },
 ];
-
-function FeatureScene({ scene }: { scene: (typeof FEATURES)[number]['scene'] }) {
-  const line = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
-  const amber = { fill: 'none', stroke: 'var(--color-primary-hover)', strokeWidth: 2.4, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
-
-  if (scene === 'fleet') return (
-    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
-      <path {...line} d="M8 39h31l3 4H12zm7-2V26h17l6 11" />
-      <path {...amber} d="m31 27 11-13 11-3m-11 13 10 5 5-2" />
-      <circle cx="18" cy="42" r="2" fill="var(--color-primary-hover)" />
-      <circle cx="34" cy="42" r="2" fill="var(--color-primary-hover)" />
-    </svg>
-  );
-
-  if (scene === 'quote') return (
-    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
-      <path {...line} d="M15 7h27l7 7v35H15zM42 7v8h7M21 22h11m-11 8h15m-15 8h9" />
-      <path {...amber} d="M21 44h22" />
-    </svg>
-  );
-
-  if (scene === 'field-log') return (
-    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
-      <path {...line} d="M14 7h27l7 7v35H14zM41 7v8h7M21 23h14m-14 8h14m-14 8h10" />
-      <path {...amber} d="m39 36 4 4 8-9" />
-    </svg>
-  );
-
-  return (
-    <svg viewBox="0 0 64 56" aria-hidden="true" className="size-12 text-text">
-      <path {...line} d="M15 7h28v29H15zM21 18h8m-8 7h17m-17 6h12" />
-      <path {...amber} d="M21 43h16m5-8 3 3 6-8" />
-    </svg>
-  );
-}
 
 const STEPS = [
   { title: 'Register your company', body: 'Create your account and submit your company documents for review.' },
@@ -459,9 +424,8 @@ function Features() {
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {FEATURES.map((f, i) => (
-          <article key={f.title} style={{ '--reveal-order': i } as CSSProperties} className="platform-reveal-item flex flex-col gap-5 rounded-md border border-border bg-surface p-6">
-            <div className="flex items-center justify-between">
-              <FeatureScene scene={f.scene} />
+          <article key={f.title} style={{ '--reveal-order': i } as CSSProperties} className="platform-reveal-item flex flex-col gap-8 rounded-md border border-border bg-surface p-6">
+            <div className="flex justify-end">
               <span aria-hidden className="font-mono text-xs text-text-muted">0{i + 1}</span>
             </div>
             <div><h3 className="text-heading-md text-text">{f.title}</h3><p className="mt-3 text-sm text-text-muted">{f.body}</p></div>
