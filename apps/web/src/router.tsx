@@ -20,6 +20,8 @@ import { registerPendingRoute } from './routes/register.pending.js';
 import { activateRoute } from './routes/activate.js';
 
 import { accountLayoutRoute } from './routes/_account.js';
+import { accountHelpRoute } from './routes/account.help.js';
+import { appTicketsRoute } from './routes/app.tickets.js';
 import { accountIndexRoute } from './routes/account.index.js';
 import { accountBookingsRoute } from './routes/account.bookings.js';
 import { accountCartRoute } from './routes/account.cart.js';
@@ -83,7 +85,6 @@ import {
 } from './routes/notifications.js';
 import { appProfileRoute, adminProfileRoute, fieldProfileRoute } from './routes/profile.js';
 import {
-  appTicketsRoute,
   appSecurityLogsRoute,
   adminSecurityLogsRoute,
   fieldSettingsRoute,
@@ -111,6 +112,7 @@ export const routeTree = rootRoute.addChildren([
   authLayoutRoute.addChildren([loginRoute, signupRoute, registerRoute, registerCompanyRoute, registerPendingRoute, activateRoute]),
   accountLayoutRoute.addChildren([
     accountIndexRoute,
+    accountHelpRoute,
     accountBookingsRoute,
     accountCartRoute,
     accountSettingsRoute,

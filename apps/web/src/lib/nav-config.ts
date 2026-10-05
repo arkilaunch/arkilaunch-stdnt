@@ -82,6 +82,7 @@ export const ACCOUNT_NAV: NavGroup[] = [
     items: [
       { label: 'Notifications', to: '/account/notifications', icon: Bell },
       { label: 'Settings', to: '/account/settings', icon: Settings },
+      { label: 'Help Center', to: '/account/help', icon: FileText },
     ],
   },
 ];
@@ -126,6 +127,7 @@ export const APP_NAV: NavGroup[] = [
         owns: ['/app/registration'],
         roles: ['admin'],
       },
+      { label: 'Tickets', to: '/app/tickets', icon: FileText, roles: ['admin', 'owner'] },
     ],
   },
   {
