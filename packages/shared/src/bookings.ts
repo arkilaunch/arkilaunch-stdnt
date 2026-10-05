@@ -122,6 +122,41 @@ export interface FieldSheetDownloadResponse {
   remainingToday: number;
 }
 
+// QA 32: what a field log may be recorded against. A timekeeper gets only machines on site now at their assigned
+// sites; staff also get units returned in the last 14 days (late paper). Grouped per booking, one site each.
+export interface ScanTargetUnit {
+  equipmentId: string;
+  name: string;
+  serialNo: string;
+  onSite: boolean;
+}
+export interface ScanTarget {
+  rentalId: string;
+  bookingCode: string | null;
+  status: string;
+  customerName: string | null;
+  siteId: string;
+  siteName: string;
+  startDate: string;
+  endDate: string | null;
+  units: ScanTargetUnit[];
+}
+export interface ScanTargetsResponse {
+  items: ScanTarget[];
+}
+
+// The printed sheet's QR (apps/web/src/lib/edtr-sheet.ts draws it). It never carries a tenant: tenant_id always comes
+// from the session or the claimed capture row.
+const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const SHEET_QR = new RegExp(`^ARKI-EDTR3:(${UUID_RE}):(${UUID_RE}):([0-9]{4}-[0-9]{2}-[0-9]{2})$`, 'i');
+export function edtrSheetQrPayload(rentalId: string, equipmentId: string, weekStart: string): string {
+  return `ARKI-EDTR3:${rentalId}:${equipmentId}:${weekStart}`;
+}
+export function parseEdtrSheetQr(value: string): { rentalId: string; equipmentId: string; weekStart: string } | null {
+  const m = SHEET_QR.exec(value.trim());
+  return m ? { rentalId: m[1]!.toLowerCase(), equipmentId: m[2]!.toLowerCase(), weekStart: m[3]! } : null;
+}
+
 export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled'] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 const IsoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bookingDays, maxBookingHours, minBookingHours, minRentalDays } from './bookings.js';
+import { bookingDays, edtrSheetQrPayload, maxBookingHours, minBookingHours, minRentalDays, parseEdtrSheetQr } from './bookings.js';
 
 describe('minBookingHours', () => {
   it('is a full working day for every day the dates span', () => {
@@ -23,5 +23,19 @@ describe('minRentalDays', () => {
 
   it('is a single day when the tenant sets no minimum', () => {
     expect(minRentalDays(8, 0)).toBe(1);
+  });
+});
+
+describe('eDTR sheet QR', () => {
+  const r = '11111111-2222-4333-8444-555555555555';
+  const e = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  it('round-trips the printed payload', () => {
+    expect(parseEdtrSheetQr(edtrSheetQrPayload(r, e, '2026-10-05'))).toEqual({ rentalId: r, equipmentId: e, weekStart: '2026-10-05' });
+    expect(parseEdtrSheetQr(` ARKI-EDTR3:${r.toUpperCase()}:${e}:2026-10-05\n`)?.rentalId).toBe(r);
+  });
+  it('rejects anything else', () => {
+    for (const bad of ['', 'https://example.com', `ARKI-EDTR2:${r}:${e}:2026-10-05`, `ARKI-EDTR3:${r}:${e}:2026-10-5`, `ARKI-EDTR3:${r}:not-a-uuid:2026-10-05`]) {
+      expect(parseEdtrSheetQr(bad)).toBeNull();
+    }
   });
 });

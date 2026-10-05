@@ -412,15 +412,20 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     expect(recon?.status).toBe('rejected');
   });
 
-  it('a timekeeper CAN submit an EDTR for their assigned site', async () => {
-    const result = await edtr.capture(timekeeperCtx, {
+  // QA 32: the site is not enough; the machine must be on site on this booking (no "any unit" fallback).
+  it('a timekeeper CAN submit an EDTR for a machine on site at their assigned site, and only then', async () => {
+    const log = () => edtr.capture(timekeeperCtx, {
       source: 'digital_entry',
       rentalId,
       equipmentId,
       reportDate: '2021-03-05',
       lineItems: { hoursActive: 8, hoursIdle: 0 },
     });
-    expect(result.source).toBe('digital_entry');
+    await expect(log()).rejects.toMatchObject({ response: { error: 'equipment_not_deployed' } });
+    await withTenantTx(adminCtx, (tx) => tx.insert(equipmentAssignments).values({
+      tenantId: adminCtx.tenantId, equipmentId, rentalId, start: new Date('2020-01-01T00:00:00Z'), status: 'active',
+    }));
+    expect((await log()).source).toBe('digital_entry');
   });
 
   // cr-arkilaunch-f9-read-surface.md: S8 review queue.
