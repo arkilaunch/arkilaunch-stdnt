@@ -2,11 +2,12 @@ import { createRoute } from '@tanstack/react-router';
 import { useDeferredValue, useState } from 'react';
 import type { ReactElement } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { EquipmentResponse, MaintenanceWindowEndingSoon } from '@arkilaunch/shared';
+import { addDaysIso, manilaDate, type EquipmentResponse, type MaintenanceWindowEndingSoon } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
 import { equipmentQueries, type EquipmentListFilters } from '../lib/queries.js';
 import { equipmentImageUrl } from '../lib/equipment-images.js';
 import { Select } from '../components/select.js';
+import { Input } from '../components/input.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
@@ -24,7 +25,7 @@ import { Alert } from '../components/alert.js';
 import { ActionMenu } from '../components/action-menu.js';
 import { apiDelete, apiErrorText, apiGet, apiPatch } from '../lib/api-client.js';
 import { getCurrentRole } from '../lib/guards.js';
-import { Check, Truck, Wrench } from 'lucide-react';
+import { CalendarX, Check, Truck, Wrench } from 'lucide-react';
 
 const STATUS_META: Record<string, { tone: StatusTone; label: string; icon: ReactElement }> = {
   available: { tone: 'fleet-available', label: 'Available', icon: <Check className="size-full" /> },
@@ -33,8 +34,8 @@ const STATUS_META: Record<string, { tone: StatusTone; label: string; icon: React
 };
 
 // The API orders by category, so a page splits into runs of one category.
-function groupByCategory(items: EquipmentResponse[]): [string, EquipmentResponse[]][] {
-  const groups = new Map<string, EquipmentResponse[]>();
+function groupByCategory<T extends EquipmentResponse>(items: T[]): [string, T[]][] {
+  const groups = new Map<string, T[]>();
   for (const item of items) {
     const key = item.equipmentTypeName ?? 'Uncategorised';
     groups.set(key, [...(groups.get(key) ?? []), item]);
@@ -150,6 +151,27 @@ function BlocksEndingSoon({ manageable }: { manageable: boolean }) {
   );
 }
 
+type BlockedMode = '' | 'upcoming' | 'week' | 'range';
+
+// Blocked-date presets in Manila days; the API takes [blockedFrom, blockedTo], with no `to` meaning from then on.
+function blockedRange(mode: BlockedMode, today = manilaDate(new Date())): Pick<EquipmentListFilters, 'blockedFrom' | 'blockedTo'> {
+  if (mode === 'upcoming') return { blockedFrom: today };
+  if (mode === 'week' || mode === 'range') return { blockedFrom: today, blockedTo: addDaysIso(today, 6) };
+  return {};
+}
+
+const shortDay = (d: Date | string) =>
+  new Date(d).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', timeZone: 'Asia/Manila' });
+
+// "Blocked Oct 7 – Oct 9", or "Blocked until Oct 9" once it has started. End is exclusive midnight, so show the day before.
+export function blockLabel(block: { startsAt: Date | string; endsAt: Date | string }, now = new Date()): string {
+  const lastDay = new Date(new Date(block.endsAt).getTime() - 1);
+  if (new Date(block.startsAt) <= now) return `Blocked until ${shortDay(lastDay)}`;
+  const from = shortDay(block.startsAt);
+  const to = shortDay(lastDay);
+  return from === to ? `Blocked ${from}` : `Blocked ${from} – ${to}`;
+}
+
 function FleetFilters({
   filters,
   categories,
@@ -160,6 +182,12 @@ function FleetFilters({
   onChange: (next: EquipmentListFilters) => void;
 }) {
   const all = categories.reduce((sum, c) => sum + c.count, 0);
+  const [mode, setMode] = useState<BlockedMode>(filters.blockedFrom ? (filters.blockedTo ? 'range' : 'upcoming') : '');
+  const setBlocked = (next: BlockedMode) => {
+    setMode(next);
+    const { blockedFrom: _f, blockedTo: _t, ...rest } = filters;
+    onChange({ ...rest, ...blockedRange(next) });
+  };
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -193,6 +221,26 @@ function FleetFilters({
             <option value="price">No price (no rate card)</option>
           </Select>
         </div>
+        <div className="w-56">
+          <Select size="compact" labelHidden label="Blocked dates" value={mode} onChange={(e) => setBlocked(e.target.value as BlockedMode)}>
+            <option value="">Any blocked dates</option>
+            <option value="upcoming">Blocked now or later</option>
+            <option value="week">Blocked in the next 7 days</option>
+            <option value="range">Blocked between dates…</option>
+          </Select>
+        </div>
+        {mode === 'range' && (
+          <>
+            <div className="w-44">
+              <Input size="compact" label="Blocked from" type="date" value={filters.blockedFrom ?? ''}
+                onChange={(e) => onChange({ ...filters, blockedFrom: e.target.value })} />
+            </div>
+            <div className="w-44">
+              <Input size="compact" label="Blocked to" type="date" value={filters.blockedTo ?? ''} min={filters.blockedFrom}
+                onChange={(e) => onChange({ ...filters, blockedTo: e.target.value })} />
+            </div>
+          </>
+        )}
       </div>
       <SegmentedControl
         label="Category"
@@ -212,7 +260,7 @@ function InventoryPage() {
   const listOptions = equipmentQueries.list(PAGE_SIZE, offset, deferredFilters);
   const categories = useQuery({ ...listOptions, placeholderData: keepPreviousData }).data?.categories ?? [];
   const [editing, setEditing] = useState<'create' | EquipmentResponse | null>(null);
-  const [servicing, setServicing] = useState<EquipmentResponse | null>(null);
+  const [servicing, setServicing] = useState<{ unit: EquipmentResponse; tab?: 'dates' } | null>(null);
   const manageable = canManageFleet();
 
   return (
@@ -245,7 +293,8 @@ function InventoryPage() {
           Object.values(filters).some(Boolean)
             ? 'Clear a filter or pick another category.'
             : 'Add equipment to the fleet to see it listed here.'
-        }
+        }
+
         isEmpty={(data) => data.items.length === 0}
         render={(data) => (
           <div className="flex flex-col gap-6">
@@ -278,9 +327,23 @@ function InventoryPage() {
                       </div>
                       <StatusPill tone={meta.tone} label={meta.label} icon={meta.icon} className="shrink-0" />
                     </div>
+                    {eq.nextBlock && (
+                      <div className="px-5 pt-2">
+                        <button
+                          type="button"
+                          disabled={!manageable}
+                          onClick={() => setServicing({ unit: eq, tab: 'dates' })}
+                          title={eq.nextBlock.notes ?? undefined}
+                          className="inline-flex items-center gap-1.5 rounded-sm border border-warning/40 bg-warning/10 px-2 py-1 text-xs font-medium text-text enabled:hover:bg-warning/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+                        >
+                          <CalendarX aria-hidden className="size-3.5" />
+                          {blockLabel(eq.nextBlock)}
+                        </button>
+                      </div>
+                    )}
                     {manageable && (
                       <div className="mt-auto flex items-center justify-between gap-2 border-t border-border px-5 py-4">
-                        <Button variant="secondary" className="min-w-0 px-4" onClick={() => setServicing(eq)}>
+                        <Button variant="secondary" className="min-w-0 px-4" onClick={() => setServicing({ unit: eq })}>
                           Report &amp; maintenance
                         </Button>
                         <EquipmentActions equipment={eq} onEdit={() => setEditing(eq)} />
@@ -309,7 +372,7 @@ function InventoryPage() {
         />
       )}
       {servicing && (
-        <MaintenanceModal equipment={servicing} onClose={() => setServicing(null)} />
+        <MaintenanceModal equipment={servicing.unit} initialTab={servicing.tab ?? 'report'} onClose={() => setServicing(null)} />
       )}
     </div>
   );

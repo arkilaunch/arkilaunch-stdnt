@@ -77,6 +77,8 @@ export interface EquipmentListFilters {
   status?: string;
   q?: string;
   missing?: 'photo' | 'price' | '';
+  blockedFrom?: string;
+  blockedTo?: string;
 }
 
 export const equipmentQueries = {

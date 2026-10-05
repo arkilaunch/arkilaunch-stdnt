@@ -51,3 +51,15 @@
   - the booking eDTR card
 - The blank sheet carries no booking, customer, QR or dates, so timekeepers may print it as well, for sampling, training or a hand-filled fallback.
 - A scan of a blank sheet has no QR, so §4 flags it for staff to identify before billing.
+
+## 4. Equipment blocked-dates filter (QA 31)
+
+**Before:** blocked dates (`maintenance_windows`) were visible only inside one unit's Report & maintenance modal. The only fleet-wide view was "blocks ending soon".
+
+**After:**
+- **`GET /equipment?blockedFrom=&blockedTo=`** (Manila `YYYY-MM-DD`). It keeps units with a window touching those days, and a missing `blockedTo` means from that day on. It is an `exists` overlap on `maintenance_windows` (end exclusive, same predicate as availability) and runs under RLS with an explicit tenant match.
+- Each list item carries **`nextBlock`**: the current or next window `{ startsAt, endsAt, notes }`, from one query per page.
+- **Equipment page:**
+  - A **Blocked dates** filter: Any / Blocked now or later / Blocked in the next 7 days / Blocked between dates (two date fields).
+  - Every blocked unit shows a chip such as "Blocked Mar 10 – Mar 12" or "Blocked until Mar 12", with the window's note as its tooltip.
+  - For staff who manage the fleet, the chip opens the unit's modal on its Blocked dates tab.
