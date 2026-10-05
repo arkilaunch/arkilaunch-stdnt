@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -22,6 +23,7 @@ import { MAX_UPLOAD_BYTES } from '@arkilaunch/shared';
 import { TenantsService } from './tenants.service.js';
 import {
   CompanyStatusUpdateDto,
+  TestimonialWriteDto,
   TenantApplicationListQueryDto,
   TenantRegisterDto,
   TenantBrandingUpdateDto,
@@ -37,6 +39,30 @@ function imageKind(kind: string): 'logo' | 'hero' | 'icon' | 'login' {
 @Controller('tenants')
 export class TenantsController {
   constructor(private readonly tenants: TenantsService) {}
+
+  @Get('me/testimonials')
+  @RequirePermission('tenant:manage')
+  listTestimonials(@Req() req: CtxRequest) {
+    return this.tenants.listTestimonials(req.ctx);
+  }
+
+  @Post('me/testimonials')
+  @RequirePermission('tenant:manage')
+  createTestimonial(@Body() body: TestimonialWriteDto, @Req() req: CtxRequest) {
+    return this.tenants.createTestimonial(req.ctx, body);
+  }
+
+  @Patch('me/testimonials/:id')
+  @RequirePermission('tenant:manage')
+  updateTestimonial(@Param('id', ParseUUIDPipe) id: string, @Body() body: TestimonialWriteDto, @Req() req: CtxRequest) {
+    return this.tenants.updateTestimonial(req.ctx, id, body);
+  }
+
+  @Delete('me/testimonials/:id')
+  @RequirePermission('tenant:manage')
+  deleteTestimonial(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.tenants.deleteTestimonial(req.ctx, id);
+  }
 
   @Get('me')
   @RequirePermission('tenant:manage')

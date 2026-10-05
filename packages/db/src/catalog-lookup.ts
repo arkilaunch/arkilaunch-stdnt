@@ -67,6 +67,7 @@ export async function getCatalogEquipmentForSlug(slug: string, id: string): Prom
 // Anchor-tenant only; same SECURITY DEFINER rationale.
 export interface CatalogTestimonialRow {
   id: string;
+  headline: string | null;
   quote: string;
   authorName: string;
   authorTitle: string;
@@ -75,12 +76,14 @@ export interface CatalogTestimonialRow {
 export async function listCatalogTestimonialsForSlug(slug: string): Promise<CatalogTestimonialRow[]> {
   const rows = await db.execute<{
     id: string;
+    headline: string | null;
     quote: string;
     author_name: string;
     author_title: string;
   }>(sql`select * from catalog_list_testimonials(${slug})`);
   return rows.map((row) => ({
     id: row.id,
+    headline: row.headline,
     quote: row.quote,
     authorName: row.author_name,
     authorTitle: row.author_title,

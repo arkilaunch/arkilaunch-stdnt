@@ -161,11 +161,20 @@ export type CatalogEquipmentListResponse = z.infer<typeof CatalogEquipmentListRe
 
 export const CatalogTestimonialSchema = z.object({
   id: z.string().uuid(),
+  headline: z.string().nullable(),
   quote: z.string(),
   authorName: z.string(),
   authorTitle: z.string(),
 });
 export type CatalogTestimonial = z.infer<typeof CatalogTestimonialSchema>;
+
+export const TestimonialWriteSchema = z.object({
+  headline: z.string().trim().max(60).nullable(),
+  quote: z.string().trim().min(1).max(280),
+  authorName: z.string().trim().min(1).max(80),
+  authorTitle: z.string().trim().max(80),
+}).strict();
+export type TestimonialWrite = z.infer<typeof TestimonialWriteSchema>;
 
 export const CatalogTestimonialListResponseSchema = z.object({
   items: z.array(CatalogTestimonialSchema),

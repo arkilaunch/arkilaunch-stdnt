@@ -1,6 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import {
   CompanyStatusUpdateRequestSchema,
+  TestimonialWriteSchema,
   TenantApplicationListQuerySchema,
   TenantRegisterRequestSchema,
   TenantBrandingUpdateRequestSchema,
@@ -8,6 +9,7 @@ import {
 } from '@arkilaunch/shared';
 
 export class TenantBrandingUpdateDto extends createZodDto(TenantBrandingUpdateRequestSchema) {}
+export class TestimonialWriteDto extends createZodDto(TestimonialWriteSchema) {}
 export class TenantRegisterDto extends createZodDto(TenantRegisterRequestSchema) {}
 export class TenantApplicationListQueryDto extends createZodDto(TenantApplicationListQuerySchema) {}
 export class PaymongoAccountUpdateDto extends createZodDto(PaymongoAccountUpdateSchema) {}

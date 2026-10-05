@@ -10,6 +10,7 @@ export const testimonials = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: 'restrict' }),
     quote: text('quote').notNull(),
+    headline: text('headline'),
     authorName: text('author_name').notNull(),
     authorTitle: text('author_title').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
