@@ -821,6 +821,21 @@ sequenceDiagram
 
 ---
 
+### 5.1 Customer support API (CR: customer-qa-payments-help)
+
+Support tickets are tenant-owned and accessed within `withTenantTx`. Customer routes also require ownership. Staff routes reuse `user:manage` and restrict actors and assignees to tenant admin/owner users. Messages are plain text. The additive table and method-list amendment are recorded in [cr-arkilaunch-customer-qa-payments-help.md](cr-arkilaunch-customer-qa-payments-help.md).
+
+| Method | Endpoint | Permission | Behaviour |
+|---|---|---|---|
+| POST | `/me/tickets` | `booking:create`, customer | Create with category, subject (1-120), message (1-4000), optional own booking ID; return ticket code. |
+| GET | `/me/tickets` | `booking:read`, customer | List own tickets. |
+| GET | `/me/tickets/:id` | `booking:read`, customer | Own ticket, otherwise 404. |
+| GET | `/tickets` | `user:manage`, admin/owner | Tenant tickets; subject/code search, status filter, limit/offset paging. |
+| GET | `/tickets/:id` | `user:manage`, admin/owner | Tenant ticket detail. |
+| PATCH | `/tickets/:id` | `user:manage`, admin/owner | Update status, priority, same-tenant staff assignee; notify customer on status change. |
+
+---
+
 ## 6. Infrastructure, CI/CD & Deployment
 
 **Hosting:** Cloudflare Workers static assets (React frontend, `apps/web/wrangler.jsonc`, deployed by `deploy.yml`'s `web` job; CR: cloudflare-frontend), Azure Container Apps (persistent NestJS API + ACA Jobs cron/workers), Supabase (PostgreSQL + Storage), Cloudflare (WAF + DDoS + TLS 1.3). This corrects the naive "backend on serverless" reading: serverless cannot run the scheduler or the async OCR/reconciliation workers (scrutiny G-6), so the backend is a persistent host and the edge serves the static frontend only.

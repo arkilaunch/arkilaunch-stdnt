@@ -29,22 +29,6 @@ function GapScreen({
   );
 }
 
-export const appTicketsRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: '/app/tickets',
-  component: () => (
-    <GapScreen
-      title="Ticket management"
-      description="Support requests raised by customers and crew."
-      gapTitle="There is no ticket store yet"
-      gap="Nothing in the schema holds a support ticket and no endpoint creates, lists or closes one. Until that exists this screen can only show invented tickets, so it shows none. Customers reaching for help today go through the contact page, which is a real destination."
-      action={
-        <Link to="/contact" className={buttonClass('primary')}>Open the contact page</Link>
-      }
-    />
-  ),
-});
-
 export const appSecurityLogsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/app/security-logs',

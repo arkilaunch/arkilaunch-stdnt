@@ -1,4 +1,5 @@
 // The real adapter lives here, not in packages/shared: it needs fetch and an env secret, no place in a browser bundle.
+import { BadGatewayException } from '@nestjs/common';
 import {
   CHECKOUT_METHODS,
   StubPaymentsAdapter,
@@ -25,7 +26,12 @@ export class PayMongoAdapter implements PaymentsPort {
       ...(attributes ? { body: JSON.stringify({ data: { attributes } }) } : {}),
     });
     if (!response.ok) {
-      throw new Error(`PayMongo ${method} ${path} failed: ${response.status} ${await response.text()}`);
+      throw new BadGatewayException({
+        error: response.status < 500 ? 'payment_provider_rejected' : 'payment_provider_unavailable',
+        message: response.status < 500
+          ? 'The payment provider could not start this payment. Please try QR Ph again or contact support.'
+          : 'The payment provider is unavailable. Please try again later.',
+      });
     }
     return (await response.json()) as T;
   }

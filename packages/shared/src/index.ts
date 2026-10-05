@@ -39,3 +39,4 @@ export * from './weather-notify.js';
 export * from './uploads.js';
 export * from './reports.js';
 export * from './tiers.js';
+export * from './support.js';

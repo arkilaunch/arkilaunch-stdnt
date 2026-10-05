@@ -1,10 +1,11 @@
+import { SupportIdSchema } from '@arkilaunch/shared';
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BookingDetailResponse, CheckoutMethod, CouponPreviewResponse } from '@arkilaunch/shared';
-import { localPhMobile } from '@arkilaunch/shared';
+import { CHECKOUT_METHODS, CHECKOUT_METHOD_INFO, localPhMobile } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
-import { bookingsQueries, companiesQueries } from '../lib/queries.js';
+import { bookingsQueries, companiesQueries, invoicesQueries } from '../lib/queries.js';
 import { ApiError, apiErrorText, apiPost, followCheckout } from '../lib/api-client.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
@@ -20,11 +21,7 @@ type PaymentMethod = CheckoutMethod | 'manual';
 
 // No card, wallet or OTP fields on purpose: PayMongo's hosted page takes them, so no credential reaches us.
 const METHODS: { id: PaymentMethod; title: string; description: string }[] = [
-  { id: 'gcash', title: 'GCash', description: 'You log in to GCash and confirm with its OTP on the secure payment page.' },
-  { id: 'paymaya', title: 'Maya', description: 'You log in to Maya and confirm on the secure payment page.' },
-  { id: 'qrph', title: 'QR Ph', description: 'Scan the QR code with any banking or e-wallet app that supports QR Ph.' },
-  { id: 'dob', title: 'Online banking', description: 'Pay straight from your bank account (BPI, UnionBank) through your bank’s own login.' },
-  { id: 'card', title: 'Credit or debit card', description: 'Visa or Mastercard, entered on the payment provider’s page, not ours.' },
+  ...CHECKOUT_METHODS.map((id) => ({ id, ...CHECKOUT_METHOD_INFO[id]! })),
   {
     id: 'manual',
     title: 'Cash, bank deposit or company cheque',
@@ -118,6 +115,8 @@ function checkoutError(err: unknown): string {
   if (err instanceof ApiError) {
     const code = err.message;
     if (code === 'quote_not_accepted') return 'Accept the quote on the negotiation page before paying.';
+    if (code === 'payment_provider_rejected') return 'The payment provider could not start QR Ph. Please try again or contact support.';
+    if (code === 'payment_provider_unavailable') return 'The payment provider is unavailable. Please try again later.';
     if (code === 'company_not_verified') return 'Your company is still being verified. Payment opens once it is.';
     if (code === 'already_paid') return 'This booking is already paid. The receipt is on the booking page.';
     if (code === 'hold_expired') return 'The hold on these dates lapsed and another customer has since booked them. Pick new dates from the booking page, or contact the rental team.';
@@ -135,7 +134,7 @@ function checkoutError(err: unknown): string {
 
 function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
   const navigate = useNavigate();
-  const [method, setMethod] = useState<PaymentMethod>('gcash');
+  const [method, setMethod] = useState<PaymentMethod>('qrph');
   const [unavailable, setUnavailable] = useState(false);
   const [coupon, setCoupon] = useState<CouponPreviewResponse | null>(null);
 
@@ -317,6 +316,9 @@ function CheckoutPage() {
 
 // PayMongo's cancel_url: nothing was charged, and the webhook stays the authority either way.
 function CheckoutFailedPage() {
+  const { booking, invoice } = accountCheckoutFailedRoute.useSearch();
+  const invoiceQuery = useQuery({ ...invoicesQueries.detail(invoice ?? ''), enabled: Boolean(invoice), retry: false });
+  const bookingId = booking ?? invoiceQuery.data?.rentalId ?? undefined;
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Payment not completed" />
@@ -324,11 +326,11 @@ function CheckoutFailedPage() {
         <StatusPill tone="recon-failed" label="Not paid" icon={<TriangleAlert className="size-full" />} />
         <p className="max-w-prose text-sm text-text-muted">
           The payment was cancelled or declined before it went through, so nothing was charged and your
-          booking is unchanged. You can try again with the same or a different method.
+          booking is unchanged. You can try QR Ph again or contact the rental team.
         </p>
         <div className="flex flex-wrap gap-2">
           <Link to="/account/bookings" className={buttonClass('primary')}>My bookings</Link>
-          <Link to="/contact" className={buttonClass('secondary')}>Get help</Link>
+          <Link to="/account/help" search={bookingId ? { booking: bookingId } : {}} className={buttonClass('secondary')}>Get help</Link>
         </div>
       </Surface>
     </div>
@@ -344,5 +346,10 @@ export const accountCheckoutRoute = createRoute({
 export const accountCheckoutFailedRoute = createRoute({
   getParentRoute: () => accountLayoutRoute,
   path: '/account/checkout/failed',
+  validateSearch: (search: Record<string, unknown>): { booking?: string; invoice?: string } => {
+    const booking = SupportIdSchema.safeParse(search.booking);
+    const invoice = SupportIdSchema.safeParse(search.invoice);
+    return { ...(booking.success ? { booking: booking.data } : {}), ...(invoice.success ? { invoice: invoice.data } : {}) };
+  },
   component: CheckoutFailedPage,
 });

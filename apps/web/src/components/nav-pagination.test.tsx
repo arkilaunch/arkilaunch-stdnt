@@ -23,7 +23,8 @@ describe('navForRole', () => {
   });
 
   it('drops a group left empty', () => {
-    expect(navForRole(APP_NAV, 'owner').map((group) => group.title)).not.toContain('Customers');
+    expect(navForRole([{ title: 'Empty', items: [] }], 'owner')).toEqual([]);
+    expect(labels('owner')).toContain('Tickets');
   });
 });
 
