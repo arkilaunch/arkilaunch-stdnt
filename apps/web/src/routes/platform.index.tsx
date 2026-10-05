@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import {
   ArrowRight,
+  ChevronRight,
   Menu,
   Mail,
   MapPin,
@@ -169,7 +170,7 @@ function CompanyCard({ t }: { t: CatalogTenantListItem }) {
       <span className="flex flex-1 flex-col gap-4 p-5">
         <span className="flex gap-4">
           <CompanyLogo key={t.logoUrl} t={t} />
-          <span className="flex min-w-0 flex-col gap-1">
+          <span className="flex min-w-0 flex-col gap-1 break-words">
             <span className="text-heading-md text-text">{t.name}</span>
             {t.tagline && <span className="text-sm text-text-muted">{t.tagline}</span>}
             {place && (
@@ -324,7 +325,7 @@ function Directory() {
       {isError ? (
         <LoadError message="The directory could not be loaded. Check your connection and try again." onRetry={() => void refetch()} />
       ) : isPending ? (
-        <div role="status" className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div role="status" className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <span className="sr-only">Loading companies</span>
           {Array.from({ length: 6 }, (_, i) => (
             <div key={i} aria-hidden="true" className="h-48 animate-pulse rounded-md bg-border/60" />
@@ -346,7 +347,7 @@ function Directory() {
         <>
           <ul
             key={`${offset}:${data.items.map((t) => t.slug).join()}`}
-            className={['grid gap-6 transition-opacity sm:grid-cols-2 lg:grid-cols-3', isPlaceholderData ? 'opacity-60' : ''].join(' ')}
+            className={['grid grid-cols-1 gap-6 transition-opacity sm:grid-cols-2 lg:grid-cols-3', isPlaceholderData ? 'opacity-60' : ''].join(' ')}
           >
             {data.items.map((t, i) => (
               <li key={t.slug} className="animate-rise" style={{ animationDelay: `${i * 50}ms` }}>
@@ -512,7 +513,8 @@ function ClosingCta() {
 }
 
 const navLink = 'inline-flex min-h-11 items-center rounded-sm px-3 text-sm hover:bg-current/10';
-const registerLink = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-pill bg-primary px-5 text-sm font-medium text-on-primary hover:bg-primary-hover';
+const mobileLink = 'flex min-h-14 items-center justify-between border-b border-current/10 px-1 text-base font-medium hover:text-primary';
+const registerLink ='inline-flex min-h-11 items-center justify-center gap-2 rounded-pill bg-primary px-5 text-sm font-medium text-on-primary hover:bg-primary-hover';
 
 export function PlatformChrome({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -530,9 +532,14 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </nav>
           <button ref={menuButton} type="button" aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen} aria-controls="platform-mobile-nav" onClick={() => setMenuOpen(!menuOpen)} className="flex size-11 items-center justify-center rounded-sm hover:bg-current/10 md:hidden">{menuOpen ? <X aria-hidden className="size-5" /> : <Menu aria-hidden className="size-5" />}</button>
         </div>
-        <nav id="platform-mobile-nav" aria-label="Mobile primary" hidden={!menuOpen} className="border-t border-current/15 px-4 pb-5 md:hidden">
-          <div className="flex flex-col items-stretch" onClick={closeMenu}>
-            <a href="/#product" className={navLink}>Product</a><a href="/#partners" className={navLink}>Partners</a><a href="/#contact" className={navLink}>Contact</a><Link to="/login" className={navLink}>Sign in</Link><Link to="/register" className={`${registerLink} mt-2`}>Register your company</Link>
+        {menuOpen && <div aria-hidden="true" onClick={closeMenu} className="fixed inset-x-0 bottom-0 top-18 bg-black/40 md:hidden" />}
+        <nav id="platform-mobile-nav" aria-label="Mobile primary" hidden={!menuOpen} className="absolute inset-x-0 top-full max-h-[calc(100dvh-4.5rem)] overflow-y-auto border-t border-current/15 bg-nav px-4 pb-6 shadow-lg motion-safe:animate-rise md:hidden">
+          <div className="flex flex-col" onClick={closeMenu}>
+            {([['/#product', 'Product'], ['/#partners', 'Partners'], ['/#contact', 'Contact']] as const).map(([href, label]) => (
+              <a key={href} href={href} className={mobileLink}>{label}<ChevronRight aria-hidden className="size-5 text-text-inverse/50" /></a>
+            ))}
+            <Link to="/login" className={mobileLink}>Sign in<ChevronRight aria-hidden className="size-5 text-text-inverse/50" /></Link>
+            <Link to="/register" className={`${registerLink} mt-6 min-h-12 w-full text-base`}>Register your company <ArrowRight aria-hidden className="size-4" /></Link>
           </div>
         </nav>
       </header>
