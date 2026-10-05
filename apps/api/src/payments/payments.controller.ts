@@ -2,7 +2,7 @@ import { Body, Controller, Param, Post, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { PaymentsService } from './payments.service.js';
-import { CheckoutRequestDto, CouponPreviewRequestDto, InvoiceAmountUpdateDto, RefundRequestDto } from './dto.js';
+import { CheckoutRequestDto, CouponPreviewRequestDto, InvoiceAmountUpdateDto, OfficePaymentDto, RefundRequestDto } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
 @Controller('bookings')
@@ -23,6 +23,14 @@ export class PaymentsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   previewCoupon(@Param('id') id: string, @Body() body: CouponPreviewRequestDto, @Req() req: CtxRequest) {
     return this.payments.previewCoupon(req.ctx, id, body.code);
+  }
+
+  // Staff only: the customer paid in person; the same permission as recording cash on an invoice.
+  @Post(':id/mark-paid')
+  @RequirePermission('quote:approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  markPaid(@Param('id') id: string, @Body() body: OfficePaymentDto, @Req() req: CtxRequest) {
+    return this.payments.markPaidAtOffice(req.ctx, 'rental', id, body.receiptNo);
   }
 }
 
@@ -75,7 +83,14 @@ export class TruckPaymentsController {
 
   @Post('invoices/:id/cash-payment')
   @RequirePermission('quote:approve')
-  recordCash(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.payments.recordCash(req.ctx, id);
+  recordCash(@Param('id') id: string, @Body() body: OfficePaymentDto, @Req() req: CtxRequest) {
+    return this.payments.recordCash(req.ctx, id, body.receiptNo);
+  }
+
+  @Post('truck-requests/:id/mark-paid')
+  @RequirePermission('quote:approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  markTruckPaid(@Param('id') id: string, @Body() body: OfficePaymentDto, @Req() req: CtxRequest) {
+    return this.payments.markPaidAtOffice(req.ctx, 'truck', id, body.receiptNo);
   }
 }

@@ -176,6 +176,11 @@ export class BillingService {
         .orderBy(desc(auditLogs.timestamp));
 
       const edtrEvidence = invoice.invoiceType === 'deposit_deduction' ? await findEdtrEvidence(tx, lineItemRows) : null;
+      const [receipt] = await tx
+        .select({ receiptNo: payments.receiptNo })
+        .from(payments)
+        .where(and(eq(payments.invoiceId, id), eq(payments.status, 'paid'), isNotNull(payments.receiptNo)))
+        .limit(1);
 
       return {
         ...toInvoiceSummary(
@@ -191,6 +196,7 @@ export class BillingService {
         })),
         billTo: await billTo(tx, invoice),
         edtrEvidence,
+        receiptNo: receipt?.receiptNo ?? null,
         auditTrail: auditRows.map((row) => ({ action: row.action, actorId: row.actorId, timestamp: row.timestamp })),
       };
     });

@@ -49,6 +49,12 @@ export const RefundRequestSchema = z.object({
 });
 export type RefundRequest = z.infer<typeof RefundRequestSchema>;
 
+// Office (cash) payment recorded by staff; the OR number is optional because some offices issue it later.
+export const OfficePaymentSchema = z
+  .object({ receiptNo: z.string().trim().min(1).max(40).optional() })
+  .strict();
+export type OfficePayment = z.infer<typeof OfficePaymentSchema>;
+
 // PHP 1.00 is PayMongo's smallest checkout total.
 export const InvoiceAmountUpdateSchema = z.object({
   amountPhp: z.number().finite().min(1).max(99_999_999.99),

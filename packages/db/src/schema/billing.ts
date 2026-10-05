@@ -196,6 +196,7 @@ export const payments = pgTable(
       .references(() => invoices.id),
     method: text('method').notNull(), // card, gcash, maya, bank (channel only), cash
     recordedByUserId: uuid('recorded_by_user_id').references(() => users.id),
+    receiptNo: text('receipt_no'), // official receipt staff issued for an office payment
     amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
     providerRef: text('provider_ref').unique(),
     providerPaymentId: text('provider_payment_id'),

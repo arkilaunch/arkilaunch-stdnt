@@ -5,6 +5,7 @@ import {
   CouponPreviewRequestSchema,
   CouponUpdateSchema,
   InvoiceAmountUpdateSchema,
+  OfficePaymentSchema,
   PaginationQuerySchema,
   RefundRequestSchema,
 } from '@arkilaunch/shared';
@@ -16,3 +17,4 @@ export class CouponUpdateDto extends createZodDto(CouponUpdateSchema) {}
 export class CouponPreviewRequestDto extends createZodDto(CouponPreviewRequestSchema) {}
 export class CouponListQueryDto extends createZodDto(PaginationQuerySchema) {}
 export class InvoiceAmountUpdateDto extends createZodDto(InvoiceAmountUpdateSchema) {}
+export class OfficePaymentDto extends createZodDto(OfficePaymentSchema) {}

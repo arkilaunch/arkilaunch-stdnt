@@ -66,6 +66,8 @@ export const InvoiceDetailResponseSchema = InvoiceSummaryResponseSchema.extend({
     .object({ companyName: z.string(), tin: z.string().nullable(), billingAddress: z.string().nullable() })
     .nullable(),
   edtrEvidence: EdtrDeductionEvidenceSchema.nullable(),
+  // OR number staff wrote when recording an office payment.
+  receiptNo: z.string().nullable(),
   auditTrail: z.array(AuditTrailEntrySchema),
 });
 export type InvoiceDetailResponse = z.infer<typeof InvoiceDetailResponseSchema>;

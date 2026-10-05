@@ -73,7 +73,7 @@ export class PaymentsService {
   ) {}
 
   // Stores only provider_ref + status, never a card/account number.
-  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string) {
+  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string, office = false) {
     return withTenantTx(ctx, async (tx) => {
       // Locked so two concurrent checkouts serialize and the second reuses the first's issued invoice.
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1).for('update');
@@ -90,8 +90,8 @@ export class PaymentsService {
       if (company?.kycStatus !== 'approved') {
         throw new ConflictException({ error: 'company_not_verified', status: company?.kycStatus ?? null });
       }
-      // Callback before payment: staff confirm the booking by phone first.
-      if (!rental.callConfirmedAt) throw new ConflictException({ error: 'call_not_confirmed' });
+      // Callback before payment: staff confirm the booking by phone first (or the customer is at the office).
+      if (!rental.callConfirmedAt && !office) throw new ConflictException({ error: 'call_not_confirmed' });
       // A request past its hold pays only if its dates are still free.
       await renewLapsedHold(tx, ctx.tenantId, bookingId);
 
@@ -523,12 +523,12 @@ export class PaymentsService {
   }
 
   // Same money rules as a rental: the stored staff-accepted price, never a client number.
-  async checkoutTruck(ctx: RequestContext, truckRequestId: string, body: CheckoutRequest = {}, origin?: string) {
+  async checkoutTruck(ctx: RequestContext, truckRequestId: string, body: CheckoutRequest = {}, origin?: string, office = false) {
     return withTenantTx(ctx, async (tx) => {
       const [request] = await tx
         .select()
         .from(truckRequests)
-        .where(and(eq(truckRequests.id, truckRequestId), eq(truckRequests.requestedBy, ctx.userId)))
+        .where(and(eq(truckRequests.id, truckRequestId), office ? undefined : eq(truckRequests.requestedBy, ctx.userId)))
         .limit(1)
         .for('update');
       if (!request) throw new NotFoundException({ error: 'truck_request_not_found' });
@@ -544,9 +544,10 @@ export class PaymentsService {
       if (!companies.some((c) => c.kycStatus === 'approved')) {
         throw new ConflictException({ error: 'company_not_verified', status: companies[0]?.kycStatus ?? null });
       }
-      if (!request.callConfirmedAt) throw new ConflictException({ error: 'call_not_confirmed' });
+      // At the office the customer is present and pays the agreed price in person: that is the call and the accept.
+      if (!request.callConfirmedAt && !office) throw new ConflictException({ error: 'call_not_confirmed' });
       // The customer accepted exactly this price; a staff change since clears the accept.
-      if (request.acceptedPricePhp === null || Number(request.acceptedPricePhp) !== Number(request.agreedPricePhp)) {
+      if (!office && (request.acceptedPricePhp === null || Number(request.acceptedPricePhp) !== Number(request.agreedPricePhp))) {
         throw new ConflictException({ error: 'price_not_accepted', agreedPricePhp: Number(request.agreedPricePhp) });
       }
 
@@ -610,7 +611,7 @@ export class PaymentsService {
   }
 
   // The only way cash becomes 'paid': a named staff member with the money in hand.
-  async recordCash(ctx: RequestContext, invoiceId: string) {
+  async recordCash(ctx: RequestContext, invoiceId: string, receiptNo?: string) {
     return withTenantTx(ctx, async (tx) => {
       const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
       if (!invoice) throw new NotFoundException({ error: 'invoice_not_found' });
@@ -625,7 +626,7 @@ export class PaymentsService {
       if (pendingCash) {
         await tx
           .update(payments)
-          .set({ status: 'paid', recordedByUserId: ctx.userId })
+          .set({ status: 'paid', recordedByUserId: ctx.userId, receiptNo: receiptNo ?? null })
           .where(eq(payments.id, pendingCash.id));
       } else {
         await tx.insert(payments).values({
@@ -635,12 +636,36 @@ export class PaymentsService {
           amount: invoice.amount,
           status: 'paid',
           recordedByUserId: ctx.userId,
+          receiptNo: receiptNo ?? null,
         });
       }
       await this.settleInvoice(tx, ctx.tenantId, invoiceId);
       await this.events.emit(ctx, 'cash_payment_recorded', { invoice_id: invoiceId });
       return { invoiceId, status: 'paid' };
     });
+  }
+
+  // A walk-in paying at the office: issue (or reuse) the payable invoice as cash, then settle it under the staff
+  // member's name. Same money rules as checkout (verified company, agreed price/accepted quote, stored amounts).
+  // ponytail: two transactions; a failure between them leaves an issued cash invoice, exactly what a customer's
+  // "pay cash" choice leaves, so the Payments page or a retry settles it.
+  async markPaidAtOffice(ctx: RequestContext, service: 'rental' | 'truck', id: string, receiptNo?: string) {
+    const issued =
+      service === 'rental'
+        ? await this.checkout(ctx, id, { cash: true }, undefined, true)
+        : await this.checkoutTruck(ctx, id, { cash: true }, undefined, true);
+    const result = await this.recordCash(ctx, issued.invoiceId, receiptNo);
+    await withTenantTx(ctx, (tx) =>
+      tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: service === 'rental' ? 'rentals' : 'truck_requests',
+        entityId: id,
+        reason: `paid at the office; price accepted in person${receiptNo ? `; OR ${receiptNo}` : ''}`,
+      }),
+    );
+    return result;
   }
 
   // Replay-safe: an invoice no longer `issued` is left alone. Any amount but the invoice's goes to staff, never settles.
