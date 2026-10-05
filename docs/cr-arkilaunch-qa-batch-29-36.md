@@ -79,3 +79,29 @@
   - Android/Chrome: "Add {tenant} to your home screen" opens the browser's install sheet (`beforeinstallprompt`).
   - iOS Safari, which has no install API: "Tap Share, then Add to Home Screen".
   - "Not now" is remembered per browser in `localStorage`, guarded so private mode only means it returns next visit.
+
+## 6. eDTR scans only against deployed sites and machines, identified by the sheet's QR (QA 32)
+
+**Before:**
+- The Record-a-field-log and DTR-scanning screens listed **every** booking in the tenant, in any status, and **every** unit in the fleet, for timekeepers too.
+- The server checked the timekeeper's site but fell back to "any tenant unit" when a booking had no assignments.
+- The printed sheet's QR (`ARKI-EDTR3:rental:unit:week`) was drawn but never read back.
+
+**After:**
+- **`GET /field/scan-targets`** (`edtr:create`), grouped per booking with its site name, customer, booking code and machines.
+  - A **timekeeper** sees only machines **on site now** at their assigned sites. On site means delivered (`active`), or a legacy deployment left `scheduled` but marked deployed, already started and active on no other booking (`common/deployed.ts`, the site hub's rule in SQL).
+  - **Staff** see every site, plus machines **returned in the last 14 days** for late paper, labelled "returned".
+- **Capture guard.** `POST /edtr` from a timekeeper also needs that machine on site on that booking (`422 equipment_not_deployed`). This removes the "any unit" fallback for timekeepers. Staff keep the existing rental-span rule.
+- **One picker everywhere** (field dashboard, `/field/scan`, `/app/ocr/deployments`, Field logs, site hub):
+  - **Site and booking**, then **Machine on site**, both fed by scan-targets. A step with one choice is picked automatically, and the site hub limits it to its own site.
+  - The deployment list shows each site booking with its machines and serials.
+- **QR in the browser.** When a sheet photo is chosen, the browser's own `BarcodeDetector` (no library; Chrome/Edge on Android) reads the QR.
+  - It **picks and locks** the site and machine ("Matched from the sheet's QR code …").
+  - If the QR names a machine outside the user's scope, the photo is refused before upload (`sheet_unit_out_of_scope`).
+  - Where `BarcodeDetector` is missing (iOS Safari), the manual picker stays.
+- **QR in the OCR worker.** The eDTR read now asks Azure DI `prebuilt-layout` for the **barcodes** add-on (`features=barcodes`), and the adapter returns `barcodes`. `sheetQrCheck` (shared) compares the QR with the booking and unit the capture was filed under:
+  - **mismatch** → review flag `sheet_qr_mismatch`, `status = 'review'` and `last_error` set, even if the hours reconcile. It never bills on its own.
+  - **missing** (a blank or damaged sheet) → review flag `sheet_unidentified`. The day is excluded from bulk approve, so a person confirms the machine.
+  - **match** → no flag.
+  - The flags read in plain words in the approval drawer (`REVIEW_FLAGS`). RFC-2 is unchanged: reconciliation never deducts, approval does.
+- The QR format moved to shared (`edtrSheetQrPayload`, `parseEdtrSheetQr`), so the printed and the read payloads cannot drift.

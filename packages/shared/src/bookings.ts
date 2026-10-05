@@ -157,6 +157,17 @@ export function parseEdtrSheetQr(value: string): { rentalId: string; equipmentId
   return m ? { rentalId: m[1]!.toLowerCase(), equipmentId: m[2]!.toLowerCase(), weekStart: m[3]! } : null;
 }
 
+// The worker's identity check: does the photographed sheet belong to the booking and unit it was filed under?
+// The first parseable eDTR QR on the page decides; none at all is a blank or damaged sheet.
+export function sheetQrCheck(
+  barcodes: readonly { value: string }[] | undefined,
+  filed: { rentalId: string; equipmentId: string },
+): 'match' | 'mismatch' | 'missing' {
+  const qr = (barcodes ?? []).map((b) => parseEdtrSheetQr(b.value)).find((q) => q !== null);
+  if (!qr) return 'missing';
+  return qr.rentalId === filed.rentalId.toLowerCase() && qr.equipmentId === filed.equipmentId.toLowerCase() ? 'match' : 'mismatch';
+}
+
 export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled'] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 const IsoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);

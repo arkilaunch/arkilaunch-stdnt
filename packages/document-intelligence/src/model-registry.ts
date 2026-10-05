@@ -1,6 +1,6 @@
 // Maps the logical model ids used at call sites to the real Azure DI request.
 export type ModelRequest =
-  | { kind: 'model'; modelId: string }
+  | { kind: 'model'; modelId: string; features?: string[] }
   | { kind: 'query-fields'; modelId: string; queryFields: string[] };
 
 // prebuilt-idDocument doesn't cover PH SEC/TIN/DTI papers: prebuilt-layout + queryFields (max 20).
@@ -43,7 +43,8 @@ export function resolveModelRequest(modelId: string): ModelRequest {
     };
   }
   if (modelId === EDTR_MODEL_ID) {
-    return { kind: 'model', modelId: 'prebuilt-layout' };
+    // QA 32: the barcodes add-on reads the sheet's QR, the machine-readable booking + unit it was printed for.
+    return { kind: 'model', modelId: 'prebuilt-layout', features: ['barcodes'] };
   }
   // Any other id passes through as a custom model; an untrained one 404s into a hard failure.
   return { kind: 'model', modelId };

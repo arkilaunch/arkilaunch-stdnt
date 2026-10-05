@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bookingDays, edtrSheetQrPayload, maxBookingHours, minBookingHours, minRentalDays, parseEdtrSheetQr } from './bookings.js';
+import { bookingDays, edtrSheetQrPayload, maxBookingHours, minBookingHours, minRentalDays, parseEdtrSheetQr, sheetQrCheck } from './bookings.js';
 
 describe('minBookingHours', () => {
   it('is a full working day for every day the dates span', () => {
@@ -37,5 +37,18 @@ describe('eDTR sheet QR', () => {
     for (const bad of ['', 'https://example.com', `ARKI-EDTR2:${r}:${e}:2026-10-05`, `ARKI-EDTR3:${r}:${e}:2026-10-5`, `ARKI-EDTR3:${r}:not-a-uuid:2026-10-05`]) {
       expect(parseEdtrSheetQr(bad)).toBeNull();
     }
+  });
+});
+
+describe('sheetQrCheck', () => {
+  const filed = { rentalId: '11111111-2222-4333-8444-555555555555', equipmentId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' };
+  const qr = (equipmentId: string) => ({ value: edtrSheetQrPayload(filed.rentalId, equipmentId, '2026-10-05') });
+  it('matches its own sheet and catches a swapped one', () => {
+    expect(sheetQrCheck([{ value: 'junk' }, qr(filed.equipmentId)], filed)).toBe('match');
+    expect(sheetQrCheck([qr('ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee')], filed)).toBe('mismatch');
+  });
+  it('reports a sheet with no readable QR as missing', () => {
+    expect(sheetQrCheck(undefined, filed)).toBe('missing');
+    expect(sheetQrCheck([{ value: 'https://example.com' }], filed)).toBe('missing');
   });
 });
