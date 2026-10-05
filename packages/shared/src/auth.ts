@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { UserPasswordSchema } from './users.js';
 
 export const LoginRequestSchema = z.object({
   email: z.string().email(),
@@ -8,6 +9,13 @@ export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 
 export const ForgotPasswordRequestSchema = LoginRequestSchema.pick({ email: true });
 export type ForgotPasswordRequest = z.infer<typeof ForgotPasswordRequestSchema>;
+
+// accessToken is the Supabase Auth recovery token from the emailed link; it only proves inbox control.
+export const ResetPasswordRequestSchema = z.object({
+  accessToken: z.string().min(1),
+  password: UserPasswordSchema,
+});
+export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequestSchema>;
 
 export const RefreshRequestSchema = z.object({
   refreshToken: z.string().min(1),

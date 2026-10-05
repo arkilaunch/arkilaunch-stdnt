@@ -8,6 +8,7 @@ import type {
   LoginRequest,
   RefreshRequest,
   TwoFaChallenge,
+  ResetPasswordRequest,
   UserActivateRequest,
   Verify2faRequest,
 } from '@arkilaunch/shared';
@@ -160,6 +161,10 @@ export async function activateAccount(request: UserActivateRequest): Promise<voi
 
 export async function requestPasswordReset(email: string, turnstileToken?: string | null): Promise<void> {
   await postJson<{ ok: true }>('/auth/forgot-password', { email }, turnstileToken);
+}
+
+export async function resetPassword(request: ResetPasswordRequest): Promise<void> {
+  await postJson<{ ok: true }>('/auth/reset-password', request);
 }
 
 // A replayed refresh token revokes the whole family, so refresh is single-flight, one per browser (Web Locks),
