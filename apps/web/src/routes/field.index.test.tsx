@@ -18,6 +18,13 @@ function stubFetch({ rentals = [RENTAL], sites = [SITE] }: { rentals?: unknown[]
     vi.fn().mockImplementation((url: string) => {
       const u = String(url);
       const json = (v: unknown) => Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
+      if (u.includes('/field/scan-targets')) {
+        return json({ items: rentals.map(() => ({
+          rentalId: 'rental-1', bookingCode: 'EQR-1', status: 'active', customerName: CUSTOMER.companyName, siteId: SITE.id,
+          siteName: SITE.name, startDate: '2026-01-01T00:00:00.000Z', endDate: null,
+          units: [{ equipmentId: EQUIPMENT.id, name: `Excavator · ${EQUIPMENT.model}`, serialNo: EQUIPMENT.serialNo, onSite: true }],
+        })) });
+      }
       if (u.includes('/reference/rentals')) return json(rentals);
       if (u.includes('/reference/equipment')) return json([EQUIPMENT]);
       if (u.includes('/reference/customers')) return json([CUSTOMER]);
@@ -72,12 +79,12 @@ describe('Field dashboard: EDTR capture entry point', () => {
     expect(screen.getByRole('button', { name: 'Choose a file' })).toBeInTheDocument();
   });
 
-  it('does not offer capture when nothing is out on rental, rather than opening an unusable form', async () => {
+  it('does not offer capture when no machine is on site, rather than opening an unusable form', async () => {
     stubFetch({ rentals: [] });
     await renderRoute('/field');
 
     const record = await screen.findByRole('button', { name: 'Record a field log' });
     expect(record).toBeDisabled();
-    expect(screen.getByText(/no hours to record/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no machine is on site at your sites/i)).toBeInTheDocument();
   });
 });

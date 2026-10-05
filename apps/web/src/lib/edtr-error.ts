@@ -46,6 +46,18 @@ export function explainEdtrError(error: unknown): EdtrErrorExplanation {
         detail:
           'Rate cards exist for this equipment but none is effective on the report date, so the hours cannot be priced. Nothing was deducted.',
       };
+    case 'equipment_not_deployed':
+      return {
+        title: 'That machine is not on site',
+        detail:
+          'Field logs are recorded only for a machine that is on site now on this booking. Pick it from the list, or ask the office to mark it delivered first.',
+      };
+    case 'sheet_unit_out_of_scope':
+      return {
+        title: 'This sheet is for another machine',
+        detail:
+          "The sheet's QR code names a booking or machine that is not on site at your sites. Check you photographed the right sheet.",
+      };
     case 'line_items_required':
       return {
         title: 'Transcribed hours are needed',

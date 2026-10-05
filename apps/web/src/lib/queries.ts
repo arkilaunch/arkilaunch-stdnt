@@ -38,6 +38,7 @@ import type {
   EdtrSheetContext,
   EdtrSettings,
   FieldSheetListResponse,
+  ScanTargetsResponse,
   EquipmentReportResponse,
   MaintenanceDetailResponse,
   NotificationListResponse,
@@ -450,6 +451,9 @@ export const edtrQueries = {
     queryOptions({ queryKey: ['edtr-settings'] as const, queryFn: () => apiGet<EdtrSettings>('/edtr-settings') }),
   fieldSheets: () =>
     queryOptions({ queryKey: ['field', 'edtr-sheets'] as const, queryFn: () => apiGet<FieldSheetListResponse>('/field/edtr-sheets') }),
+  // Bookings and on-site machines a field log may be recorded against (QA 32).
+  scanTargets: () =>
+    queryOptions({ queryKey: ['field', 'scan-targets'] as const, queryFn: () => apiGet<ScanTargetsResponse>('/field/scan-targets') }),
   review: () =>
     queryOptions({
       queryKey: ['edtr', 'review'] as const,

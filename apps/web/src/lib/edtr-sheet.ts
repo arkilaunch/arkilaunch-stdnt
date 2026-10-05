@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { PDFDocument } from 'pdf-lib';
-import { WEATHER_CODES, manilaDate, type EdtrSheetContext } from '@arkilaunch/shared';
+import { WEATHER_CODES, edtrSheetQrPayload, manilaDate, type EdtrSheetContext } from '@arkilaunch/shared';
 
 // The layout is the OCR contract (parseEdtrSheet in packages/shared): keep the header labels, only a date in DATE
 // cells, no totals row in the table, open comb underlines (DI reads closed boxes as ticks), black-ink grid.
@@ -122,10 +122,9 @@ const shortDate = (iso: string) => {
   return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 };
 
-// Never put a tenant in the QR: the worker takes tenant_id from the capture's own row.
-export function edtrSheetQrPayload(rentalId: string, equipmentId: string, weekStart: string): string {
-  return `ARKI-EDTR3:${rentalId}:${equipmentId}:${weekStart}`;
-}
+// Never put a tenant in the QR: the worker takes tenant_id from the capture's own row. The format lives in shared,
+// next to parseEdtrSheetQr, so the printed and the read payloads cannot drift apart.
+export { edtrSheetQrPayload };
 
 export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
   const { context, equipmentId, weekStart } = input;

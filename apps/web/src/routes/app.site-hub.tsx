@@ -15,7 +15,6 @@ import { appLayoutRoute } from './_app.js';
 import { edtrQueries, sitesQueries } from '../lib/queries.js';
 import { apiDelete, apiErrorText, apiGet, apiPost } from '../lib/api-client.js';
 import { addDaysIso, formatDate, formatPeso, formatStatus, weekStart } from '../lib/format.js';
-import { useScanDeployments } from '../lib/use-scan-deployments.js';
 import { BookingCode } from '../components/booking-code.js';
 import { Button, buttonClass } from '../components/button.js';
 import { CaptureModal } from '../components/capture-modal.js';
@@ -308,7 +307,6 @@ function DailyLogs({ hub, today, siteId }: { hub: SiteHubResponse; today: string
   const [week, setWeek] = useState(() => weekStart(today));
   const [open, setOpen] = useState<FieldLogDay | null>(null);
   const [recordRental, setRecordRental] = useState<string | null>(null);
-  const { equipmentList, rentals, rentalLabel } = useScanDeployments(true);
   const dates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysIso(week, i)), [week]);
   const byKey = useMemo(() => new Map(hub.days.map((d) => [`${d.equipmentId}|${d.date}`, d])), [hub.days]);
 
@@ -414,9 +412,7 @@ function DailyLogs({ hub, today, siteId }: { hub: SiteHubResponse; today: string
       <CaptureModal
         open={!!recordRental}
         onClose={() => setRecordRental(null)}
-        rentals={rentals.filter((r) => hub.rentals.some((h) => h.id === r.id))}
-        equipmentList={equipmentList.filter((e) => hub.units.some((u) => u.equipmentId === e.id))}
-        rentalLabel={rentalLabel}
+        siteId={siteId}
         onCaptured={() => void queryClient.invalidateQueries({ queryKey: sitesQueries.hub(siteId).queryKey })}
         initialSource="paper_ocr"
         {...(recordRental ? { initialRentalId: recordRental } : {})}

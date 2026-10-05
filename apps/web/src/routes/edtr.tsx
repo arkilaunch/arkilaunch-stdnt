@@ -338,9 +338,6 @@ function EdtrPage() {
       <CaptureModal
         open={captureOpen}
         onClose={() => setCaptureOpen(false)}
-        rentals={rentals}
-        equipmentList={equipmentList}
-        rentalLabel={rentalLabel}
         onCaptured={onCaptured}
       />
 
