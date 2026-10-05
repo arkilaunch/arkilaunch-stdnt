@@ -140,6 +140,8 @@ export function Modal({
               ? 'relative flex h-dvh w-full flex-col bg-surface shadow-lg'
             : 'relative flex max-h-[90dvh] w-full flex-col rounded-t-md border border-border bg-surface shadow-lg sm:rounded-md',
           SIZE_CLASSES[size],
+          // A dialog opened from a nowrap table cell must still wrap its text.
+          'whitespace-normal break-words',
         ].join(' ')}
       >
         <div className="flex items-start justify-between gap-4 border-b border-border p-4 sm:p-5">

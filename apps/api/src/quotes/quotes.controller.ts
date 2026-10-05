@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { QuotesService } from './quotes.service.js';
-import { QuoteRequestDto } from './dto.js';
+import { CapDecisionDto, QuoteRequestDto } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
 @Controller('quotes')
@@ -34,6 +34,12 @@ export class QuotesController {
   @RequirePermission('quote:approve')
   approve(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.quotes.approve(req.ctx, id);
+  }
+
+  @Post(':id/cap-decision')
+  @RequirePermission('quote:approve_cap')
+  capDecision(@Param('id') id: string, @Body() body: CapDecisionDto, @Req() req: CtxRequest) {
+    return this.quotes.approveCap(req.ctx, id, body.approved);
   }
 
   @Post(':id/accept')

@@ -6,7 +6,9 @@ import {
   db,
   dieselPriceReadings,
   equipment,
+  equipmentTypeCosts,
   getBillingSettings,
+  getTierPolicy,
   pricingParameters,
   rateCards,
   recordGasWatchDieselReading,
@@ -16,11 +18,13 @@ import {
 import type {
   BillingSettingsInput,
   DieselPriceEntry,
+  EquipmentTypeCostsInput,
   PricingParametersInput,
   RateCardCreateRequest,
   RateCardListQuery,
   RateCardSupersedeRequest,
   RequestContext,
+  TierPolicy,
 } from '@arkilaunch/shared';
 import { countRows } from '../common/count-rows.js';
 
@@ -308,6 +312,43 @@ export class PricingService {
     });
   }
 
+  async listEquipmentTypeCosts(ctx: RequestContext) {
+    return withTenantTx(ctx, async (tx) => {
+      const rows = await tx.select().from(equipmentTypeCosts);
+      return rows.map((r) => ({
+        equipmentTypeId: r.equipmentTypeId,
+        operatorHourlyPhp: Number(r.operatorHourlyPhp),
+        maintenanceHourlyPhp: Number(r.maintenanceHourlyPhp),
+        fuelLPerHour: Number(r.fuelLPerHour),
+      }));
+    });
+  }
+
+  // New quotes only: issued quotes keep their frozen breakdown in pricing_inputs.
+  async setEquipmentTypeCosts(ctx: RequestContext, input: EquipmentTypeCostsInput) {
+    return withTenantTx(ctx, async (tx) => {
+      const values = {
+        operatorHourlyPhp: String(input.operatorHourlyPhp),
+        maintenanceHourlyPhp: String(input.maintenanceHourlyPhp),
+        fuelLPerHour: String(input.fuelLPerHour),
+        updatedAt: new Date(),
+      };
+      const [row] = await tx
+        .insert(equipmentTypeCosts)
+        .values({ tenantId: ctx.tenantId, equipmentTypeId: input.equipmentTypeId, ...values })
+        .onConflictDoUpdate({ target: [equipmentTypeCosts.tenantId, equipmentTypeCosts.equipmentTypeId], set: values })
+        .returning({ id: equipmentTypeCosts.id });
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'equipment_type_costs',
+        entityId: row!.id,
+      });
+      return input;
+    });
+  }
+
   async getBillingSettings(ctx: RequestContext) {
     return withTenantTx(ctx, (tx) => getBillingSettings(tx, ctx.tenantId));
   }
@@ -335,6 +376,29 @@ export class PricingService {
         action: 'UPDATE',
         entity: 'billing_settings',
         entityId: ctx.tenantId,
+      });
+      return input;
+    });
+  }
+
+  async getTierPolicy(ctx: RequestContext) {
+    return withTenantTx(ctx, (tx) => getTierPolicy(tx, ctx.tenantId));
+  }
+
+  // Takes effect on the next recompute (daily, or the customer's next settled invoice).
+  async setTierPolicy(ctx: RequestContext, input: TierPolicy) {
+    return withTenantTx(ctx, async (tx) => {
+      await tx
+        .insert(billingSettings)
+        .values({ tenantId: ctx.tenantId, tierPolicy: input })
+        .onConflictDoUpdate({ target: billingSettings.tenantId, set: { tierPolicy: input, updatedAt: new Date() } });
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'billing_settings',
+        entityId: ctx.tenantId,
+        reason: `tier policy: thresholds ${JSON.stringify(input.thresholds)} caps ${JSON.stringify(input.capsPct)}`,
       });
       return input;
     });

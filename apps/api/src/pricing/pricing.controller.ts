@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, Put, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { PricingService } from './pricing.service.js';
-import { BillingSettingsDto, DieselPriceEntryDto, PricingParametersInputDto, PricingParametersQueryDto } from './dto.js';
+import { BillingSettingsDto, TierPolicyDto, DieselPriceEntryDto, EquipmentTypeCostsInputDto, PricingParametersInputDto, PricingParametersQueryDto } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
 @Controller('pricing')
@@ -40,6 +40,18 @@ export class PricingController {
     return this.pricing.getPricingParameters(req.ctx, query.region);
   }
 
+  @Get('equipment-type-costs')
+  @RequirePermission('pricing:manage')
+  listEquipmentTypeCosts(@Req() req: CtxRequest) {
+    return this.pricing.listEquipmentTypeCosts(req.ctx);
+  }
+
+  @Put('equipment-type-costs')
+  @RequirePermission('pricing:manage')
+  setEquipmentTypeCosts(@Body() body: EquipmentTypeCostsInputDto, @Req() req: CtxRequest) {
+    return this.pricing.setEquipmentTypeCosts(req.ctx, body);
+  }
+
   @Get('billing-settings')
   @RequirePermission('pricing:manage')
   getBillingSettings(@Req() req: CtxRequest) {
@@ -50,5 +62,18 @@ export class PricingController {
   @RequirePermission('pricing:manage')
   setBillingSettings(@Body() body: BillingSettingsDto, @Req() req: CtxRequest) {
     return this.pricing.setBillingSettings(req.ctx, body);
+  }
+
+  // Admin and Owner both hold tenant:manage; the Owner has no pricing:manage.
+  @Get('tier-policy')
+  @RequirePermission('tenant:manage')
+  getTierPolicy(@Req() req: CtxRequest) {
+    return this.pricing.getTierPolicy(req.ctx);
+  }
+
+  @Put('tier-policy')
+  @RequirePermission('tenant:manage')
+  setTierPolicy(@Body() body: TierPolicyDto, @Req() req: CtxRequest) {
+    return this.pricing.setTierPolicy(req.ctx, body);
   }
 }

@@ -55,7 +55,7 @@ export async function seedPermissionCatalog(db: ReturnType<typeof makeServiceDb>
       'site:manage',
     ],
     // QAD-T19 bars owner from OPERATIONAL writes only; it still administers its own company.
-    owner: ['quote:read', 'report:read', 'booking:read', 'billing:read', 'edtr:read', 'user:manage', 'tenant:manage'],
+    owner: ['quote:read', 'quote:approve_cap', 'report:read', 'booking:read', 'billing:read', 'edtr:read', 'user:manage', 'tenant:manage'],
     timekeeper: ['edtr:create'],
     customer: ['booking:create', 'booking:read', 'payment:checkout', 'quote:read'],
   };

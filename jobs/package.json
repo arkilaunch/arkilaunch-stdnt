@@ -16,6 +16,7 @@
     "worker:pm-notify": "tsx src/maintenance-notify.ts",
     "worker:weekly-billing": "tsx src/weekly-billing.ts",
     "worker:hold-expiry": "tsx src/hold-expiry.ts",
+    "worker:tier-recompute": "tsx src/tier-recompute.ts",
     "ocr:fixtures:pull": "tsx src/ocr-fixtures-pull.ts"
   },
   "dependencies": {

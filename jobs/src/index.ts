@@ -6,3 +6,4 @@ export { runMaintenanceNotify } from './maintenance-notify.js';
 export { runHoldExpiry } from './hold-expiry.js';
 
 export { runWeeklyBilling } from './weekly-billing.js';
+export { runTierRecompute } from './tier-recompute.js';

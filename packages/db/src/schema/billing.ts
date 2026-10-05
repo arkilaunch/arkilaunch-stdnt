@@ -224,6 +224,8 @@ export const billingSettings = pgTable(
     demobilizationPhp: numeric('demobilization_php', { precision: 12, scale: 2 }).notNull().default('0'),
     minHours: numeric('min_hours', { precision: 8, scale: 2 }).notNull().default('0'),
     holdHours: integer('hold_hours').notNull().default(48),
+    // TierPolicy; null means DEFAULT_TIER_POLICY.
+    tierPolicy: jsonb('tier_policy'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   () => [tenantIsolationPolicy()],

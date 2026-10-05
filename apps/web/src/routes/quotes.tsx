@@ -20,6 +20,7 @@ import { QuoteLines } from '../components/quote-lines.js';
 import { useToast } from '../components/toast.js';
 import { DieselPriceForm, PricingParametersForm, RateCardsPanel, RentalFeesForm } from './app.settings.js';
 import { Tabs } from '../components/tabs.js';
+import { TierNote } from '../components/tier-cap.js';
 import { BanRulesEditor, SettingsEditor, TollsEditor, settingsQuery as truckSettingsQuery } from './app.trucks.js';
 
 type EquipmentLine = {
@@ -230,7 +231,11 @@ function NegotiatedQuote({ bookingId }: { bookingId: string }) {
       setResult(res);
       setQuoteId(res.id);
       setPreviewOpen(false);
-      toast.success('Revised quote drafted', `Total ${formatPeso(res.total)}. Approve it to send.`);
+      if (res.capStatus === 'pending_owner') {
+        toast.show({ tone: 'info', title: 'Sent to the Owner', detail: "The discount is above this customer's tier cap. The Owner must approve it before it goes out." });
+      } else {
+        toast.success('Revised quote drafted', `Total ${formatPeso(res.total)}. Approve it to send.`);
+      }
     } catch (err) {
       toast.error('Could not create the draft', apiErrorText(err));
     } finally {
@@ -373,6 +378,7 @@ function NegotiatedQuote({ bookingId }: { bookingId: string }) {
             </Button>
           </div>
 
+          {customerId && <TierNote customerId={customerId} audience="staff" />}
           <div className="grid gap-4 sm:grid-cols-3">
             <Input numeric id="discount" label="Discount (PHP, fixed)" type="number" min="0" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} />
           </div>
@@ -398,9 +404,9 @@ function NegotiatedQuote({ bookingId }: { bookingId: string }) {
               variant="approve"
               onClick={() => setConfirmingApprove(true)}
               loading={busy === 'approve'}
-              disabled={result.status === 'approved'}
+              disabled={result.status === 'approved' || result.capStatus === 'pending_owner'}
             >
-              {result.status === 'approved' ? 'Approved' : 'Approve'}
+              {result.status === 'approved' ? 'Approved' : result.capStatus === 'pending_owner' ? 'Waiting for Owner' : 'Approve'}
             </Button>
             <Link to="/app/quotes/$quoteId/print" params={{ quoteId }} className={buttonClass('secondary')}>
               Print quote

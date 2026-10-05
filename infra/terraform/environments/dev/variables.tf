@@ -184,3 +184,8 @@ variable "weekly_billing_cron" {
   type    = string
   default = "0 23 * * 0" # weekly, Monday 07:00 PHT (UTC cron), after the diesel run
 }
+
+variable "tier_recompute_cron" {
+  type    = string
+  default = "30 16 * * *" # 00:30 Asia/Manila
+}

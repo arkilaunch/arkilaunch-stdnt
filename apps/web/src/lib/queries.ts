@@ -2,6 +2,8 @@ import { queryOptions } from '@tanstack/react-query';
 import type {
   BookingDetailResponse,
   RentPart,
+  RateBreakdown,
+  EquipmentTypeCostsInput,
   CompanyResponse,
   CouponListResponse,
   CompanyReviewListResponse,
@@ -11,6 +13,7 @@ import type {
   SiteForecastResponse,
   AreaForecastResponse,
   CustomerSiteResponse,
+  CustomerTierResponse,
   BookingListResponse,
   BookingStatus,
   CatalogEquipment,
@@ -269,6 +272,7 @@ export interface QuoteLine {
   estimatedHours: number;
   rentParts: RentPart[];
   rent: number;
+  rateBreakdown?: RateBreakdown;
   hourlyRate: number;
   operatingCost: number;
   buffer: number;
@@ -279,6 +283,7 @@ export interface QuoteDetail {
   id: string;
   revision: number;
   status: string;
+  capStatus?: string | null;
   dieselPrice: number;
   dieselPriceDate: string;
   priceStale: boolean;
@@ -375,6 +380,11 @@ export const pricingQueries = {
       queryKey: ['diesel-price'] as const,
       queryFn: () => apiGet<DieselReading | null>('/pricing/diesel-price'),
     }),
+  typeCosts: () =>
+    queryOptions({
+      queryKey: ['equipment-type-costs'] as const,
+      queryFn: () => apiGet<EquipmentTypeCostsInput[]>('/pricing/equipment-type-costs'),
+    }),
 };
 
 // Resend the override's own date: a re-stamped date would make a stale override fresh again.
@@ -393,6 +403,14 @@ export function saveParams(row: PricingParametersRow | null | undefined, patch: 
     ...patch,
   });
 }
+
+export const tierQueries = {
+  customer: (customerId: string) =>
+    queryOptions({
+      queryKey: ['customer', customerId, 'tier'] as const,
+      queryFn: () => apiGet<CustomerTierResponse>(`/customers/${customerId}/tier`),
+    }),
+};
 
 export const usersQueries = {
   me: () =>

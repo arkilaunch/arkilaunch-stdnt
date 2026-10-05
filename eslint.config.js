@@ -39,7 +39,14 @@ export default tseslint.config(
     // Node build scripts: Node 24 globals, no browser.
     files: ['**/scripts/**/*.mjs'],
     languageOptions: {
-      globals: { console: 'readonly', process: 'readonly', fetch: 'readonly' },
+      globals: { Buffer: 'readonly', URL: 'readonly', console: 'readonly', process: 'readonly', fetch: 'readonly' },
+    },
+  },
+  {
+    // The dashboard capture script runs in Node and injects a callback into Playwright's browser context.
+    files: ['scripts/capture-platform-preview.mjs'],
+    languageOptions: {
+      globals: { document: 'readonly', localStorage: 'readonly', sessionStorage: 'readonly' },
     },
   },
 );

@@ -4,6 +4,7 @@ import {
   type Tx,
   auditLogs,
   customers,
+  customerTier,
   depositForQuote,
   equipment,
   equipmentAssignments,
@@ -17,7 +18,7 @@ import {
   rentals,
   withTenantTx,
 } from '@arkilaunch/db';
-import { bookingDays, quoteExpiresAt, type QuoteRequest, type RentPart, type RequestContext } from '@arkilaunch/shared';
+import { bookingDays, discountPct, quoteExpiresAt, type QuoteRequest, type RateBreakdown, type RentPart, type RequestContext } from '@arkilaunch/shared';
 import { ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
 import { holdDeadline } from '../common/booking-hold.js';
@@ -44,6 +45,8 @@ export interface QuoteResponse {
     // e.g. [{ daily, 8000, 12 }] = 8,000/day x 12 days.
     rentParts: RentPart[];
     rent: number;
+    // All-in ₱/hr split into rent + operator + maintenance + fuel; absent on pre-3.0 quotes.
+    rateBreakdown?: RateBreakdown;
     hourlyRate: number;
     operatingCost: number;
     mobilizationCost: number;
@@ -57,6 +60,8 @@ export interface QuoteResponse {
   discount: number;
   total: number;
   printableUrl: string | null;
+  // Tier-cap check on the discount; null when no discount.
+  capStatus?: string | null;
   createdAt?: string;
   customerName?: string;
   bookingCode?: string;
@@ -92,6 +97,7 @@ function toLineItems(priced: PricedQuote): QuoteResponse['lineItems'] {
     estimatedHours: item.estimatedHours,
     rentParts: item.rentParts,
     rent: item.rentPhp,
+    ...(item.pricingInputs.rate_breakdown ? { rateBreakdown: item.pricingInputs.rate_breakdown as RateBreakdown } : {}),
     hourlyRate: item.hourlyRatePhp,
     operatingCost: item.operatingCostPhp,
     mobilizationCost: item.mobilizationCostPhp,
@@ -155,7 +161,7 @@ export class QuotesService {
       price_stale: result.priced.diesel.stale,
     });
 
-    return this.toResponse(result.quotation.id, result.quotation.revision, result.quotation.status, result.priced, result.quotation.printableUrl);
+    return { ...this.toResponse(result.quotation.id, result.quotation.revision, result.quotation.status, result.priced, result.quotation.printableUrl), capStatus: result.quotation.capStatus };
   }
 
   async autoQuoteBooking(ctx: RequestContext, rentalId: string): Promise<QuoteResponse | null> {
@@ -235,7 +241,7 @@ export class QuotesService {
       // The parent's numbers are never changed; only its status flips.
       await tx.update(quotations).set({ status: 'superseded' }).where(eq(quotations.id, parent.id));
 
-      return this.toResponse(revised.id, revised.revision, 'draft', priced, revised.printableUrl);
+      return { ...this.toResponse(revised.id, revised.revision, 'draft', priced, revised.printableUrl), capStatus: revised.capStatus };
     });
   }
 
@@ -245,6 +251,10 @@ export class QuotesService {
       if (!quotation) throw new NotFoundException({ error: 'quote_not_found' });
       if (quotation.status !== 'draft') {
         throw new ConflictException({ error: 'quote_not_draft', status: quotation.status });
+      }
+      // An over-cap discount goes out only after the Owner approves it (approveCap).
+      if (quotation.capStatus === 'pending_owner' || quotation.capStatus === 'owner_rejected') {
+        throw new ConflictException({ error: 'quote_cap_needs_owner', capStatus: quotation.capStatus });
       }
 
       await tx.update(quotations).set({ status: 'approved' }).where(eq(quotations.id, quotationId));
@@ -271,6 +281,31 @@ export class QuotesService {
 
       return { id: quotationId, status: 'approved' };
     });
+  }
+
+  // Owner only (quote:approve_cap): rule on a discount above the customer's tier cap.
+  async approveCap(ctx: RequestContext, quotationId: string, approved: boolean): Promise<{ id: string; status: string; capStatus: string }> {
+    await withTenantTx(ctx, async (tx) => {
+      const [quotation] = await tx.select().from(quotations).where(eq(quotations.id, quotationId)).limit(1);
+      if (!quotation) throw new NotFoundException({ error: 'quote_not_found' });
+      if (quotation.status !== 'draft' || quotation.capStatus !== 'pending_owner') {
+        throw new ConflictException({ error: 'quote_not_pending_owner', status: quotation.status, capStatus: quotation.capStatus });
+      }
+      const capStatus = approved ? 'owner_approved' : 'owner_rejected';
+      await tx.update(quotations).set({ capStatus }).where(eq(quotations.id, quotationId));
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: approved ? 'APPROVE' : 'UPDATE',
+        entity: 'quotations',
+        entityId: quotationId,
+        reason: `cap ${capStatus}`,
+      });
+      if (!approved && quotation.rentalId) await notifyStaff(tx, ctx.tenantId, 'quote_cap_rejected', { rental_id: quotation.rentalId, quotation_id: quotationId });
+    });
+    if (!approved) return { id: quotationId, status: 'draft', capStatus: 'owner_rejected' };
+    const result = await this.approve(ctx, quotationId, 'owner approved over-cap discount');
+    return { ...result, capStatus: 'owner_approved' };
   }
 
   // The only thing that makes rent chargeable at checkout; opens the contract whose deposit_required caps deductions.
@@ -391,7 +426,7 @@ export class QuotesService {
         priceStale: quotation.priceStale === 'true',
         currency: 'PHP',
         lineItems: items.map(({ item, typeName }) => {
-          const inputs = item.pricingInputs as { rent_php?: number; rent_parts?: RentPart[] };
+          const inputs = item.pricingInputs as { rent_php?: number; rent_parts?: RentPart[]; rate_breakdown?: RateBreakdown };
           return {
             kind: item.kind === 'custom' ? ('custom' as const) : ('equipment' as const),
             ...(item.description ? { description: item.description } : {}),
@@ -403,6 +438,7 @@ export class QuotesService {
             // Pre-2.0 quotes carry no rent breakdown.
             rentParts: inputs.rent_parts ?? [],
             rent: inputs.rent_php ?? Number(item.operatingCostPhp),
+            ...(inputs.rate_breakdown ? { rateBreakdown: inputs.rate_breakdown } : {}),
             hourlyRate: Number(item.hourlyRatePhp),
             operatingCost: Number(item.operatingCostPhp),
             mobilizationCost: Number(item.mobilizationCostPhp),
@@ -418,6 +454,7 @@ export class QuotesService {
         discount: Number(quotation.subtotalPhp ?? 0) - Number(quotation.totalPhp ?? 0),
         total: Number(quotation.totalPhp ?? 0),
         printableUrl: quotation.printableUrl,
+        capStatus: quotation.capStatus,
         createdAt: quotation.createdAt.toISOString(),
         ...(customer ? { customerName: customer.companyName } : {}),
         ...(booking ? { bookingCode: booking.code } : {}),
@@ -432,6 +469,17 @@ export class QuotesService {
     priced: PricedQuote,
     link: { rentalId: string | null; revision: number; parentQuotationId: string | null },
   ) {
+    // Tier cap (UC 005): within the cap applies at once; above it waits for the Owner.
+    const pct = discountPct(body.discount, priced.subtotalPhp);
+    let cap: { status: 'within' | 'pending_owner'; reason: string } | null = null;
+    if (pct > 0) {
+      const tier = await customerTier(tx, ctx.tenantId, body.customerId);
+      const within = pct <= tier.capPct + 1e-9;
+      cap = {
+        status: within ? 'within' : 'pending_owner',
+        reason: `cap ${within ? 'ok' : 'exceeded'}: ${tier.tier}${tier.hasOverdue ? ' (overdue)' : ''} discount ${pct.toFixed(2)}% / cap ${tier.capPct}%`,
+      };
+    }
     const [quotation] = await tx
       .insert(quotations)
       .values({
@@ -447,6 +495,7 @@ export class QuotesService {
         pricingParamsId: priced.diesel.pricingParamsId,
         discountType: body.discount.type,
         discountValue: String(body.discount.value),
+        capStatus: cap?.status ?? null,
         mobilizationPhp: String(priced.mobilizationPhp),
         demobilizationPhp: String(priced.demobilizationPhp),
         subtotalPhp: String(priced.subtotalPhp),
@@ -478,6 +527,19 @@ export class QuotesService {
     );
 
     await this.auditAgreedPrices(tx, ctx, quotation.id, body);
+    if (cap) {
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'quotations',
+        entityId: quotation.id,
+        reason: cap.reason,
+      });
+      if (cap.status === 'pending_owner') {
+        await notifyStaff(tx, ctx.tenantId, 'quote_cap_review', { rental_id: link.rentalId, quotation_id: quotation.id });
+      }
+    }
     const printableUrl = `/app/quotes/${quotation.id}/print`;
     await tx.update(quotations).set({ printableUrl }).where(eq(quotations.id, quotation.id));
     return { ...quotation, printableUrl };

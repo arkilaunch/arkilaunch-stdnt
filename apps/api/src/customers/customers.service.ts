@@ -22,6 +22,7 @@ import {
   siteDocuments,
   users,
   withTenantTx,
+  customerTier,
 } from '@arkilaunch/db';
 import {
   onLuzonMainland,
@@ -55,6 +56,7 @@ import {
   type KycScanResponse,
   type AreaForecastResponse,
   type SiteEquipmentWeatherResponse,
+  type CustomerTierResponse,
 } from '@arkilaunch/shared';
 import { KYC_MODEL_ID, NATIONAL_ID_MODEL_ID } from '@arkilaunch/document-intelligence';
 import { createWeatherAdapter } from '@arkilaunch/weather';
@@ -298,6 +300,17 @@ export class CustomersService {
       extractionAvailable: true,
       layoutRecognized: layout === null ? null : layout !== 'unrecognized',
     };
+  }
+
+  async tier(ctx: RequestContext, customerId: string): Promise<CustomerTierResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      if (ctx.role === 'customer' && !(await ownsCustomer(tx, ctx, customerId))) {
+        throw new NotFoundException({ error: 'company_not_found' });
+      }
+      const [row] = await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, customerId)).limit(1);
+      if (!row) throw new NotFoundException({ error: 'company_not_found' });
+      return customerTier(tx, ctx.tenantId, customerId);
+    });
   }
 
   async listCompanies(ctx: RequestContext): Promise<CompanyResponse[]> {

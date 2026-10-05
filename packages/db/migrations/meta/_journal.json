@@ -551,8 +551,22 @@
     {
       "idx": 79,
       "version": "7",
+      "when": 1790400040000,
+      "tag": "0079_equipment_type_costs",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790400041000,
+      "tag": "0080_customer_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
       "when": 1791158400000,
-      "tag": "0080_user_signup_contact",
+      "tag": "0081_user_signup_contact",
       "breakpoints": true
     }
   ]

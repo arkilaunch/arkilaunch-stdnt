@@ -1,9 +1,9 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
 import { and, desc, eq, gte, isNull, lte, or } from 'drizzle-orm';
-import { type Tx, dieselPriceReadings, getBillingSettings, pricingParameters, rateCards } from '@arkilaunch/db';
-import { rentFor, round2HalfUp, type Discount, type QuoteItemInput, type QuoteRequest, type RentPart } from '@arkilaunch/shared';
+import { type Tx, dieselPriceReadings, equipmentTypeCosts, getBillingSettings, pricingParameters, rateCards } from '@arkilaunch/db';
+import { rateBreakdown, rentFor, round2HalfUp, type Discount, type QuoteItemInput, type QuoteRequest, type RentPart } from '@arkilaunch/shared';
 
-const FORMULA_VERSION = '2.0';
+const FORMULA_VERSION = '3.0'; // 3.0: rate card is all-in; per-type costs split it, no buffer on equipment
 // DOE updates weekly, so a week-old reading is usable, just labeled stale.
 const STALENESS_WINDOW_DAYS = 7;
 
@@ -180,12 +180,29 @@ export class PricingEngineService {
     }
 
     const rateCardValuePhp = Number(rateCard.rateValue);
+    const [typeCosts] = await tx
+      .select()
+      .from(equipmentTypeCosts)
+      .where(and(eq(equipmentTypeCosts.tenantId, tenantId), eq(equipmentTypeCosts.equipmentTypeId, input.equipmentTypeId)))
+      .limit(1);
+    const costs = {
+      operatorHourlyPhp: Number(typeCosts?.operatorHourlyPhp ?? 0),
+      maintenanceHourlyPhp: Number(typeCosts?.maintenanceHourlyPhp ?? 0),
+      fuelLPerHour: Number(typeCosts?.fuelLPerHour ?? 0),
+    };
+    const breakdown = rateBreakdown(rateCardValuePhp, costs, diesel.pricePhp);
+    if (!breakdown) {
+      throw new UnprocessableEntityException({
+        error: 'rate_card_costs_exceed_rate',
+        rateCardId: input.rateCardId,
+        message: 'Operator, maintenance and fuel cost more than this rate card; raise the rate or lower the costs.',
+      });
+    }
     const hours = input.days !== undefined ? input.days * dailyHours : input.estimatedHours;
+    // The card is the all-in price: operator, maintenance and fuel sit inside it, not on top.
     const rent = rentFor(rateCardValuePhp, hours);
-    const fuelPerHourCost = diesel.fuelLPerHour * diesel.pricePhp;
-    const addersPerHour = diesel.operatorHourlyPhp + diesel.maintenanceHourlyPhp + fuelPerHourCost;
-    const hourlyRate = (hours > 0 ? rent.rentPhp / hours : 0) + addersPerHour;
-    const operatingCost = (rent.rentPhp + addersPerHour * hours) * input.quantity;
+    const hourlyRate = rateCardValuePhp;
+    const operatingCost = rent.rentPhp * input.quantity;
 
     // Legacy per-km transport; new quotes send 0 and use the flat per-quote amount.
     const transportRatePerKm = diesel.transportPhpPerKm + diesel.fuelLPerKm * diesel.pricePhp;
@@ -193,8 +210,8 @@ export class PricingEngineService {
     const demobilizationCost = input.demobilizationKm * transportRatePerKm * input.quantity;
 
     const itemBase = operatingCost + mobilizationCost + demobilizationCost;
-    const buffer = itemBase * diesel.bufferPct;
-    const computedSubtotal = round2HalfUp(itemBase + buffer);
+    const buffer = 0;
+    const computedSubtotal = round2HalfUp(itemBase);
     // The agreed price replaces this line's subtotal; the computed figure stays in pricing_inputs beside it.
     const agreed = input.agreedSubtotalPhp;
     const subtotal = agreed !== undefined ? round2HalfUp(agreed) : computedSubtotal;
@@ -231,10 +248,10 @@ export class PricingEngineService {
         ...(agreed !== undefined ? { agreed_subtotal_php: subtotal, computed_subtotal_php: computedSubtotal } : {}),
         rate_card_effective_from: rateCard.effectiveFrom,
         rate_card_effective_to: rateCard.effectiveTo,
-        operator_hourly_php: diesel.operatorHourlyPhp,
-        maintenance_hourly_php: diesel.maintenanceHourlyPhp,
-        buffer_pct: diesel.bufferPct,
-        fuel_l_per_hour: diesel.fuelLPerHour,
+        operator_hourly_php: costs.operatorHourlyPhp,
+        maintenance_hourly_php: costs.maintenanceHourlyPhp,
+        fuel_l_per_hour: costs.fuelLPerHour,
+        rate_breakdown: breakdown,
         fuel_l_per_km: diesel.fuelLPerKm,
         transport_php_per_km: diesel.transportPhpPerKm,
         formula_version: FORMULA_VERSION,

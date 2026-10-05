@@ -15,6 +15,7 @@ import { Tabs } from './tabs.js';
 import { StatusBadge } from './status-badge.js';
 import { RouteMap } from './route-map.js';
 import { NegotiationThread } from './negotiation-thread.js';
+import { CapReview } from './tier-cap.js';
 import { BookingSide, SiteRepContact } from './booking-actions.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
@@ -133,6 +134,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
         </Section>
       )}
       <Section title="Money">
+        <CapReview booking={booking} />
         <dl className="flex flex-col gap-1">
           <Row label="Quote">
             {booking.quotation?.totalPhp != null
