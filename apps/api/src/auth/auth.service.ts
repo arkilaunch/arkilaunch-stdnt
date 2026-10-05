@@ -129,7 +129,10 @@ export class AuthService {
       const created = await registerCustomerUser(tenantSlug, email.toLowerCase(), passwordHash);
       return this.issueTokens(created.tenantId, created.userId, 'customer');
     } catch (err) {
-      if (err instanceof EmailTakenError) throw new ConflictException({ error: 'email_taken' });
+      if (err instanceof EmailTakenError) {
+        const existing = await findUserByEmailForAuth(email.toLowerCase(), tenantSlug);
+        throw new ConflictException({ error: existing?.status === 'disabled' ? 'email_disabled' : 'email_taken' });
+      }
       if (err instanceof StorefrontNotFoundError) throw new NotFoundException({ error: 'tenant_not_found' });
       throw err;
     }

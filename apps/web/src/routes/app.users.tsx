@@ -57,9 +57,11 @@ function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     // One account per email platform-wide: the address may belong to another company's user.
     onError: (e) =>
       setError(
-        e instanceof ApiError && e.message === 'email_taken'
-          ? 'That email already has an ArkiLaunch account. Invite a different email.'
-          : apiErrorText(e),
+        e instanceof ApiError && e.message === 'email_disabled'
+          ? "This person's access was removed. Restore it from their profile instead."
+          : e instanceof ApiError && e.message === 'email_taken'
+            ? 'That email already has an ArkiLaunch account. Invite a different email.'
+            : apiErrorText(e),
       ),
   });
 
@@ -333,7 +335,8 @@ function ManageUsersPage() {
         title="Users"
         options={usersListQuery(PAGE_SIZE, offset)}
         emptyTitle="No users yet"
-        emptyDescription="Invite your first teammate."
+        emptyDescription="Invite your first teammate."
+
         isEmpty={(data) => data.total === 0}
         render={(data) => (
           <Table

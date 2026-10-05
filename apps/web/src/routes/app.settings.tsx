@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
 import { apiDelete, apiErrorText, apiGet, apiPost, apiPut } from '../lib/api-client.js';
-import { FIELD_SHEET_DAILY_LIMIT, TEST_EMAIL_TYPES, manilaDate, minRentalDays, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
+import { FIELD_SHEET_DAILY_LIMIT, TEST_EMAIL_TYPES, manilaDate, minRentalDays, rateBreakdown, type EquipmentTypeCostsInput, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
 import { edtrQueries, equipmentQueries, pricingQueries, referenceQueries, saveParams, type DieselReading, type PricingParametersRow } from '../lib/queries.js';
 import { DataPanel } from '../components/data-panel.js';
 import { Table, type TableColumn } from '../components/table.js';
@@ -53,21 +53,38 @@ function RateCardModal({ open, onClose }: { open: boolean; onClose: () => void }
   const [equipmentId, setEquipmentId] = useState('');
   const fleet = useQuery(equipmentQueries.list(100));
   const units = (fleet.data?.items ?? []).filter((unit) => unit.equipmentTypeId === equipmentTypeId);
+  // ponytail: first 100 fleet units only; page through if a company outgrows that.
+  const ownTypes = (equipmentTypes.data ?? []).filter((type) => (fleet.data?.items ?? []).some((unit) => unit.equipmentTypeId === type.id));
   const [rateValue, setRateValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const typeCosts = useQuery(pricingQueries.typeCosts());
+  const diesel = useDieselNow();
+  const savedCosts = (typeCosts.data ?? []).find((c) => c.equipmentTypeId === equipmentTypeId) ?? NO_COSTS;
+  // null = untouched, so picking another type shows that type's saved costs.
+  const [costDraft, setCostDraft] = useState<Record<string, string> | null>(null);
+  const costText = costDraft ?? Object.fromEntries(COST_FIELDS.map(([key]) => [key, String(savedCosts[key])]));
+  const costs = Object.fromEntries(COST_FIELDS.map(([key]) => [key, Number(costText[key])])) as typeof NO_COSTS;
+  const costsIncomplete = COST_FIELDS.some(([key]) => costText[key] === '');
+  const rate = Number(rateValue);
+  const breakdown = rate > 0 && diesel != null && !costsIncomplete ? rateBreakdown(rate, costs, diesel) : null;
+  const overCost = rate > 0 && diesel != null && !costsIncomplete && !breakdown;
 
   const create = useMutation({
-    mutationFn: () =>
-      apiPost('/rate-cards', {
+    mutationFn: async () => {
+      if (costDraft) await apiPut('/pricing/equipment-type-costs', { equipmentTypeId, ...costs });
+      return apiPost('/rate-cards', {
         equipmentTypeId,
         ...(equipmentId ? { equipmentId } : {}),
         rateType: 'hourly',
-        rateValue: Number(rateValue),
-      }),
+        rateValue: rate,
+      });
+    },
     onSuccess: () => {
       setRateValue('');
+      setCostDraft(null);
       onClose();
       void queryClient.invalidateQueries({ queryKey: ['rate-cards'] });
+      void queryClient.invalidateQueries({ queryKey: ['equipment-type-costs'] });
       toast.success('Rate card added', 'It is quotable at once.');
     },
     onError: () => setError('Could not create this rate card.'),
@@ -84,13 +101,13 @@ function RateCardModal({ open, onClose }: { open: boolean; onClose: () => void }
       open={open}
       onClose={onClose}
       title="Add a rate card"
-      description="What an equipment type (or one unit of it) rents for. It is quotable at once."
+      description="The all-in hourly price the customer pays for an equipment type (or one unit). Operator, maintenance and fuel are inside it."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" form="new-rate-card" loading={create.isPending} disabled={create.isPending || !equipmentTypeId}>
+          <Button type="submit" form="new-rate-card" loading={create.isPending} disabled={create.isPending || !equipmentTypeId || costsIncomplete || overCost}>
             Add rate card
           </Button>
         </>
@@ -106,17 +123,19 @@ function RateCardModal({ open, onClose }: { open: boolean; onClose: () => void }
             onChange={(e) => {
               setEquipmentTypeId(e.target.value);
               setEquipmentId('');
+              setCostDraft(null);
             }}
           >
             <option value="" disabled>
               Select...
             </option>
-            {(equipmentTypes.data ?? []).map((type) => (
+            {ownTypes.map((type) => (
               <option key={type.id} value={type.id}>
                 {type.name}
               </option>
             ))}
           </Select>
+          {fleet.isSuccess && ownTypes.length === 0 && <p className="mt-1 text-sm text-text-muted">Register equipment in Fleet first.</p>}
         </div>
         <div>
           <Select
@@ -135,7 +154,7 @@ function RateCardModal({ open, onClose }: { open: boolean; onClose: () => void }
         </div>
         <div>
           <Input
-            label="Rate per hour (PHP)"
+            label="All-in rate per hour (PHP)"
             id="rate-value"
             type="number"
             min="0.01"
@@ -147,6 +166,36 @@ function RateCardModal({ open, onClose }: { open: boolean; onClose: () => void }
             {...(error ? { error } : {})}
           />
         </div>
+        <div className="flex flex-col justify-end gap-1 rounded-md bg-surface-sunk p-3" aria-live="polite">
+          <span className="text-sm font-medium text-text-muted">Rent (adjusts)</span>
+          <span className="font-mono text-sm tabular-nums text-text">
+            {breakdown ? `${formatPeso(breakdown.rent)}/hr` : overCost ? 'Costs exceed the rate' : diesel == null ? 'Diesel price not set' : '-'}
+          </span>
+        </div>
+        {equipmentTypeId && (
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <div className="grid items-start gap-4 sm:grid-cols-3">
+              {COST_FIELDS.map(([key, label, unit]) => (
+                <Input
+                  key={key}
+                  label={label}
+                  hint={unit}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  numeric
+                  value={costText[key] ?? ''}
+                  onChange={(e) => setCostDraft({ ...costText, [key]: e.target.value })}
+                />
+              ))}
+            </div>
+            <p className="text-sm text-text-muted">
+              Shared by all {(equipmentTypes.data ?? []).find((t) => t.id === equipmentTypeId)?.name ?? 'this type'} rate cards.
+              {breakdown ? ` Fuel ${formatPeso(breakdown.fuel)}/hr at ${formatPeso(breakdown.dieselPhp)}/L diesel.` : ''}
+            </p>
+            {overCost && <p className="text-sm text-error">Operator, maintenance and fuel cost more than this rate. Raise the rate or lower the costs.</p>}
+          </div>
+        )}
       </form>
     </Modal>
   );
@@ -519,10 +568,8 @@ export function RentalFeesForm() {
   );
 }
 
+// Operator, maintenance and fuel L/hr are per equipment type now (EquipmentCostsModal); saveParams resends the old values.
 const PRICING_FIELDS = [
-  ['operatorHourlyPhp', 'Operator (PHP per hour)'],
-  ['maintenanceHourlyPhp', 'Maintenance (PHP per hour)'],
-  ['fuelLPerHour', 'Fuel burn (L per hour)'],
   ['fuelLPerKm', 'Fuel burn (L per km)'],
   ['transportPhpPerKm', 'Transport (PHP per km)'],
   ['bufferPct', 'Buffer (%)'],
@@ -551,9 +598,6 @@ export function PricingParametersForm() {
   const save = useMutation({
     mutationFn: () =>
       saveParams(params.data, {
-        operatorHourlyPhp: Number(current.operatorHourlyPhp),
-        maintenanceHourlyPhp: Number(current.maintenanceHourlyPhp),
-        fuelLPerHour: Number(current.fuelLPerHour),
         fuelLPerKm: Number(current.fuelLPerKm),
         transportPhpPerKm: Number(current.transportPhpPerKm),
         bufferPct: Number(current.bufferPct) / 100,
@@ -573,7 +617,7 @@ export function PricingParametersForm() {
     <>
       <SummaryCard
         title="Operating costs"
-        description="Added to each machine's rent on every quote. Transport and fuel per km also price trucking trips."
+        description="Per-km transport and fuel for mobilization and trucking trips. Operator, maintenance and fuel per hour are set per equipment type under Rate cards."
         items={PRICING_FIELDS.map(([key, label]) => ({ label, value: saved[key] === '' ? 'Not set' : saved[key] }))}
         action={<EditButton what="operating costs" onClick={() => setEditing(true)} />}
       />
@@ -613,27 +657,60 @@ export function PricingParametersForm() {
   );
 }
 
+// Same rule as the engine: the company's own price wins only while it is under 7 days old.
+function useDieselNow(): number | null {
+  const latest = useQuery(pricingQueries.diesel());
+  const params = useQuery(pricingQueries.parameters());
+  const p = params.data;
+  if (p?.dieselOverridePhp && p.dieselOverrideDate && Date.now() - new Date(p.dieselOverrideDate).getTime() <= 7 * 86_400_000) {
+    return Number(p.dieselOverridePhp);
+  }
+  return latest.data ? Number(latest.data.pricePhp) : null;
+}
+
+const NO_COSTS = { operatorHourlyPhp: 0, maintenanceHourlyPhp: 0, fuelLPerHour: 0 };
+
+export function breakdownText(rate: number, costs: Omit<EquipmentTypeCostsInput, 'equipmentTypeId'>, diesel: number | null): string {
+  if (diesel == null) return 'Diesel price not set';
+  const b = rateBreakdown(rate, costs, diesel);
+  if (!b) return 'Costs exceed this rate; raise the rate or lower the costs';
+  return `Rent ${formatPeso(b.rent)} + operator ${formatPeso(b.operator)} + maintenance ${formatPeso(b.maintenance)} + fuel ${formatPeso(b.fuel)}`;
+}
+
 export function RateCardsPanel() {
   const [offset, setOffset] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [costsFor, setCostsFor] = useState<{ typeId: string; rate: number } | null>(null);
   const equipmentTypes = useQuery(referenceQueries.equipmentTypes());
+  const typeCosts = useQuery(pricingQueries.typeCosts());
+  const diesel = useDieselNow();
   const typeName = (id: string): string =>
     (equipmentTypes.data ?? []).find((type) => type.id === id)?.name ?? 'Unknown type';
+  const costsOf = (id: string) => (typeCosts.data ?? []).find((c) => c.equipmentTypeId === id) ?? NO_COSTS;
 
   const columns: TableColumn<RateCardRow>[] = [
     {
       header: 'Equipment type', kind: 'text',
       cell: (row) => (row.equipmentId ? `${typeName(row.equipmentTypeId)} (one unit)` : typeName(row.equipmentTypeId)),
     },
-    { header: 'Rate per hour', kind: 'money', cell: (row) => formatPeso(row.rateValue) },
+    { header: 'All-in rate per hour', kind: 'money', cell: (row) => formatPeso(row.rateValue) },
+    {
+      header: 'Breakdown per hour', kind: 'text',
+      cell: (row) => breakdownText(Number(row.rateValue), costsOf(row.equipmentTypeId), diesel),
+    },
     { header: 'In use since', kind: 'date', cell: (row) => formatDate(row.effectiveFrom) },
     {
       header: 'Actions', kind: 'action',
       cell: (row) => (
-        <RetireAction
-          id={row.id}
-          label={typeName(row.equipmentTypeId)}
-        />
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={() => setCostsFor({ typeId: row.equipmentTypeId, rate: Number(row.rateValue) })}>
+            Costs
+          </Button>
+          <RetireAction
+            id={row.id}
+            label={typeName(row.equipmentTypeId)}
+          />
+        </div>
       ),
     },
   ];
@@ -664,7 +741,93 @@ export function RateCardsPanel() {
         )}
       />
       <RateCardModal open={adding} onClose={() => setAdding(false)} />
+      {costsFor && (
+        <EquipmentCostsModal
+          equipmentTypeId={costsFor.typeId}
+          typeName={typeName(costsFor.typeId)}
+          rate={costsFor.rate}
+          saved={costsOf(costsFor.typeId)}
+          onClose={() => setCostsFor(null)}
+        />
+      )}
     </div>
+  );
+}
+
+const COST_FIELDS = [
+  ['operatorHourlyPhp', 'Operator', 'PHP per hour'],
+  ['maintenanceHourlyPhp', 'Maintenance', 'PHP per hour'],
+  ['fuelLPerHour', 'Fuel burn', 'Litres per hour'],
+] as const;
+
+// Fixed costs inside every rate card of this type; rent is whatever is left of the all-in rate.
+function EquipmentCostsModal({ equipmentTypeId, typeName, rate, saved, onClose }: {
+  equipmentTypeId: string;
+  typeName: string;
+  rate: number;
+  saved: Omit<EquipmentTypeCostsInput, 'equipmentTypeId'>;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const diesel = useDieselNow();
+  const [draft, setDraft] = useState<Record<string, string>>(
+    Object.fromEntries(COST_FIELDS.map(([key]) => [key, String(saved[key])])),
+  );
+  const values = Object.fromEntries(COST_FIELDS.map(([key]) => [key, Number(draft[key])])) as Omit<EquipmentTypeCostsInput, 'equipmentTypeId'>;
+  const incomplete = COST_FIELDS.some(([key]) => draft[key] === '');
+  const save = useMutation({
+    mutationFn: () => apiPut('/pricing/equipment-type-costs', { equipmentTypeId, ...values }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['equipment-type-costs'] });
+      toast.success(`${typeName} costs saved`, 'New quotes use them from now on.');
+      onClose();
+    },
+    onError: (e) => toast.error('Could not save costs', apiErrorText(e)),
+  });
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${typeName} operating costs`}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={save.isPending} disabled={incomplete} onClick={() => save.mutate()}>
+            Save costs
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-text-muted">
+          These sit inside every {typeName} rate card. Customers see the breakdown; fuel follows the diesel price
+          {diesel != null ? ` (${formatPeso(diesel)}/L today)` : ''} and rent is whatever is left of the all-in rate.
+        </p>
+        <div className="grid items-start gap-4 sm:grid-cols-3">
+          {COST_FIELDS.map(([key, label, unit]) => (
+            <Input
+              key={key}
+              label={label}
+              hint={unit}
+              type="number"
+              min="0"
+              step="0.01"
+              numeric
+              value={draft[key] ?? ''}
+              onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+            />
+          ))}
+        </div>
+        {!incomplete && (
+          <p className="rounded-md bg-surface-sunk p-3 text-sm text-text" aria-live="polite">
+            {formatPeso(rate)}/hr = {breakdownText(rate, values, diesel)}
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

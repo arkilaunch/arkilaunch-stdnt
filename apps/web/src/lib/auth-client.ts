@@ -78,7 +78,7 @@ export function clearTokens(): void {
 
 function signedOutElsewhere(): void {
   dropTabSession();
-  window.location.replace('/login?reason=signed_in_elsewhere');
+  window.location.replace('/login');
 }
 
 export function watchSessionOwner(): void {

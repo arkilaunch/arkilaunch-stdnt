@@ -894,6 +894,9 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
           </p>
         )}
       </section>
+      {!r.internal && r.price.lines[0]?.label.startsWith('Short-trip fee') && (
+        <p className="text-sm text-text-muted">Flat short-trip fee. No cost estimate or margin.</p>
+      )}
       {r.internal && (
         <section className={section}>
           <h3 className={heading}>

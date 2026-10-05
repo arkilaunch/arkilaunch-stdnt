@@ -2,6 +2,8 @@ import { queryOptions } from '@tanstack/react-query';
 import type {
   BookingDetailResponse,
   RentPart,
+  RateBreakdown,
+  EquipmentTypeCostsInput,
   CompanyResponse,
   CouponListResponse,
   CompanyReviewListResponse,
@@ -269,6 +271,7 @@ export interface QuoteLine {
   estimatedHours: number;
   rentParts: RentPart[];
   rent: number;
+  rateBreakdown?: RateBreakdown;
   hourlyRate: number;
   operatingCost: number;
   buffer: number;
@@ -374,6 +377,11 @@ export const pricingQueries = {
     queryOptions({
       queryKey: ['diesel-price'] as const,
       queryFn: () => apiGet<DieselReading | null>('/pricing/diesel-price'),
+    }),
+  typeCosts: () =>
+    queryOptions({
+      queryKey: ['equipment-type-costs'] as const,
+      queryFn: () => apiGet<EquipmentTypeCostsInput[]>('/pricing/equipment-type-costs'),
     }),
 };
 

@@ -6,6 +6,7 @@ import {
   db,
   dieselPriceReadings,
   equipment,
+  equipmentTypeCosts,
   getBillingSettings,
   pricingParameters,
   rateCards,
@@ -16,6 +17,7 @@ import {
 import type {
   BillingSettingsInput,
   DieselPriceEntry,
+  EquipmentTypeCostsInput,
   PricingParametersInput,
   RateCardCreateRequest,
   RateCardListQuery,
@@ -305,6 +307,43 @@ export class PricingService {
       });
 
       return { id, retired: true };
+    });
+  }
+
+  async listEquipmentTypeCosts(ctx: RequestContext) {
+    return withTenantTx(ctx, async (tx) => {
+      const rows = await tx.select().from(equipmentTypeCosts);
+      return rows.map((r) => ({
+        equipmentTypeId: r.equipmentTypeId,
+        operatorHourlyPhp: Number(r.operatorHourlyPhp),
+        maintenanceHourlyPhp: Number(r.maintenanceHourlyPhp),
+        fuelLPerHour: Number(r.fuelLPerHour),
+      }));
+    });
+  }
+
+  // New quotes only: issued quotes keep their frozen breakdown in pricing_inputs.
+  async setEquipmentTypeCosts(ctx: RequestContext, input: EquipmentTypeCostsInput) {
+    return withTenantTx(ctx, async (tx) => {
+      const values = {
+        operatorHourlyPhp: String(input.operatorHourlyPhp),
+        maintenanceHourlyPhp: String(input.maintenanceHourlyPhp),
+        fuelLPerHour: String(input.fuelLPerHour),
+        updatedAt: new Date(),
+      };
+      const [row] = await tx
+        .insert(equipmentTypeCosts)
+        .values({ tenantId: ctx.tenantId, equipmentTypeId: input.equipmentTypeId, ...values })
+        .onConflictDoUpdate({ target: [equipmentTypeCosts.tenantId, equipmentTypeCosts.equipmentTypeId], set: values })
+        .returning({ id: equipmentTypeCosts.id });
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'equipment_type_costs',
+        entityId: row!.id,
+      });
+      return input;
     });
   }
 

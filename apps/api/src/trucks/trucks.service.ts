@@ -154,7 +154,7 @@ export class TrucksService {
   // longer read. low/high are the total +/- the tenant's band. `internal`
   // (cost and floor, from the same inputs) is saved on the request and
   // never returned to a customer.
-  private async price(tx: Tx, tenantId: string, km: number, tolls: TruckPriceLine[] = []): Promise<{ price: TruckPrice; internal: TruckInternal }> {
+  private async price(tx: Tx, tenantId: string, km: number, tolls: TruckPriceLine[] = []): Promise<{ price: TruckPrice; internal: TruckInternal | null }> {
     const settings = await this.readSettings(tx, tenantId);
     const diesel = await this.engine.resolveDieselAndParams(tx, tenantId);
     const price = priceTruckTrip({
@@ -166,6 +166,9 @@ export class TrucksService {
       tolls,
     });
     const band = settings.rangePct / 100;
+    const priced = { ...price, lowPhp: round2HalfUp(price.totalPhp * (1 - band)), highPhp: round2HalfUp(price.totalPhp * (1 + band)) };
+    // The short-trip fee is the company's own flat amount: no cost estimate, so no false negative margin.
+    if (settings.minFeeMaxKm != null && km <= settings.minFeeMaxKm) return { price: priced, internal: null };
     const cost = estimateTruckCost({ km, settings, fuelLPerKm: diesel.fuelLPerKm, dieselPhp: diesel.pricePhp, tolls });
     // The customer's lines only; the total, band and internal cost are unchanged.
     if (settings.quoteBreakdown === 'cost_items') price.lines = costItemQuoteLines(price, cost, settings.remainderLabel);

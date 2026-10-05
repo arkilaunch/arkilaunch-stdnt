@@ -15,19 +15,15 @@ function isSafeInternalRedirect(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//');
 }
 
-function validateLoginSearch(search: Record<string, unknown>): { redirect?: string; reason?: 'signed_in_elsewhere' } {
-  return {
-    ...(isSafeInternalRedirect(search.redirect) ? { redirect: search.redirect } : {}),
-    // Set by auth-client when another account signed in on this browser.
-    ...(search.reason === 'signed_in_elsewhere' ? { reason: 'signed_in_elsewhere' as const } : {}),
-  };
+function validateLoginSearch(search: Record<string, unknown>): { redirect?: string } {
+  return isSafeInternalRedirect(search.redirect) ? { redirect: search.redirect } : {};
 }
 
 function LoginPage() {
   const onPlatform = currentHost.kind === 'platform';
   const tenantName = useTenantName();
   const navigate = useNavigate();
-  const { redirect: redirectTo, reason } = loginRoute.useSearch();
+  const { redirect: redirectTo } = loginRoute.useSearch();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -231,12 +227,6 @@ function LoginPage() {
             ? 'Sign in to the ArkiLaunch console.'
             : `Welcome back${tenantName ? ` to ${tenantName}` : ''}. Sign in to book equipment.`}
         </p>
-        {reason === 'signed_in_elsewhere' && (
-          <p role="status" className="mb-4 rounded-md border border-border bg-surface-sunk p-3 text-sm text-text">
-            You were signed out because another account signed in, or you signed out, in another tab of this browser.
-            Only one account can be signed in at a time.
-          </p>
-        )}
 
         <div className="mb-4">
           <Input

@@ -2,6 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import {
   BillingSettingsSchema,
   DieselPriceEntrySchema,
+  EquipmentTypeCostsInputSchema,
   PricingParametersInputSchema,
   PricingParametersQuerySchema,
   RateCardCreateRequestSchema,
@@ -16,3 +17,4 @@ export class RateCardCreateDto extends createZodDto(RateCardCreateRequestSchema)
 export class RateCardSupersedeDto extends createZodDto(RateCardSupersedeRequestSchema) {}
 export class RateCardListQueryDto extends createZodDto(RateCardListQuerySchema) {}
 export class BillingSettingsDto extends createZodDto(BillingSettingsSchema) {}
+export class EquipmentTypeCostsInputDto extends createZodDto(EquipmentTypeCostsInputSchema) {}

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, Put, Query, Req } from '@nestjs/common';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { PricingService } from './pricing.service.js';
-import { BillingSettingsDto, DieselPriceEntryDto, PricingParametersInputDto, PricingParametersQueryDto } from './dto.js';
+import { BillingSettingsDto, DieselPriceEntryDto, EquipmentTypeCostsInputDto, PricingParametersInputDto, PricingParametersQueryDto } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
 @Controller('pricing')
@@ -38,6 +38,18 @@ export class PricingController {
   @RequirePermission('pricing:manage')
   getPricingParameters(@Query() query: PricingParametersQueryDto, @Req() req: CtxRequest) {
     return this.pricing.getPricingParameters(req.ctx, query.region);
+  }
+
+  @Get('equipment-type-costs')
+  @RequirePermission('pricing:manage')
+  listEquipmentTypeCosts(@Req() req: CtxRequest) {
+    return this.pricing.listEquipmentTypeCosts(req.ctx);
+  }
+
+  @Put('equipment-type-costs')
+  @RequirePermission('pricing:manage')
+  setEquipmentTypeCosts(@Body() body: EquipmentTypeCostsInputDto, @Req() req: CtxRequest) {
+    return this.pricing.setEquipmentTypeCosts(req.ctx, body);
   }
 
   @Get('billing-settings')
