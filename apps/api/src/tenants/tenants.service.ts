@@ -21,6 +21,7 @@ import {
   registerTenant,
   tenantApplications,
   tenants,
+  testimonials,
   withTenantTx,
   sendEmail,
 } from '@arkilaunch/db';
@@ -35,6 +36,7 @@ import type {
   TenantRegisterRequest,
   TenantRegisterResponse,
   TenantBranding,
+  TestimonialWrite,
   TenantBrandingUpdateRequest,
 } from '@arkilaunch/shared';
 import { isTenantSlug, PlatformCompanyListResponseSchema } from '@arkilaunch/shared';
@@ -51,6 +53,27 @@ export class TenantsService {
     private readonly auth: AuthService,
     private readonly storage: StorageService,
   ) {}
+  async listTestimonials(ctx: RequestContext) {
+    const items = await withTenantTx(ctx, (tx) => tx.select().from(testimonials).orderBy(desc(testimonials.createdAt), testimonials.id));
+    return { items };
+  }
+
+  async createTestimonial(ctx: RequestContext, input: TestimonialWrite) {
+    const [row] = await withTenantTx(ctx, (tx) => tx.insert(testimonials).values({ ...input, tenantId: ctx.tenantId }).returning());
+    return row;
+  }
+
+  async updateTestimonial(ctx: RequestContext, id: string, input: TestimonialWrite) {
+    const [row] = await withTenantTx(ctx, (tx) => tx.update(testimonials).set(input).where(eq(testimonials.id, id)).returning());
+    if (!row) throw new NotFoundException({ error: 'testimonial_not_found' });
+    return row;
+  }
+
+  async deleteTestimonial(ctx: RequestContext, id: string) {
+    const [row] = await withTenantTx(ctx, (tx) => tx.delete(testimonials).where(eq(testimonials.id, id)).returning({ id: testimonials.id }));
+    if (!row) throw new NotFoundException({ error: 'testimonial_not_found' });
+    return row;
+  }
   async me(ctx: RequestContext) {
     const [tenant] = await withTenantTx(ctx, (tx) =>
       tx.select().from(tenants).where(eq(tenants.id, ctx.tenantId)),

@@ -87,7 +87,7 @@ function LandingPage() {
             return (
               <EquipmentCard
                 key={eq.id}
-                rateValue={eq.rateValue ?? null}
+                showPrice={false}
                 imageAlt={`${eq.equipmentTypeName} ${eq.model}`}
                 {...(imageUrl ? { imageUrl } : {})}
                 model={eq.model}
@@ -113,9 +113,9 @@ function LandingPage() {
       </section>
 
       {testimonialData && testimonialData.items.length > 0 && (
-        <section className="flex flex-col gap-6">
-          <h2 className="text-display-md text-text lg:text-display-lg">What our customers say</h2>
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <section id="testimonials" className="flex scroll-mt-20 flex-col gap-6">
+          <h2 className="text-display-md text-text lg:text-display-lg">Testimonials</h2>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {testimonialData.items.map((t) => (
               <TestimonialCard key={t.id} testimonial={t} />
             ))}
