@@ -43,7 +43,57 @@ describe('licence label text', () => {
     text.words = [];
     expect(parseIdText('drivers_license', text).first_name?.confidence).toBe(0);
   });
-  it.each(['philsys', 'passport', 'umid', 'sss'] as const)('leaves %s unchanged', (type) => {
-    expect(parseIdText(type, licenceText('Last Name First Name Middle Name\nPEÑA, ANA REYES\nAddress\n12 SAMPLE STREET'))).toEqual({});
+  it('leaves the unlabelled SSS card to the query fields', () => {
+    expect(parseIdText('sss', licenceText('JUAN S. DELA CRUZ\nSS No. 01-2345678-9'))).toEqual({});
+  });
+});
+
+// QA 36: each PH ID's own labels; fixtures follow current card samples.
+describe('per-format ID text', () => {
+  const name = (f: ReturnType<typeof parseIdText>) => [f.first_name?.value, f.middle_name?.value, f.last_name?.value];
+
+  it('PhilSys: Filipino/English split labels and the Tirahan/Address block', () => {
+    const f = parseIdText('philsys', licenceText(
+      'REPUBLIKA NG PILIPINAS\nApelyido/Last Name\nDELA CRUZ\nMga Pangalan/Given Names\nJUAN CARLO\nGitnang Apelyido/Middle Name\nSANTOS\nPetsa ng Kapanganakan/Date of Birth\nJANUARY 01, 1990\nTirahan/Address\n123 RIZAL ST, BRGY SAN JUAN\nTAYTAY, RIZAL',
+    ));
+    expect(name(f)).toEqual(['JUAN CARLO', 'SANTOS', 'DELA CRUZ']);
+    expect(f.address?.value).toBe('123 RIZAL ST, BRGY SAN JUAN, TAYTAY, RIZAL');
+  });
+
+  it('UMID: Surname / Given Name / Middle Name and Address, stopping at the next label', () => {
+    const f = parseIdText('umid', licenceText('CRN-0111-2345678-9\nSURNAME\nREYES\nGIVEN NAME\nMARIA\nMIDDLE NAME\nLOPEZ\nSEX M DATE OF BIRTH\nADDRESS\nBLK 4 LOT 2 PILILLA RIZAL\nDATE ISSUED 2020'));
+    expect(name(f)).toEqual(['MARIA', 'LOPEZ', 'REYES']);
+    expect(f.address?.value).toBe('BLK 4 LOT 2 PILILLA RIZAL');
+  });
+
+  it("voter's ID reads an address on the label's own line", () => {
+    const f = parseIdText('voters', licenceText('Surname: GARCIA\nFirst Name: ANA\nMiddle Name: CRUZ\nAddress: 5 MABINI ST, ANTIPOLO CITY\nPrecinct No. 0123A'));
+    expect(name(f)).toEqual(['ANA', 'CRUZ', 'GARCIA']);
+    expect(f.address?.value).toBe('5 MABINI ST, ANTIPOLO CITY');
+  });
+
+  it('passport: the MRZ names win, and no address is read', () => {
+    const f = parseIdText('passport', licenceText('Apelyido/Surname\nDELA CRUZ\nMga Pangalan/Given Names\nJUAN\nAddress\nNOT ON A PASSPORT\nP<PHLDELA<CRUZ<<JUAN<CARLO<<<<<<<<<<<<<<<<<<<'));
+    expect(f.last_name?.value).toBe('DELA CRUZ');
+    expect(f.first_name?.value).toBe('JUAN CARLO');
+    expect(f.address).toBeUndefined();
+  });
+
+  it('PRC: names only, no address', () => {
+    const f = parseIdText('prc', licenceText('LAST NAME\nTAN\nFIRST NAME\nLEA\nMIDDLE NAME\nGO\nAddress\n1 X ST'));
+    expect(name(f)).toEqual(['LEA', 'GO', 'TAN']);
+    expect(f.address).toBeUndefined();
+  });
+
+  it('postal ID: one First M. Last line and its address', () => {
+    const f = parseIdText('postal', licenceText('NAME\nJUAN C. DELA-CRUZ\nADDRESS\n12 LUNA ST, PASIG CITY\nPRN 100141234567P'));
+    expect(name(f)).toEqual(['JUAN', 'C.', 'DELA-CRUZ']);
+    expect(f.address?.value).toBe('12 LUNA ST, PASIG CITY');
+  });
+
+  it('TIN ID: a LAST, FIRST MIDDLE name line and its address', () => {
+    const f = parseIdText('tin_id', licenceText('TIN 123-456-789-000\nNAME\nSANTOS, MARK ANTHONY REYES\nADDRESS\nBRGY BAGUMBAYAN, PILILLA, RIZAL\nDATE OF BIRTH'));
+    expect(name(f)).toEqual(['MARK ANTHONY', 'REYES', 'SANTOS']);
+    expect(f.address?.value).toBe('BRGY BAGUMBAYAN, PILILLA, RIZAL');
   });
 });

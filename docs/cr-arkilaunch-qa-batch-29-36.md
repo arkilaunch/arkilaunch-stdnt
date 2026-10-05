@@ -105,3 +105,27 @@
   - **match** → no flag.
   - The flags read in plain words in the approval drawer (`REVIEW_FLAGS`). RFC-2 is unchanged: reconciliation never deducts, approval does.
 - The QR format moved to shared (`edtrSheetQrPayload`, `parseEdtrSheetQr`), so the printed and the read payloads cannot drift.
+
+## 7. Names and addresses read per PH ID format (QA 36)
+
+**Before:** only the LTO driver's license had a label-aware reader (`parseIdText`). Every other ID relied on the generic `FirstName`/`LastName`/`Address` query fields, which mixed up name order on some cards and often missed the address.
+
+**After:** `parseIdText` uses a per-type layout table, based on current card samples:
+
+| ID | Name | Address |
+|---|---|---|
+| PhilSys / ePhilID | split: Apelyido/Last Name, Mga Pangalan/Given Names, Gitnang Apelyido/Middle Name | Tirahan/Address |
+| Driver's license (LTO) | combined "LAST, FIRST MIDDLE" (unchanged) | Address |
+| UMID | split: Surname, Given Name, Middle Name | Address |
+| Voter's ID | split: Surname, First Name, Middle Name | Address |
+| PRC | split: Last Name, First Name, Middle Name | none on the card |
+| Passport | split labels, then the **MRZ** (`P<PHLSURNAME<<GIVEN<NAMES`) overrides | none on the card |
+| Postal ID | "Name" line: First M. Last (a lone initial is the middle name) | Address |
+| TIN ID | "Name" line: LAST, FIRST MIDDLE | Address |
+| SSS | unlabelled; left to the query fields | none on the card |
+
+- A label's value is the rest of its own line ("Address: …") or the next line that is not a label.
+- An address joins up to four lines and stops at any other label (date of birth, sex, precinct, CRN/PRN/TIN, validity, signature …).
+- Anything a layout can't find falls back to the query-field value, as before.
+- Company documents are unchanged: the BIR COR 2303 already reads `registered_address`, and the SEC certificate rightly has none.
+- The read remains a typing aid: staff still confirm every field under RFC-2, and confidence comes from the words' own spans.
