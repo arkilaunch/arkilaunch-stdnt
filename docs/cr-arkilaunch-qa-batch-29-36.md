@@ -22,3 +22,20 @@
   - After dispatch they show the saved `eta_at`, as before.
   - The map label reads "~35 km · 1 h 10 min–1 h 28 min truck drive (estimate)".
 - **Calibration.** The factors live in `TRUCK_TIME`. They are an estimate: the admin still confirms the km a customer is charged on.
+
+## 2. Office mark-as-paid, then deploy (QA 34)
+
+**Before:** cash could be recorded only on the Payments page, on an invoice the customer had already issued by choosing "pay cash" in the app. A walk-in who paid at the counter left staff with nothing to click in the booking or trip drawer.
+
+**After:**
+- **`POST /bookings/:id/mark-paid`** and **`POST /truck-requests/:id/mark-paid`** (`quote:approve`, body `{ receiptNo?: string ≤ 40 }`).
+  - `PaymentsService.markPaidAtOffice` runs the same checkout as the customer with an `office` flag, then the existing `recordCash`.
+  - The office flag skips the phone-call gate, because the customer is present. For trucks it also skips the in-app price accept, because paying the agreed price in person is the acceptance.
+  - Everything else is unchanged: a verified company, an accepted quote for rentals, an agreed price for trucks, the stored invoice amount, and `already_paid`.
+  - Settling reuses `settleInvoice`: rental → `confirmed`, truck → `paid`, the customer is notified and the tier is recomputed.
+  - An audit row reads "paid at the office; price accepted in person; OR …".
+- **OR number.** `payments.receipt_no` (migration `0084`, nullable, 1–40 chars). It is set by mark-paid and by the Payments page's "Record cash payment". It is returned as `receiptNo` on the invoice detail and printed on the invoice as "Official receipt".
+- **Drawer:**
+  - A booking that is not yet paid shows a Payment card with **Mark as paid (office)**.
+  - A truck in `agreed` shows the same button.
+  - Once paid, the next step is right there: **Deploy now** (the existing deliver step, renamed from "Mark delivered") or **Dispatch now** (renamed from "Dispatch truck").

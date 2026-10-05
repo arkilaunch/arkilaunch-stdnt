@@ -87,6 +87,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
           ['Type', formatInvoiceType(invoice.invoiceType)],
           ['Due', formatDate(invoice.dueDate)],
           ['Status', formatStatus(invoice.status)],
+          ...(invoice.receiptNo ? ([['Official receipt', invoice.receiptNo]] as [string, string][]) : []),
           ['Amount due', formatPeso(invoice.status === 'paid' ? 0 : invoice.amount)],
         ]}
       />

@@ -13,6 +13,7 @@ import { ConfirmDialog } from './confirm-dialog.js';
 import { SiteProofAdmin } from './site-proof.js';
 import { SiteEquipmentWeather } from './equipment-weather.js';
 import { EdtrSheetCard } from './edtr-sheet-card.js';
+import { OfficePaymentButton } from './office-payment.js';
 import { useToast } from './toast.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
@@ -199,6 +200,29 @@ function HoldCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
+const PAID_OR_CLOSED = ['confirmed', 'active', 'completed', 'cancelled'];
+
+function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
+  const queryClient = useQueryClient();
+  if (PAID_OR_CLOSED.includes(booking.status)) return null;
+  return (
+    <Container header={{ title: 'Payment' }}>
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-text-muted">Paid at the office? Record it here, then deploy.</p>
+        <OfficePaymentButton
+          path={`/bookings/${booking.id}/mark-paid`}
+          what="booking"
+          next="Deploy the machines once they are on site."
+          onPaid={() => {
+            void queryClient.invalidateQueries({ queryKey: bookingsQueries.detail(booking.id).queryKey });
+            void queryClient.invalidateQueries({ queryKey: ['bookings'] });
+          }}
+        />
+      </div>
+    </Container>
+  );
+}
+
 function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -208,7 +232,7 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
       setAsking(false);
       void queryClient.invalidateQueries({ queryKey: bookingsQueries.detail(booking.id).queryKey });
       void queryClient.invalidateQueries({ queryKey: ['bookings'] });
-      toast.success(step === 'deliver' ? 'Marked delivered' : 'Marked returned');
+      toast.success(step === 'deliver' ? 'Deployed' : 'Marked returned');
     },
     onError: (e) => {
       setAsking(false);
@@ -219,23 +243,23 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
   const deliver = booking.status === 'confirmed';
   return (
-    <Container header={{ title: 'Delivery' }}>
+    <Container header={{ title: deliver ? 'Deploy' : 'Delivery' }}>
       <div className="flex flex-col gap-3">
       <p className="text-sm text-text-muted">
-        {deliver ? 'Paid. Mark delivered once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
+        {deliver ? 'Paid. Deploy once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
       </p>
       <Button variant="primary" onClick={() => setAsking(true)}>
-        {deliver ? 'Mark delivered' : 'Mark returned'}
+        {deliver ? 'Deploy now' : 'Mark returned'}
       </Button>
       <ConfirmDialog
         open={asking}
-        title={deliver ? 'Mark this booking delivered?' : 'Mark this booking returned?'}
+        title={deliver ? 'Deploy this booking?' : 'Mark this booking returned?'}
         body={
           deliver
             ? 'Only once every machine is on site: this starts the rental on site and opens the field sheet.'
             : 'Only once every machine is back: this closes the booking.'
         }
-        confirmLabel={deliver ? 'Mark delivered' : 'Mark returned'}
+        confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
         onConfirm={() => move.mutate(deliver ? 'deliver' : 'return')}
         onCancel={() => setAsking(false)}
@@ -268,6 +292,7 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
     <div className="flex min-w-0 flex-col gap-4">
       <CallCard booking={booking} />
       <HoldCard booking={booking} />
+      <OfficePaymentCard booking={booking} />
       <Container header={{ title: 'Quote' }}>
         <div className="flex flex-col gap-3">
         {quote ? (

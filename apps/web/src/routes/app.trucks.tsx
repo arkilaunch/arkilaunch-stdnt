@@ -20,6 +20,7 @@ import { Select } from '../components/select.js';
 import { SearchField } from '../components/search-field.js';
 import { Alert } from '../components/alert.js';
 import { MessengerLinks, phoneHref } from '../components/messenger-links.js';
+import { OfficePaymentButton } from '../components/office-payment.js';
 
 export const settingsQuery = {
   queryKey: ['truck-settings'] as const,
@@ -783,10 +784,15 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {r.status === 'agreed' && <section className={section}>
+        <h3 className={heading}>Payment</h3>
+        <p className="text-sm text-text-muted">Paid at the office? Record it here, then dispatch.</p>
+        <OfficePaymentButton path={`/truck-requests/${r.id}/mark-paid`} what="trip" next="Dispatch the truck when it leaves." onPaid={refresh} />
+      </section>}
       {r.status === 'paid' && <section className={section}>
         <h3 className={heading}>Dispatch</h3>
         <p className="text-sm text-text-muted">The customer will see an arrival estimate based on the saved drive time and route ban rules.</p>
-        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate()}>Dispatch truck</Button>
+        <Button loading={dispatch.isPending} onClick={() => dispatch.mutate()}>Dispatch now</Button>
       </section>}
       {r.etaAt && <p className="text-sm font-semibold text-text">Dispatched. Est. arrival {formatDateTime(r.etaAt)}.</p>}
       <section className={section}>
