@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderRoute } from '../test/render-route.js';
 import { makeToken, makeValidClaims } from '../test/make-token.js';
 import { setAccessToken } from '../lib/auth-client.js';
@@ -252,6 +253,26 @@ describe('customer cost breakdown', () => {
     expect(screen.getByText('Quoted rental total').parentElement).toHaveTextContent('30,000');
     expect(within(lines).getAllByText('Quoted line total')[0]).toBeDefined();
     expect(screen.getByText('5 rental days')).toBeVisible();
+  });
+  it('itemises the all-in hourly rate into rent, operator, maintenance and fuel', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    const b = booking({ quotation: accepted });
+    const quote = {
+      ...accepted, lineItems: [
+        { kind: 'equipment', equipmentTypeId: 'excavator', equipmentTypeName: 'Excavator', quantity: 2, estimatedHours: 8,
+          rentParts: [{ rateType: 'hourly', ratePhp: 1200, count: 8 }], rent: 9600, hourlyRate: 1200, operatingCost: 19200, buffer: 0, subtotal: 19200,
+          rateBreakdown: { allIn: 1200, rent: 280, operator: 150, maintenance: 50, fuel: 720, dieselPhp: 60 } },
+      ], mobilization: 0, demobilization: 0, subtotal: 19200, discount: 0, total: 19200,
+    };
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+      String(url).includes('/quotes/') ? quote : String(url).includes('/bookings/') ? b : []
+    ), { status: 200 }))));
+    await renderRoute('/account/bookings/' + b.id);
+    await userEvent.click(await screen.findByText('Price breakdown per hour'));
+    for (const [label, value] of [['Rent', '280'], ['Operator', '150'], ['Maintenance', '50'], ['Fuel', '720'], ['Total', '1,200']]) {
+      expect(screen.getByText(new RegExp(`^${label}`)).parentElement).toHaveTextContent(value!);
+    }
+    expect(screen.getByText(/× 8 hours × 2 units/)).toBeVisible();
   });
   it.each([null, { ...accepted, totalPhp: null }])('shows a preparing message when the quote has no price: %j', async (quotation) => {
     setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));

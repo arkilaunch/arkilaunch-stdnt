@@ -30,6 +30,35 @@ export const PricingParametersInputSchema = z.object({
 });
 export type PricingParametersInput = z.infer<typeof PricingParametersInputSchema>;
 
+export const EquipmentTypeCostsInputSchema = z.object({
+  equipmentTypeId: z.string().uuid(),
+  operatorHourlyPhp: z.number().finite().min(0).max(99_999_999.99),
+  maintenanceHourlyPhp: z.number().finite().min(0).max(99_999_999.99),
+  fuelLPerHour: z.number().finite().min(0).max(99_999.999),
+});
+export type EquipmentTypeCostsInput = z.infer<typeof EquipmentTypeCostsInputSchema>;
+
+export interface RateBreakdown {
+  allIn: number;
+  rent: number;
+  operator: number;
+  maintenance: number;
+  fuel: number;
+  dieselPhp: number;
+}
+
+// The card is the all-in ₱/hr; rent is what's left after the fixed costs. null = costs exceed the rate.
+export function rateBreakdown(
+  allIn: number,
+  costs: { operatorHourlyPhp: number; maintenanceHourlyPhp: number; fuelLPerHour: number },
+  dieselPhp: number,
+): RateBreakdown | null {
+  const fuel = round2HalfUp(costs.fuelLPerHour * dieselPhp);
+  const rent = round2HalfUp(allIn - costs.operatorHourlyPhp - costs.maintenanceHourlyPhp - fuel);
+  if (rent < 0) return null;
+  return { allIn, rent, operator: costs.operatorHourlyPhp, maintenance: costs.maintenanceHourlyPhp, fuel, dieselPhp };
+}
+
 // Heavy-equipment cards are hourly only; the DB CHECK (0071) backstops this.
 export const RateTypeSchema = z.literal('hourly');
 export type RateType = z.infer<typeof RateTypeSchema>;

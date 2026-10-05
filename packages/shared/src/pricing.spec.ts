@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RateCardCreateRequestSchema, RateCardListQuerySchema } from './pricing.js';
+import { RateCardCreateRequestSchema, RateCardListQuerySchema, rateBreakdown } from './pricing.js';
 import { rentFor } from './quotes.js';
 
 describe('RateCardListQuerySchema', () => {
@@ -7,6 +7,22 @@ describe('RateCardListQuerySchema', () => {
     expect(RateCardListQuerySchema.parse({ includeSuperseded: 'false' }).includeSuperseded).toBe(false);
     expect(RateCardListQuerySchema.parse({ includeSuperseded: 'true' }).includeSuperseded).toBe(true);
     expect(RateCardListQuerySchema.parse({}).includeSuperseded).toBe(false);
+  });
+});
+
+describe('rateBreakdown', () => {
+  const costs = { operatorHourlyPhp: 150, maintenanceHourlyPhp: 50, fuelLPerHour: 12 };
+  it('splits the all-in rate so the parts sum back to it', () => {
+    const b = rateBreakdown(1200, costs, 60)!;
+    expect(b).toMatchObject({ fuel: 720, rent: 280 });
+    expect(b.rent + b.operator + b.maintenance + b.fuel).toBe(1200);
+  });
+  it('moves only fuel and rent when diesel changes', () => {
+    const b = rateBreakdown(1200, costs, 65)!;
+    expect(b).toMatchObject({ allIn: 1200, operator: 150, maintenance: 50, fuel: 780, rent: 220 });
+  });
+  it('refuses costs above the rate', () => {
+    expect(rateBreakdown(1200, costs, 90)).toBeNull();
   });
 });
 

@@ -106,9 +106,9 @@ describe('Quotes', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Edit operating costs' }));
     const dialog = await screen.findByRole('dialog', { name: 'Operating costs' });
-    const operator = within(dialog).getByLabelText('Operator (PHP per hour)');
-    await userEvent.clear(operator);
-    await userEvent.type(operator, '600');
+    const transport = within(dialog).getByLabelText('Transport (PHP per km)');
+    await userEvent.clear(transport);
+    await userEvent.type(transport, '90');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save operating costs' }));
 
     const fetchMock = vi.mocked(fetch);
@@ -116,7 +116,7 @@ describe('Quotes', () => {
       expect(fetchMock.mock.calls.some(([u, init]) => String(u).endsWith('/pricing/parameters') && init?.method === 'POST')).toBe(true),
     );
     const [, init] = fetchMock.mock.calls.find(([u, i]) => String(u).endsWith('/pricing/parameters') && i?.method === 'POST')!;
-    expect(JSON.parse(String(init!.body))).toMatchObject({ operatorHourlyPhp: 600, dieselOverridePhp: 55, dieselOverrideDate: '2026-03-01' });
+    expect(JSON.parse(String(init!.body))).toMatchObject({ transportPhpPerKm: 90, operatorHourlyPhp: 500, dieselOverridePhp: 55, dieselOverrideDate: '2026-03-01' });
   });
 
   it('revises a booking in negotiation: preview over the form, draft from its footer', async () => {

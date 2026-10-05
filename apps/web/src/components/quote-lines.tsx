@@ -1,6 +1,7 @@
 import type { RentPart } from '@arkilaunch/shared';
 import type { QuoteDetail, QuoteLine } from '../lib/queries.js';
 import { formatPeso } from '../lib/format.js';
+import { PriceBreakdown } from './truck-trip.js';
 
 const UNIT: Record<string, [string, string, string]> = {
   hourly: ['hr', 'hour', 'hours'],
@@ -28,6 +29,7 @@ function lineName(line: QuoteLine, typeName?: (id: string) => string): string {
 
 function lineDetail(line: QuoteLine, detailed = false): string {
   if (line.kind === 'custom') return `${formatPeso(line.subtotal / line.quantity)} each`;
+  if (line.rateBreakdown) return `${formatPeso(line.rateBreakdown.allIn)}/hr all-in × ${count(line.estimatedHours)} hours`;
   // Quotes from before per-unit pricing carry no rent breakdown.
   if (line.rentParts.length === 0) return `${line.estimatedHours} h at ${formatPeso(line.hourlyRate)}/h`;
   const extras = line.operatingCost - line.rent * (detailed ? line.quantity : 1) + line.buffer;
@@ -43,22 +45,45 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
   );
 }
 
+// Same look as the trucking breakdown; the summary says "per hour", so Total reads as the all-in rate.
+function RateBreakdownList({ line }: { line: QuoteLine }) {
+  const b = line.rateBreakdown!;
+  const lines = [
+    { label: 'Rent', amountPhp: b.rent },
+    { label: 'Operator', amountPhp: b.operator },
+    { label: 'Maintenance', amountPhp: b.maintenance },
+    { label: `Fuel (${formatPeso(b.dieselPhp)}/L diesel)`, amountPhp: b.fuel },
+  ];
+  return (
+    <details className="mt-2 max-w-sm text-sm">
+      <summary className="cursor-pointer text-text-muted">Price breakdown per hour</summary>
+      <div className="mt-2">
+        <PriceBreakdown price={{ km: 0, lines, totalPhp: b.allIn }} />
+        <p className="mt-1 text-xs text-text-muted">
+          × {count(line.estimatedHours)} {line.estimatedHours === 1 ? 'hour' : 'hours'} × {line.quantity} {line.quantity === 1 ? 'unit' : 'units'}
+        </p>
+      </div>
+    </details>
+  );
+}
+
 export function QuoteLines({ quote, typeName, detailed = false }: { quote: QuoteDetail; typeName?: (id: string) => string; detailed?: boolean }) {
   return (
     <div className="flex flex-col gap-3">
       <ul aria-label="Quote line items" className="flex flex-col gap-2 border-b border-border pb-3">
         {quote.lineItems.map((line, i) => (
           <li key={i} className={`flex items-start justify-between gap-3 text-sm ${detailed ? 'flex-wrap rounded-md bg-surface-sunk p-4' : ''}`}>
-            <span className="text-text">
+            <div className="min-w-0 flex-1 text-text">
               {line.quantity} &times; {lineName(line, typeName)}
               <span className={`block text-text-muted ${detailed ? 'mt-2 text-sm' : 'text-xs'}`}>{detailed && line.kind === 'equipment' ? 'Pricing basis: ' : ''}{lineDetail(line, detailed)}</span>
+              {line.kind === 'equipment' && line.rateBreakdown && <RateBreakdownList line={line} />}
               {detailed && line.kind === 'equipment' && (
                 <span className="mt-1 block text-sm text-text-muted">{count(line.estimatedHours)} quoted billable hours per unit</span>
               )}
               {detailed && line.quantity > 1 && (
                 <span className="mt-1 block text-sm text-text-muted">{formatPeso(line.subtotal / line.quantity)} average per unit before booking-level fees and discount</span>
               )}
-            </span>
+            </div>
             <span className={`font-mono text-text ${detailed ? 'text-base font-semibold' : ''}`}>
               {detailed && <span className="mb-1 block font-sans text-sm font-normal text-text-muted">Quoted line total</span>}
               {formatPeso(line.subtotal)}

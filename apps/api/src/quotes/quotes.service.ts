@@ -17,7 +17,7 @@ import {
   rentals,
   withTenantTx,
 } from '@arkilaunch/db';
-import { bookingDays, quoteExpiresAt, type QuoteRequest, type RentPart, type RequestContext } from '@arkilaunch/shared';
+import { bookingDays, quoteExpiresAt, type QuoteRequest, type RateBreakdown, type RentPart, type RequestContext } from '@arkilaunch/shared';
 import { ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
 import { holdDeadline } from '../common/booking-hold.js';
@@ -44,6 +44,8 @@ export interface QuoteResponse {
     // e.g. [{ daily, 8000, 12 }] = 8,000/day x 12 days.
     rentParts: RentPart[];
     rent: number;
+    // All-in ₱/hr split into rent + operator + maintenance + fuel; absent on pre-3.0 quotes.
+    rateBreakdown?: RateBreakdown;
     hourlyRate: number;
     operatingCost: number;
     mobilizationCost: number;
@@ -92,6 +94,7 @@ function toLineItems(priced: PricedQuote): QuoteResponse['lineItems'] {
     estimatedHours: item.estimatedHours,
     rentParts: item.rentParts,
     rent: item.rentPhp,
+    ...(item.pricingInputs.rate_breakdown ? { rateBreakdown: item.pricingInputs.rate_breakdown as RateBreakdown } : {}),
     hourlyRate: item.hourlyRatePhp,
     operatingCost: item.operatingCostPhp,
     mobilizationCost: item.mobilizationCostPhp,
@@ -391,7 +394,7 @@ export class QuotesService {
         priceStale: quotation.priceStale === 'true',
         currency: 'PHP',
         lineItems: items.map(({ item, typeName }) => {
-          const inputs = item.pricingInputs as { rent_php?: number; rent_parts?: RentPart[] };
+          const inputs = item.pricingInputs as { rent_php?: number; rent_parts?: RentPart[]; rate_breakdown?: RateBreakdown };
           return {
             kind: item.kind === 'custom' ? ('custom' as const) : ('equipment' as const),
             ...(item.description ? { description: item.description } : {}),
@@ -403,6 +406,7 @@ export class QuotesService {
             // Pre-2.0 quotes carry no rent breakdown.
             rentParts: inputs.rent_parts ?? [],
             rent: inputs.rent_php ?? Number(item.operatingCostPhp),
+            ...(inputs.rate_breakdown ? { rateBreakdown: inputs.rate_breakdown } : {}),
             hourlyRate: Number(item.hourlyRatePhp),
             operatingCost: Number(item.operatingCostPhp),
             mobilizationCost: Number(item.mobilizationCostPhp),

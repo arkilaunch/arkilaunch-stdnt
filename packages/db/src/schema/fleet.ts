@@ -70,6 +70,28 @@ export const rateCards = pgTable(
   ],
 );
 
+// Fixed per-hour costs inside a type's all-in rate card price; rent is the remainder (0079).
+export const equipmentTypeCosts = pgTable(
+  'equipment_type_costs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    equipmentTypeId: uuid('equipment_type_id')
+      .notNull()
+      .references(() => equipmentTypes.id),
+    operatorHourlyPhp: numeric('operator_hourly_php', { precision: 10, scale: 2 }).notNull().default('0'),
+    maintenanceHourlyPhp: numeric('maintenance_hourly_php', { precision: 10, scale: 2 }).notNull().default('0'),
+    fuelLPerHour: numeric('fuel_l_per_hour', { precision: 8, scale: 3 }).notNull().default('0'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [tenantIsolationPolicy(),
+    unique('equipment_type_costs_tenant_type_uq').on(table.tenantId, table.equipmentTypeId),
+    index('equipment_type_costs_tenant_id_idx').on(table.tenantId),
+  ],
+);
+
 export const maintenanceSchedules = pgTable(
   'maintenance_schedules',
   {
