@@ -39,3 +39,15 @@
   - A booking that is not yet paid shows a Payment card with **Mark as paid (office)**.
   - A truck in `agreed` shows the same button.
   - Once paid, the next step is right there: **Deploy now** (the existing deliver step, renamed from "Mark delivered") or **Dispatch now** (renamed from "Dispatch truck").
+
+## 3. Blank eDTR template in Field logs (QA 33)
+
+**Before:** the blank (hand-fill) sheet could only be downloaded by an admin or owner, from the eDTR card inside a booking's actions.
+
+**After:**
+- `BlankEdtrDownload` (PDF / PNG, the company's paper size, letterhead logo and TIN) appears in three places:
+  - the **Field logs** page header (`/app/ocr`)
+  - the **timekeeper dashboard** (`/field`)
+  - the booking eDTR card
+- The blank sheet carries no booking, customer, QR or dates, so timekeepers may print it as well, for sampling, training or a hand-filled fallback.
+- A scan of a blank sheet has no QR, so §4 flags it for staff to identify before billing.

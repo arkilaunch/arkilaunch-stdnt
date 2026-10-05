@@ -7,6 +7,7 @@ import { useScanDeployments } from '../lib/use-scan-deployments.js';
 import { Button } from '../components/button.js';
 import { CaptureModal } from '../components/capture-modal.js';
 import { EmptyState } from '../components/empty-state.js';
+import { BlankEdtrDownload } from '../components/blank-edtr-download.js';
 import { pluralize } from '../lib/format.js';
 
 function OperatorDashboardPage() {
@@ -50,6 +51,7 @@ function OperatorDashboardPage() {
           >
             Scan a DTR
           </Link>
+          <BlankEdtrDownload />
           <Link
             to="/field/deployment"
             className="min-h-12 rounded-sm border border-border bg-surface px-4 py-3 text-sm font-medium text-text"

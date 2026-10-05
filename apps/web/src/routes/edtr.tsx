@@ -14,6 +14,7 @@ import { Surface } from '../components/surface.js';
 import { Modal } from '../components/modal.js';
 import { CaptureModal } from '../components/capture-modal.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
+import { BlankEdtrDownload } from '../components/blank-edtr-download.js';
 import { PageHeader } from '../components/page-header.js';
 import { StatusPill, type StatusTone } from '../components/status-pill.js';
 import { StatusBadge } from '../components/status-badge.js';
@@ -207,7 +208,8 @@ function EdtrPage() {
         title="Field logs"
         description="Each day's hours, recorded twice and matched before anything is billed."
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <BlankEdtrDownload />
             <Button variant="secondary" onClick={() => void navigate({ to: '/app/ocr/deployments' })}>
               Scan a DTR
             </Button>

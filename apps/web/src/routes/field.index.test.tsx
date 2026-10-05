@@ -40,6 +40,13 @@ afterEach(() => {
 });
 
 describe('Field dashboard: EDTR capture entry point', () => {
+  it('offers the blank eDTR template for download', async () => {
+    stubFetch();
+    await renderRoute('/field');
+    const group = await screen.findByRole('group', { name: 'Blank eDTR template' });
+    expect(group).toHaveTextContent('PDF');
+  });
+
   it('lets a timekeeper open the capture modal without visiting the staff console', async () => {
     stubFetch();
     await renderRoute('/field');
