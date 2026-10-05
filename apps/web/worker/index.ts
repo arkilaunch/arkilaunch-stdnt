@@ -1,5 +1,5 @@
 import type { CatalogEquipment, CatalogTenant } from '@arkilaunch/shared';
-import { brandVars, headTags, isIndexable, pageTitle, robotsFor, sitemapXml, type PageDetail } from '../src/lib/brand.js';
+import { brandVars, headTags, isIndexable, pageTitle, robotsFor, sitemapXml, webManifest, type PageDetail } from '../src/lib/brand.js';
 import { PLATFORM_TITLE, platformHeadTags } from '../src/lib/platform-brand.js';
 
 // Writes the tenant's own head tags into the shared SPA shell; any failure serves the untouched shell.
@@ -72,6 +72,10 @@ async function tenantPage(request: Request, env: Env, ctx: ExecutionContext, slu
     .on('title', { element: (e) => void e.setInnerContent(pageTitle(url.pathname, tenant.name, detail?.title) ?? tenant.name) })
     .on('head', { element: (e) => void e.append(headTags(tenant, url, detail), { html: true }) });
   if (style) rewriter = rewriter.on('html', { element: (e) => void e.setAttribute('style', style) });
+  // The shell's platform theme color and touch icon come first in the head, so they would win: drop the ones the
+  // tenant replaces (the appended tenant tags are not matched by these selectors).
+  if (tenant.headerColor ?? tenant.primaryColor) rewriter = rewriter.on('meta[name="theme-color"]', { element: (e) => void e.remove() });
+  if (tenant.iconUrl ?? tenant.logoUrl) rewriter = rewriter.on('link[rel="apple-touch-icon"]', { element: (e) => void e.remove() });
   if (isIndexable(url.pathname)) {
     rewriter = rewriter.on('meta[name="robots"]', { element: (e) => void e.setAttribute('content', 'index, follow') });
   }
@@ -107,6 +111,14 @@ export default {
       if (!(await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant'))) return env.ASSETS.fetch(request);
       return new Response(sitemapXml(url.origin, list?.items.map((i) => i.id) ?? []), {
         headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+      });
+    }
+    // The tenant's installable app: its name and colors on the home screen; the static platform manifest otherwise.
+    if (url.pathname === '/manifest.webmanifest') {
+      const tenant = await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant');
+      if (!tenant) return env.ASSETS.fetch(request);
+      return new Response(JSON.stringify(webManifest(tenant)), {
+        headers: { 'Content-Type': 'application/manifest+json', 'Cache-Control': `max-age=${CACHE_SECONDS}` },
       });
     }
     if (url.pathname === '/favicon.ico') {

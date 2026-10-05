@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CatalogTenant } from '@arkilaunch/shared';
-import { brandVars, headTags, isIndexable, onPrimaryFor, pageTitle, robotsFor, sitemapXml } from './brand.js';
+import { brandVars, headTags, isIndexable, onPrimaryFor, pageTitle, robotsFor, sitemapXml, webManifest } from './brand.js';
 
 describe('onPrimaryFor', () => {
   it('picks the higher-contrast text color', () => {
@@ -120,5 +120,19 @@ describe('robots and sitemap', () => {
     expect(xml).toContain('<loc>https://almara.arkilaunch.app/</loc>');
     expect(xml).toContain('<loc>https://almara.arkilaunch.app/equipment/e1</loc>');
     expect(xml).not.toContain('/app');
+  });
+});
+describe('webManifest', () => {
+  it('is the ArkiLaunch app on the platform host', () => {
+    const m = webManifest(null);
+    expect(m).toMatchObject({ name: 'ArkiLaunch', display: 'standalone', start_url: '/', theme_color: '#10151B' });
+    expect(m.icons.map((i) => i.sizes)).toEqual(['192x192', '512x512', '512x512']);
+  });
+
+  it("installs as the tenant's app: its name, header color and square icon first", () => {
+    const m = webManifest({ name: 'Almara Equipment Rentals', iconUrl: 'https://cdn/almara-icon.png', headerColor: '#123456', primaryColor: '#F2A100' });
+    expect(m).toMatchObject({ name: 'Almara Equipment Rentals', short_name: 'Almara', theme_color: '#123456' });
+    expect(m.icons[0]).toEqual({ src: 'https://cdn/almara-icon.png', sizes: 'any', purpose: 'any' });
+    expect(m.icons).toHaveLength(4); // the platform PNGs stay so the browser can always install
   });
 });

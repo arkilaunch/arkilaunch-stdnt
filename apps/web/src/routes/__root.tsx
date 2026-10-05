@@ -6,6 +6,7 @@ import { pageTitle } from '../lib/brand.js';
 import { currentHost, platformOrigin } from '../lib/host.js';
 import { applyTenantBrand, tenantQuery } from '../lib/tenant.js';
 import { PLATFORM_TITLE, platformHeadTags } from '../lib/platform-brand.js';
+import { InstallPrompt } from '../components/install-prompt.js';
 
 function TenantNotFound() {
   return (
@@ -54,7 +55,12 @@ function RootLayout() {
   }, [tenant.data]);
 
   if (tenant.error instanceof ApiError && tenant.error.status === 404) return <TenantNotFound />;
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <InstallPrompt appName={tenant.data?.name ?? 'ArkiLaunch'} iconUrl={tenant.data?.iconUrl ?? tenant.data?.logoUrl ?? null} />
+    </>
+  );
 }
 
 export const rootRoute = createRootRoute({ component: RootLayout });

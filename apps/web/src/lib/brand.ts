@@ -129,3 +129,24 @@ export function sitemapXml(origin: string, equipmentIds: string[]): string {
   const urls = paths.map((p) => `  <url><loc>${attr(`${origin}${p}`)}</loc></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
 }
+// QA 30: the installed (Add to home screen) app. The platform icons always ship so the browser can install; a tenant's
+// square icon leads when it has one. Name and color follow the tenant, so the home screen reads as that yard's app.
+export const PLATFORM_ICONS = [
+  { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+  { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+  { src: '/icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+];
+
+export function webManifest(t: Pick<CatalogTenant, 'name' | 'iconUrl' | 'headerColor' | 'primaryColor'> | null) {
+  const name = t?.name ?? 'ArkiLaunch';
+  return {
+    name,
+    short_name: name.length > 12 ? name.split(/\s+/)[0]!.slice(0, 12) : name,
+    start_url: '/',
+    scope: '/',
+    display: 'standalone',
+    background_color: '#F5F2EB',
+    theme_color: t?.headerColor ?? t?.primaryColor ?? '#10151B',
+    icons: [...(t?.iconUrl ? [{ src: t.iconUrl, sizes: 'any', purpose: 'any' }] : []), ...PLATFORM_ICONS],
+  };
+}

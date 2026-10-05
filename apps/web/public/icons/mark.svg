@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- BRAND.md §2: the bezelled amber "A" lamp (gauge needle / dispatch chevron) on steel black. -->
+  <rect width="512" height="512" rx="96" fill="#10151B"/>
+  <rect x="56" y="56" width="400" height="400" rx="64" fill="none" stroke="#3A444F" stroke-width="16"/>
+  <path d="M256 120 L376 392 H316 L256 248 L196 392 H136 Z" fill="#F2A100"/>
+  <rect x="206" y="318" width="100" height="36" fill="#F2A100"/>
+</svg>

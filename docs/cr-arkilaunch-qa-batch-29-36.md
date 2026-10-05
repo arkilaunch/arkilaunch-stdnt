@@ -63,3 +63,19 @@
   - A **Blocked dates** filter: Any / Blocked now or later / Blocked in the next 7 days / Blocked between dates (two date fields).
   - Every blocked unit shows a chip such as "Blocked Mar 10 – Mar 12" or "Blocked until Mar 12", with the window's note as its tooltip.
   - For staff who manage the fleet, the chip opens the unit's modal on its Blocked dates tab.
+
+## 5. Installable web app with "Add to home screen" (QA 30)
+
+**Before:** no web manifest and no app icons. The push service worker was registered only when someone turned on weather alerts, so the browser never offered to install the app.
+
+**After:**
+- **Manifest.**
+  - `public/manifest.webmanifest`: ArkiLaunch, `standalone`, steel-black theme, paper background, with 192/512 and maskable 512 PNG icons in `public/icons/`. The icons are drawn from BRAND.md §2's amber "A" lamp, with `mark.svg` as the source.
+  - On a tenant host the Cloudflare worker serves `/manifest.webmanifest` from `webManifest(tenant)` (`src/lib/brand.ts`). The home screen shows the tenant's name (short name = its first word, up to 12 characters) and its header or primary color. The tenant's square icon is listed first, with the platform PNGs kept so the browser can always install. The response is cached like the other tenant reads.
+- **Head.** `index.html` links the manifest, theme color, apple-touch icon and the standalone metas. On a tenant host the worker drops the platform theme color and touch icon when the tenant supplies its own, so the tenant's are the ones the browser reads.
+- **Service worker.** `sw.js` is registered on every load (`main.tsx`). It still has no fetch handler, so nothing is cached or served stale. Current Chrome needs only the manifest and a registered worker to install.
+- **Prompt.** `InstallPrompt` is mounted at the root on every surface (customer, staff, field).
+  - It shows only on a phone (narrow or coarse pointer) and never when the app is already running standalone.
+  - Android/Chrome: "Add {tenant} to your home screen" opens the browser's install sheet (`beforeinstallprompt`).
+  - iOS Safari, which has no install API: "Tap Share, then Add to Home Screen".
+  - "Not now" is remembered per browser in `localStorage`, guarded so private mode only means it returns next visit.

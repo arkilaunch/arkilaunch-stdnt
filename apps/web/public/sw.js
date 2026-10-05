@@ -1,4 +1,5 @@
-// Web Push service worker (docs/cr-arkilaunch-weather-monitoring.md).
+// Web Push service worker (docs/cr-arkilaunch-weather-monitoring.md). Registered on every load, it also
+// makes the app installable (QA 30); no fetch handler, so it never caches or serves stale code.
 // W3C Push API only: the server signs with its own VAPID keys; no
 // Firebase or other third-party SDK. It shows the weather notice and opens
 // its page when tapped.
