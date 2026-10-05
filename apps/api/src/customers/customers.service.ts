@@ -38,6 +38,7 @@ import {
   normalizeTin,
   parseCertificateDate,
   parseRegistrationCertificate,
+  parseIdText,
   REGISTRY_DOCUMENT_TYPES,
   SEC_REGEX,
   TIN_REGEX,
@@ -190,7 +191,11 @@ type CertificateLayout = 'sec_coi' | 'bir_2303' | 'unrecognized';
 function readCertificate(
   documentType: string,
   result: DocumentExtractionResult,
+  idType: PhIdTypeCode,
 ): { fields: DocumentExtractionResult['fields']; layout: CertificateLayout | null } {
+  if (documentType === 'government_id' && result.text) {
+    return { fields: { ...result.fields, ...parseIdText(idType, result.text) }, layout: null };
+  }
   if (!result.text || (documentType !== 'sec_certificate' && documentType !== 'bir_cor')) {
     return { fields: result.fields, layout: null };
   }
@@ -275,7 +280,7 @@ export class CustomersService {
       });
       return { suggestions, confidence: null, extractionAvailable: false, layoutRecognized: null };
     }
-    const { fields, layout } = readCertificate(documentType, result);
+    const { fields, layout } = readCertificate(documentType, result, idType);
     const confidences: number[] = [];
     for (const field of SCAN_FIELDS[documentType] ?? []) {
       const read = fields[READ_FIELDS[field]];
@@ -434,7 +439,7 @@ export class CustomersService {
       };
     }
 
-    const { fields, layout } = readCertificate(documentType, result);
+    const { fields, layout } = readCertificate(documentType, result, idType);
     const ocrPayload: Record<string, unknown> = layout ? { layout } : {};
     const confidences: number[] = [];
     for (const [field, key] of Object.entries(READ_FIELDS) as [ReadField, string][]) {

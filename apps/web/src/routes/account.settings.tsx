@@ -104,6 +104,12 @@ function ProfileTab({ me }: { me: UserSelfResponse }) {
       </Section>
 
       <Section title="Personal information">
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <div><dt className="text-sm font-medium text-text">Contact first name</dt><dd className="break-words text-text">{me.contactFirstName || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Contact last name</dt><dd className="break-words text-text">{me.contactLastName || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Job title/position</dt><dd className="break-words text-text">{me.jobTitle || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Account mobile</dt><dd className="text-text">{me.phone || 'Not provided'}</dd></div>
+        </dl>
         <form
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e: FormEvent) => {

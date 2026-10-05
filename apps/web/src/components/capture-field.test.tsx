@@ -5,7 +5,7 @@ import { CaptureField } from './capture-field.js';
 import { UploadPrepareError } from '../lib/image-compression.js';
 
 const prepareUpload = vi.hoisted(() => vi.fn());
-const scanner = vi.hoisted(() => ({ load: vi.fn(), analyze: vi.fn(), straighten: vi.fn() }));
+const scanner = vi.hoisted(() => ({ load: vi.fn(), analyze: vi.fn(), picked: vi.fn(), straighten: vi.fn() }));
 
 vi.mock('../lib/image-compression.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/image-compression.js')>();
@@ -14,7 +14,7 @@ vi.mock('../lib/image-compression.js', async (importOriginal) => {
 
 vi.mock('../lib/document-scanner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/document-scanner.js')>();
-  return { ...actual, loadDocumentScanner: scanner.load, analyzeDocument: scanner.analyze, straightenDocument: scanner.straighten };
+  return { ...actual, loadDocumentScanner: scanner.load, analyzeDocument: scanner.analyze, analyzePickedDocument: scanner.picked, straightenDocument: scanner.straighten };
 });
 
 function photo(name = 'photo.jpg', type = 'image/jpeg'): File {
@@ -37,7 +37,7 @@ function renderField(overrides: Partial<React.ComponentProps<typeof CaptureField
 
 beforeEach(() => {
   prepareUpload.mockReset();
-  scanner.load.mockReset(); scanner.analyze.mockReset(); scanner.straighten.mockReset();
+  scanner.load.mockReset(); scanner.analyze.mockReset(); scanner.picked.mockReset(); scanner.straighten.mockReset();
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: undefined });
   // jsdom defines neither of these, so they are added to the real URL object
   // rather than swapped in as a whole new global, which would lose the rest of
@@ -189,7 +189,7 @@ describe('CaptureField', () => {
     const prepared = photo('prepared.jpg');
     prepareUpload.mockResolvedValue(prepared);
     scanner.load.mockResolvedValue({});
-    scanner.analyze.mockReturnValue({ quality: 'ready', corners: [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }] });
+    scanner.picked.mockReturnValue({ quality: 'ready', corners: [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }] });
     scanner.straighten.mockResolvedValue(corrected);
     vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 100, height: 100, close: vi.fn() }));
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
@@ -202,5 +202,29 @@ describe('CaptureField', () => {
     expect(scanner.straighten).toHaveBeenCalled();
     expect(prepareUpload).toHaveBeenCalledWith(corrected, undefined);
     expect(onChange).toHaveBeenCalledWith(prepared);
+    expect(scanner.analyze).not.toHaveBeenCalled();
+  });
+
+  it('keeps a blank picked image in manual review', async () => {
+    scanner.load.mockResolvedValue({}); scanner.picked.mockReturnValue(null);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    const onAccepted = vi.fn();
+    renderField({ scanner: true, onAccepted });
+    await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
+    await screen.findByText(/No clear document edges/);
+    expect(screen.getByRole('button', { name: 'Use original photo' })).toBeEnabled();
+    expect(onAccepted).not.toHaveBeenCalled();
+  });
+
+  it('keeps the native camera input on the original scanner path', async () => {
+    scanner.load.mockResolvedValue({}); scanner.analyze.mockReturnValue(null);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    renderField({ scanner: true });
+    await userEvent.upload(screen.getByTestId('scanFile-camera'), photo());
+    await screen.findByText(/No clear document edges/);
+    expect(scanner.analyze).toHaveBeenCalled();
+    expect(scanner.picked).not.toHaveBeenCalled();
   });
 });

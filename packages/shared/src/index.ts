@@ -14,6 +14,7 @@ export * from './edtr-sheet.js';
 export * from './weather-attestation.js';
 export * from './kyc.js';
 export * from './kyc-certificate.js';
+export * from './kyc-id-text.js';
 export * from './ocr-accuracy.js';
 export * from './fleet.js';
 export * from './weather.js';
