@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight } from 'lucide-react';
-import type { CouponPreviewResponse, TruckPrice, TruckRequestResponse } from '@arkilaunch/shared';
+import { truckArrivalWindow, type CouponPreviewResponse, type TruckBanRuleInput, type TruckPrice, type TruckRequestResponse } from '@arkilaunch/shared';
 import { apiErrorText, apiPost } from '../lib/api-client.js';
 import { formatPeso } from '../lib/format.js';
 import { MY_TRUCK_REQUESTS, trucksQueries } from '../lib/queries.js';
@@ -138,11 +138,29 @@ function Dot({ which }: { which: 'A' | 'B' }) {
 }
 
 const when = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  new Date(iso).toLocaleString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
 
-export function tripArrivalText(r: Pick<TruckRequestResponse, 'etaAt' | 'routeMinutes'>): string | null {
-  if (r.etaAt) return `Est. arrival ${when(r.etaAt)}`;
-  return r.routeMinutes === null ? null : `Est. arrival ~ pickup + ${r.routeMinutes} min drive`;
+const clock = (d: Date) => d.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' });
+
+// Before dispatch: a clock-time range from the booked pickup (rush hour and truck bans applied). After: the saved ETA.
+export function arrivalText(
+  r: Pick<TruckRequestResponse, 'etaAt' | 'routeMinutes' | 'scheduledFor' | 'routeCities'>,
+  rules: TruckBanRuleInput[] = [],
+): string | null {
+  if (r.etaAt) return when(r.etaAt);
+  if (r.routeMinutes === null) return null;
+  const depart = new Date(r.scheduledFor);
+  const { from, to } = truckArrivalWindow(depart, r.routeMinutes, r.routeCities ?? [], rules);
+  const mins = (d: Date) => Math.round((d.getTime() - depart.getTime()) / 60_000);
+  return `${when(from.toISOString())} – ${clock(to)} (${mins(from)}–${mins(to)} min truck drive)`;
+}
+
+export function tripArrivalText(
+  r: Pick<TruckRequestResponse, 'etaAt' | 'routeMinutes' | 'scheduledFor' | 'routeCities'>,
+  rules: TruckBanRuleInput[] = [],
+): string | null {
+  const text = arrivalText(r, rules);
+  return text && `Est. arrival ${text}`;
 }
 
 function priceOf(r: TruckRequestResponse) {

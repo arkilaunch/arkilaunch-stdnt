@@ -17,23 +17,40 @@ export const LeakageReportQuerySchema = z
   );
 export type LeakageReportQuery = z.infer<typeof LeakageReportQuerySchema>;
 
-// value null = no data in period; the report prints that instead of a zero it cannot vouch for.
-export interface LeakageMetric {
+// QA 35: the report is a list of leaks in pesos, ranked by what they cost, each with why it matters and what to do.
+// lost = earned but will never be billed unless someone acts; delayed = billed or billable, cash not in yet;
+// opportunity = capacity that earned nothing (not money owed, but money the yard could have made).
+export type LeakageKind = 'lost' | 'delayed' | 'opportunity';
+export type LeakageSeverity = 'high' | 'medium' | 'low';
+
+export interface LeakageRecord {
   label: string;
-  value: number | null;
-  unit: 'php' | 'hours' | 'count' | 'pct' | 'days' | 'km';
-  proxy?: boolean;
+  detail: string;
+  amountPhp: number;
 }
 
-// The six bones of the study's fishbone: revenue leakage in small heavy-equipment rental companies.
-export const LEAKAGE_BONES = ['Environment', 'Information/Data', 'Measurement', 'Technology/System', 'Method/Process', 'People'] as const;
-export type LeakageBone = (typeof LEAKAGE_BONES)[number];
+export interface LeakageFinding {
+  key: string;
+  title: string;
+  kind: LeakageKind;
+  severity: LeakageSeverity;
+  amountPhp: number;
+  count: number;
+  /** Plain words for the owner: why this costs the business money. */
+  whyItMatters: string;
+  /** The next step that recovers or prevents it. */
+  whatToDo: string;
+  /** How the peso figure was worked out, so nobody has to trust a black box. */
+  howMeasured: string;
+  /** The biggest offenders, largest first (at most 5). */
+  records: LeakageRecord[];
+}
 
-export interface LeakageCause {
-  bone: LeakageBone;
-  cause: string;
-  answer: string;
-  metrics: LeakageMetric[];
+export interface LeakageKpi {
+  label: string;
+  value: number | null;
+  unit: 'php' | 'pct' | 'days';
+  meaning: string;
 }
 
 export interface LeakageReport {
@@ -46,7 +63,13 @@ export interface LeakageReport {
     outstanding: number;
     collectionRatePct: number | null;
     verifiedRevenue: number;
+    /** Money at risk this period, by kind; total = lost + delayed + opportunity. */
+    atRisk: { total: number; lost: number; delayed: number; opportunity: number };
+    /** The three biggest leaks' next steps, in order. */
+    topActions: { title: string; amountPhp: number; whatToDo: string }[];
   };
+  kpis: LeakageKpi[];
+  findings: LeakageFinding[];
   master: {
     fleetTotal: number;
     fleetByStatus: Record<string, number>;
@@ -55,7 +78,6 @@ export interface LeakageReport {
     customersKycApproved: number;
     projectSites: number;
   };
-  causes: LeakageCause[];
   ledger: {
     bookings: { count: number; byStatus: Record<string, number> };
     quotations: number;

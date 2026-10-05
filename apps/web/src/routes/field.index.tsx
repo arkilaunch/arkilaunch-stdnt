@@ -2,11 +2,11 @@ import { createRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fieldLayoutRoute } from './_field.js';
-import { sitesQueries } from '../lib/queries.js';
-import { useScanDeployments } from '../lib/use-scan-deployments.js';
+import { edtrQueries, sitesQueries } from '../lib/queries.js';
 import { Button } from '../components/button.js';
 import { CaptureModal } from '../components/capture-modal.js';
 import { EmptyState } from '../components/empty-state.js';
+import { BlankEdtrDownload } from '../components/blank-edtr-download.js';
 import { pluralize } from '../lib/format.js';
 
 function OperatorDashboardPage() {
@@ -16,7 +16,9 @@ function OperatorDashboardPage() {
   const [captureOpen, setCaptureOpen] = useState(false);
 
   const hasSites = !!sites && sites.total > 0;
-  const { equipmentList, rentals, rentalLabel } = useScanDeployments(hasSites);
+  // Only machines on site now at this timekeeper's sites (QA 32).
+  const targets = useQuery({ ...edtrQueries.scanTargets(), enabled: hasSites });
+  const nothingOnSite = (targets.data?.items.length ?? 0) === 0;
 
   // No pending count: the field-log queue is staff-only.
 
@@ -31,14 +33,14 @@ function OperatorDashboardPage() {
             variant="primary"
             size="field"
             className="w-full"
-            disabled={rentals.length === 0}
+            disabled={nothingOnSite}
             onClick={() => setCaptureOpen(true)}
           >
             Record a field log
           </Button>
-          {rentals.length === 0 && (
+          {nothingOnSite && !targets.isPending && (
             <p className="text-sm text-text-muted">
-              Nothing is out on rental at your sites yet, so there are no hours to record.
+              No machine is on site at your sites yet, so there are no hours to record.
             </p>
           )}
           <p className="text-sm text-text-muted">
@@ -50,6 +52,7 @@ function OperatorDashboardPage() {
           >
             Scan a DTR
           </Link>
+          <BlankEdtrDownload />
           <Link
             to="/field/deployment"
             className="min-h-12 rounded-sm border border-border bg-surface px-4 py-3 text-sm font-medium text-text"
@@ -67,9 +70,6 @@ function OperatorDashboardPage() {
       <CaptureModal
         open={captureOpen}
         onClose={() => setCaptureOpen(false)}
-        rentals={rentals}
-        equipmentList={equipmentList}
-        rentalLabel={rentalLabel}
         onCaptured={() => {
           void queryClient.invalidateQueries({ queryKey: ['edtr'] });
         }}

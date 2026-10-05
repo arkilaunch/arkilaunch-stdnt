@@ -22,9 +22,11 @@ export function endsSoon(endsAt: string | Date, now = Date.now()): number | null
 export function MaintenanceModal({
   equipment,
   onClose,
+  initialTab = 'report',
 }: {
   equipment: EquipmentResponse;
   onClose: () => void;
+  initialTab?: 'report' | 'schedules' | 'dates';
 }) {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -43,7 +45,7 @@ export function MaintenanceModal({
   const [winEnd, setWinEnd] = useState('');
   const [winNotes, setWinNotes] = useState('');
   const winInvalid = !winStart || !winEnd || new Date(winEnd) <= new Date(winStart);
-  const [tab, setTab] = useState<'report' | 'schedules' | 'dates'>('report');
+  const [tab, setTab] = useState<'report' | 'schedules' | 'dates'>(initialTab);
   const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   const [unblocking, setUnblocking] = useState<{ id: string; span: string } | null>(null);
   const [correcting, setCorrecting] = useState(false);

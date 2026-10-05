@@ -5,6 +5,7 @@ import {
   OcrPayloadSchema,
   documentIntelligenceAvailability,
   parseEdtrSheet,
+  sheetQrCheck,
   validateDayEntry,
   type DocumentIntelligencePort,
   type EdtrSheetDay,
@@ -136,6 +137,9 @@ export async function runEdtrOcrWorker(
         const result = await port.analyze(EDTR_MODEL_ID, bytes);
 
         const sheet = parseEdtrSheet(result.tables, row.reportDate);
+        // QA 32: the printed QR says which booking and unit the sheet is for. tenant_id still comes from the row.
+        const qr = sheetQrCheck(result.barcodes, row);
+        const sheetFlags = qr === 'mismatch' ? ['sheet_qr_mismatch'] : qr === 'missing' ? ['sheet_unidentified'] : [];
         if (!sheet.ok) {
           // RFC-2: a sheet not readable in full is never read in part.
           await db
@@ -200,7 +204,7 @@ export async function runEdtrOcrWorker(
               hoursOtherDowntime: opt(v3?.other),
               hourMeterStart: opt(v3?.meterStart),
               hourMeterEnd: opt(v3?.meterEnd),
-              reviewFlags,
+              reviewFlags: [...reviewFlags, ...sheetFlags],
             });
 
             for (const field of ocrPayload.fields) {
@@ -249,6 +253,14 @@ export async function runEdtrOcrWorker(
                   })
                   .where(eq(edtr.id, edtrId));
               }
+            }
+
+            // A sheet filed under the wrong booking or unit never bills on its own, however well it reconciles.
+            if (qr === 'mismatch') {
+              await tx
+                .update(edtr)
+                .set({ status: 'review', lastError: sql`coalesce(${edtr.lastError} || ';', '') || 'sheet_qr_mismatch'` })
+                .where(eq(edtr.id, edtrId));
             }
           }
         });

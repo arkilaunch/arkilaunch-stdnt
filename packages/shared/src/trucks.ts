@@ -206,8 +206,28 @@ export function banHits(cities: RouteCity[], rules: TruckBanRuleInput[], at: Dat
   });
 }
 
+// Routers time a free-flowing car; a loaded truck on Rizal and Metro roads is slower.
+// ponytail: fixed factors, calibrated on Pililla-Taytay (35 km: OSRM 48 min, ~75 min real truck). Move to tenant
+// settings if one region's trips keep landing outside the window.
+export const TRUCK_TIME = { carFactor: 1.45, hgvFactor: 1.15, minKmh: 30, rushFactor: 1.3, spread: 1.25 } as const;
+
+// Router minutes as truck minutes: the slower of the scaled router time and the average-speed floor.
+export function truckMinutes(km: number, routerMinutes: number, truckSafe: boolean): number {
+  const scaled = Math.max(0, routerMinutes) * (truckSafe ? TRUCK_TIME.hgvFactor : TRUCK_TIME.carFactor);
+  return Math.round(Math.max(scaled, (Math.max(0, km) / TRUCK_TIME.minKmh) * 60));
+}
+
+// Weekday 07:00-10:00 and 17:00-20:00 Manila: the morning and evening crawl.
+export function isRushHour(at: Date): boolean {
+  const local = new Date(at.getTime() + PH_OFFSET_MS);
+  const day = local.getUTCDay();
+  const hour = local.getUTCHours();
+  return day >= 1 && day <= 5 && ((hour >= 7 && hour < 10) || (hour >= 17 && hour < 20));
+}
+
 export function truckEta(dispatchedAt: Date, routeMinutes: number, cities: RouteCity[], rules: TruckBanRuleInput[]): Date {
-  let eta = new Date(dispatchedAt.getTime() + Math.max(0, routeMinutes) * 60_000);
+  const minutes = Math.max(0, routeMinutes) * (isRushHour(dispatchedAt) ? TRUCK_TIME.rushFactor : 1);
+  let eta = new Date(dispatchedAt.getTime() + Math.round(minutes) * 60_000);
   for (let i = 0; i < 16; i++) {
     const hits = banHits(cities, rules, eta);
     if (!hits.length) break;
@@ -216,6 +236,19 @@ export function truckEta(dispatchedAt: Date, routeMinutes: number, cities: Route
     eta = new Date(end);
   }
   return eta;
+}
+
+// An arrival range, not a false-precision minute: the early end and the slow end, each through the ban windows.
+export function truckArrivalWindow(
+  departAt: Date,
+  routeMinutes: number,
+  cities: RouteCity[] = [],
+  rules: TruckBanRuleInput[] = [],
+): { from: Date; to: Date } {
+  return {
+    from: truckEta(departAt, routeMinutes, cities, rules),
+    to: truckEta(departAt, routeMinutes * TRUCK_TIME.spread, cities, rules),
+  };
 }
 
 export interface TollHint {

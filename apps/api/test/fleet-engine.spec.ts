@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, vi } from 'vitest';
 import { ConflictException, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import postgres from 'postgres';
+import { maintenanceWindows, withTenantTx } from '@arkilaunch/db';
 import { manilaDate, type RequestContext } from '@arkilaunch/shared';
 import { FleetService } from '../src/fleet/fleet.service.js';
 import { EventsService } from '../src/events/events.service.js';
@@ -44,6 +45,29 @@ describe('FleetService (PRD-F4)', () => {
     const { items, total } = await fleet.list(adminCtx, { status: 'available', q: created.serialNo, limit: 50, offset: 0 });
     expect(total).toBeGreaterThan(0);
     expect(items.some((item) => item.id === created.id)).toBe(true);
+  });
+
+  // QA 31: blocked dates are visible and filterable from the list, not only inside one unit's modal.
+  it('filters by maintenance-blocked dates and shows each unit its next block', async () => {
+    const run = Date.now();
+    const blocked = await fleet.create(adminCtx, { equipmentTypeId, model: `Blocked ${run}`, serialNo: `fleet-test-${run}-blocked`, availabilityStatus: 'available' });
+    const free = await fleet.create(adminCtx, { equipmentTypeId, model: `Free ${run}`, serialNo: `fleet-test-${run}-free`, availabilityStatus: 'available' });
+    // Blocked 2040-03-10 to 2040-03-12 (Manila).
+    await withTenantTx(adminCtx, (tx) => tx.insert(maintenanceWindows).values({
+      tenantId: adminCtx.tenantId, equipmentId: blocked.id,
+      startsAt: new Date('2040-03-10T00:00:00+08:00'), endsAt: new Date('2040-03-13T00:00:00+08:00'), notes: 'Engine overhaul',
+    }));
+    const ids = async (q: { blockedFrom?: string; blockedTo?: string }) =>
+      (await fleet.list(adminCtx, { q: `${run}`, limit: 50, offset: 0, ...q })).items.map((i) => i.id);
+
+    expect(await ids({ blockedFrom: '2040-03-12', blockedTo: '2040-03-20' })).toEqual([blocked.id]);
+    expect(await ids({ blockedFrom: '2040-03-13', blockedTo: '2040-03-20' })).toEqual([]); // ends at midnight, exclusive
+    expect(await ids({ blockedFrom: '2040-03-01', blockedTo: '2040-03-09' })).toEqual([]);
+    expect(await ids({ blockedFrom: '2040-01-01' })).toEqual([blocked.id]); // open-ended
+
+    const all = (await fleet.list(adminCtx, { q: `${run}`, limit: 50, offset: 0 })).items;
+    expect(all.find((i) => i.id === blocked.id)?.nextBlock).toMatchObject({ notes: 'Engine overhaul' });
+    expect(all.find((i) => i.id === free.id)?.nextBlock).toBeNull();
   });
 
   it('filters by category, search and missing photo, and counts each category', async () => {

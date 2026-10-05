@@ -9,6 +9,12 @@ export const EquipmentListQuerySchema = PaginationQuerySchema.extend({
   typeId: z.string().uuid().optional(),
   q: z.string().trim().max(100).optional(),
   missing: z.enum(['photo', 'price']).optional(),
+  // Units with maintenance-blocked dates touching [blockedFrom, blockedTo] (Manila days); no blockedTo = from then on.
+  blockedFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  blockedTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+}).refine((q) => !q.blockedTo || !q.blockedFrom || q.blockedTo >= q.blockedFrom, {
+  message: 'blockedTo must not be before blockedFrom',
+  path: ['blockedTo'],
 });
 export type EquipmentListQuery = z.infer<typeof EquipmentListQuerySchema>;
 
@@ -204,8 +210,10 @@ export const EquipmentResponseSchema = z.object({
 });
 export type EquipmentResponse = z.infer<typeof EquipmentResponseSchema>;
 
+export const EquipmentBlockSchema = z.object({ startsAt: z.coerce.date(), endsAt: z.coerce.date(), notes: z.string().nullable() });
 export const EquipmentListResponseSchema = z.object({
-  items: z.array(EquipmentResponseSchema),
+  // nextBlock: the current or next maintenance-blocked window, so the list shows it without opening the unit.
+  items: z.array(EquipmentResponseSchema.extend({ nextBlock: EquipmentBlockSchema.nullable().optional() })),
   total: z.number().int(),
   categories: z
     .array(z.object({ equipmentTypeId: z.string().uuid(), name: z.string(), count: z.number().int() }))

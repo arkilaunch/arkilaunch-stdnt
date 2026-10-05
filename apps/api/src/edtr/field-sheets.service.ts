@@ -1,7 +1,8 @@
 import { ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import { and, count, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import {
   addresses,
+  customers,
   edtrSettings,
   edtrSheetDownloads,
   equipment,
@@ -22,9 +23,12 @@ import {
   type FieldSheetDownloadResponse,
   type FieldSheetListResponse,
   type RequestContext,
+  type ScanTarget,
+  type ScanTargetsResponse,
 } from '@arkilaunch/shared';
 import { buildEdtrSheetContext, edtrPaperSize, isAssignedToSite } from '../common/edtr-sheet-context.js';
 import { EventsService } from '../events/events.service.js';
+import { onSiteNow } from '../common/deployed.js';
 
 // Timekeepers print their own sheets: current Manila week only, FIELD_SHEET_DAILY_LIMIT per unit per day.
 @Injectable()
@@ -100,6 +104,80 @@ export class FieldSheetsService {
           };
         }),
       };
+    });
+  }
+
+  // QA 32: the only bookings and machines a field log can be recorded against. A timekeeper: units on site now at
+  // their assigned sites. Staff: every unit on site, plus units returned in the last 14 days for late paper.
+  async scanTargets(ctx: RequestContext): Promise<ScanTargetsResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const timekeeper = ctx.role === 'timekeeper';
+      let siteIds: string[] | null = null;
+      if (timekeeper) {
+        siteIds = (
+          await tx
+            .select({ id: timekeeperSiteAssignments.projectSiteId })
+            .from(timekeeperSiteAssignments)
+            .where(and(eq(timekeeperSiteAssignments.tenantId, ctx.tenantId), eq(timekeeperSiteAssignments.userId, ctx.userId)))
+        ).map((s) => s.id);
+        if (siteIds.length === 0) return { items: [] };
+      }
+      const recentlyReturned = sql`(${equipmentAssignments.status} = 'completed' and ${equipmentAssignments.end} >= now() - interval '14 days')`;
+      const rows = await tx
+        .select({
+          rentalId: rentals.id,
+          bookingCode: rentals.code,
+          status: rentals.status,
+          startDate: rentals.startDate,
+          endDate: rentals.endDate,
+          siteId: rentals.projectSiteId,
+          line: addresses.line1,
+          city: addresses.city,
+          province: addresses.province,
+          customerName: customers.companyName,
+          equipmentId: equipment.id,
+          type: equipmentTypes.name,
+          model: equipment.model,
+          serialNo: equipment.serialNo,
+          onSite: sql<boolean>`${onSiteNow}`,
+        })
+        .from(equipmentAssignments)
+        .innerJoin(rentals, eq(rentals.id, equipmentAssignments.rentalId))
+        .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+        .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+        .innerJoin(projectSites, eq(projectSites.id, rentals.projectSiteId))
+        .leftJoin(addresses, eq(addresses.id, projectSites.addressId))
+        .leftJoin(customers, eq(customers.id, rentals.customerId))
+        .where(
+          and(
+            siteIds ? inArray(rentals.projectSiteId, siteIds) : undefined,
+            ne(rentals.status, 'cancelled'),
+            timekeeper ? onSiteNow : or(onSiteNow, recentlyReturned),
+          ),
+        )
+        .orderBy(asc(addresses.city), asc(rentals.code), asc(equipmentTypes.name));
+      const byRental = new Map<string, ScanTarget>();
+      for (const r of rows) {
+        let target = byRental.get(r.rentalId);
+        if (!target) {
+          target = {
+            rentalId: r.rentalId,
+            bookingCode: r.bookingCode,
+            status: r.status,
+            customerName: r.customerName,
+            siteId: r.siteId,
+            siteName: [r.line, r.city, r.province].filter(Boolean).join(', ') || 'Unnamed site',
+            startDate: r.startDate.toISOString(),
+            endDate: r.endDate?.toISOString() ?? null,
+            units: [],
+          };
+          byRental.set(r.rentalId, target);
+        }
+        if (!target.units.some((u) => u.equipmentId === r.equipmentId)) {
+          target.units.push({ equipmentId: r.equipmentId, name: `${r.type} · ${r.model}`, serialNo: r.serialNo, onSite: !!r.onSite });
+        }
+      }
+      return { items: [...byRental.values()] };
     });
   }
 

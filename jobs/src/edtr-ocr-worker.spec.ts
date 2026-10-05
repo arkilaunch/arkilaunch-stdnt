@@ -3,7 +3,7 @@ import postgres from 'postgres';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { edtr, edtrLineItems, edtrReconciliations, events, rentals, weatherAlerts } from '@arkilaunch/db';
 import { FixtureDocumentIntelligenceAdapter } from '@arkilaunch/shared/testing';
-import type { DocumentExtractionResult } from '@arkilaunch/shared';
+import { edtrSheetQrPayload, type DocumentExtractionResult } from '@arkilaunch/shared';
 import { runEdtrOcrWorker } from './edtr-ocr-worker.js';
 import { makeJobDb } from './db-client.js';
 
@@ -208,6 +208,56 @@ describe('edtr-ocr-worker', () => {
     expect(Number(reconciliation!.deltaHours)).toBe(0);
 
     await cleanup([paperRow.id, digitalRow!.id]);
+  });
+
+  // QA 32: the sheet's QR is checked against the booking and unit it was filed under.
+  it('holds a sheet whose QR names another unit for review, even when its hours match', async () => {
+    const reportDate = '2022-06-01';
+    const paperRow = await insertQueuedPaperEdtr(reportDate);
+    const { db, client } = makeJobDb();
+    const [digitalRow] = await db
+      .insert(edtr)
+      .values({ tenantId, rentalId, equipmentId, source: 'digital_entry', reportDate, status: 'extracted' })
+      .returning();
+    await db.insert(edtrLineItems).values({ tenantId, edtrId: digitalRow!.id, hoursActive: '8.5', hoursIdle: '0.0' });
+    await client.end();
+
+    const swapped = { ...sheet([day(reportDate, '8.5')]), barcodes: [
+      { kind: 'QRCode', value: edtrSheetQrPayload(rentalId, '99999999-9999-4999-8999-999999999999', '2022-05-30'), confidence: 0.99 },
+    ] };
+    await runEdtrOcrWorker(new FixtureDocumentIntelligenceAdapter(swapped), stubFetchBytes);
+
+    const { db: db2, client: c2 } = makeJobDb();
+    const [updated] = await db2.select().from(edtr).where(eq(edtr.id, paperRow.id));
+    const [line] = await db2.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, paperRow.id));
+    await c2.end();
+    expect(updated!.status).toBe('review');
+    expect(updated!.lastError).toContain('sheet_qr_mismatch');
+    expect(line!.reviewFlags).toContain('sheet_qr_mismatch');
+    await cleanup([paperRow.id, digitalRow!.id]);
+  });
+
+  it("passes its own QR cleanly, and flags a sheet with no QR for a person to identify", async () => {
+    const own = '2022-06-02';
+    const blank = '2022-06-03';
+    const ownRow = await insertQueuedPaperEdtr(own);
+    await runEdtrOcrWorker(
+      new FixtureDocumentIntelligenceAdapter({ ...sheet([day(own, '8.5')]), barcodes: [
+        { kind: 'QRCode', value: edtrSheetQrPayload(rentalId, equipmentId, '2022-05-30'), confidence: 0.99 },
+      ] }),
+      stubFetchBytes,
+    );
+    const blankRow = await insertQueuedPaperEdtr(blank);
+    await runEdtrOcrWorker(new FixtureDocumentIntelligenceAdapter(sheet([day(blank, '8.5')])), stubFetchBytes);
+
+    const { db, client } = makeJobDb();
+    const [ownLine] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, ownRow.id));
+    const [blankLine] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, blankRow.id));
+    await client.end();
+    expect(ownLine!.reviewFlags).not.toContain('sheet_unidentified');
+    expect(ownLine!.reviewFlags).not.toContain('sheet_qr_mismatch');
+    expect(blankLine!.reviewFlags).toContain('sheet_unidentified');
+    await cleanup([ownRow.id, blankRow.id]);
   });
 
   it('two logs diverging beyond tolerance route to review, never auto-accepting', async () => {

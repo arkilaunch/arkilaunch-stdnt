@@ -170,8 +170,9 @@ function RecordCash({ invoice, onDone }: { invoice: InvoiceSummaryResponse; onDo
   const toast = useToast();
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const [receiptNo, setReceiptNo] = useState('');
   const record = useMutation({
-    mutationFn: () => apiPost(`/invoices/${invoice.id}/cash-payment`, {}),
+    mutationFn: () => apiPost(`/invoices/${invoice.id}/cash-payment`, receiptNo.trim() ? { receiptNo: receiptNo.trim() } : {}),
     onSuccess: () => {
       toast.success('Cash payment recorded');
       setConfirming(false);
@@ -188,7 +189,18 @@ function RecordCash({ invoice, onDone }: { invoice: InvoiceSummaryResponse; onDo
       <ConfirmDialog
         open={confirming}
         title="Record cash payment"
-        body={`Confirm you received ${formatPeso(invoice.amount)} in cash for this invoice. It will be marked paid under your name.`}
+        body={
+          <div className="flex flex-col gap-3">
+            <p>Confirm you received {formatPeso(invoice.amount)} in cash for this invoice. It will be marked paid under your name.</p>
+            <Input
+              label="Official receipt (OR) number"
+              hint="Optional."
+              maxLength={40}
+              value={receiptNo}
+              onChange={(e) => setReceiptNo(e.target.value)}
+            />
+          </div>
+        }
         confirmLabel="Record payment"
         pending={record.isPending}
         onConfirm={() => record.mutate()}
@@ -315,7 +327,8 @@ function PaymentsPage() {
         title="Invoices"
         options={invoicesQueries.list(PAGE_SIZE, offset, filter === 'all' ? undefined : filter)}
         emptyTitle={filter === 'all' ? 'No invoices yet' : `No ${filter === 'issued' ? 'unpaid' : 'paid'} invoices`}
-        emptyDescription="Invoices appear once a booking is confirmed or a reconciliation is approved and a deduction is posted."
+        emptyDescription="Invoices appear once a booking is confirmed or a reconciliation is approved and a deduction is posted."
+
         isEmpty={(data) => data.total === 0}
         render={(data) => (
           <Table

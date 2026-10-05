@@ -24,6 +24,11 @@ const queryClient = new QueryClient({
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('#root element missing');
 
+// QA 30: the push service worker also makes the app installable. It has no fetch handler, so it never serves stale code.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => void navigator.serviceWorker.register('/sw.js').catch(() => undefined));
+}
+
 // The access token is memory-only: rehydrate before the router's guards run, or authed reloads bounce to /login.
 watchSessionOwner();
 bootstrapSession().finally(() => {

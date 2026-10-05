@@ -485,7 +485,9 @@ describe('Customer onboarding', () => {
       expect(scan.suggestions).toMatchObject({ firstName: 'ANA MARIA', middleName: 'REYES', lastName: 'SAN JUAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
       expect(scan.confidence).toBe(0.94);
       const national = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('same-text-other-id'), 'philsys');
-      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '' });
+      // QA 36: PhilSys reads its own labels. No Apelyido/Last Name labels here, so names stay the query fields', but
+      // the printed Address block now wins over the empty query field.
+      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
     });
     const scanner = (fields: Record<string, { value: string; confidence: number }>) =>
       new CustomersService(events, new FixtureDocumentIntelligenceAdapter({ fields }));

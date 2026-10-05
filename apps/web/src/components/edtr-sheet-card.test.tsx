@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EdtrSheetCard } from './edtr-sheet-card.js';
 import { ToastProvider } from './toast.js';
@@ -33,10 +33,11 @@ describe('EdtrSheetCard', () => {
     expect(await screen.findByText(/Blank sheet/)).toBeInTheDocument();
   });
 
-  it('hides the blank sheet from a timekeeper', async () => {
+  // QA 33: the blank template carries no booking data, so field staff may print it for sampling too.
+  it('offers the blank sheet to a timekeeper as well', async () => {
     mount('timekeeper');
-    await waitFor(() => expect(screen.getByRole('combobox', { name: /paper/i })).toBeInTheDocument());
-    expect(screen.queryByText(/Blank sheet/)).not.toBeInTheDocument();
+    const group = await screen.findByRole('group', { name: /Blank sheet/ });
+    expect(within(group).getByRole('button', { name: 'PDF' })).toBeInTheDocument();
   });
 
   it('starts the paper choice at the company default', async () => {

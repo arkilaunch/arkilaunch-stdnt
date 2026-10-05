@@ -313,6 +313,9 @@ export const REVIEW_FLAGS = {
   meter_gap: 'Hour meter start differs from the last approved reading',
   other_without_note: 'Other downtime has no remark',
   outside_rental: 'Date is outside the rental period',
+  // QA 32: the printed sheet's QR is the machine-readable identity of the booking and unit.
+  sheet_qr_mismatch: "Sheet QR code names a different booking or machine than it was filed under",
+  sheet_unidentified: 'No sheet QR code read (blank or damaged sheet): confirm the machine by hand',
 } as const;
 export type ReviewFlag = keyof typeof REVIEW_FLAGS;
 

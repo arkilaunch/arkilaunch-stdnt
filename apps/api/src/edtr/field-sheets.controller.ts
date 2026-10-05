@@ -18,6 +18,12 @@ export class FieldSheetsController {
     return this.sheets.list(req.ctx);
   }
 
+  @Get('field/scan-targets')
+  @RequirePermission('edtr:create')
+  scanTargets(@Req() req: CtxRequest) {
+    return this.sheets.scanTargets(req.ctx);
+  }
+
   @Post('field/edtr-sheets')
   @RequirePermission('edtr:create')
   download(@Body() body: FieldSheetDownloadDto, @Req() req: CtxRequest) {

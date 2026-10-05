@@ -1,5 +1,5 @@
 import { UnprocessableEntityException, ServiceUnavailableException } from '@nestjs/common';
-import { onLuzonMainland, tollHintsFromSteps, type TruckRoute } from '@arkilaunch/shared';
+import { onLuzonMainland, tollHintsFromSteps, truckMinutes, type TruckRoute } from '@arkilaunch/shared';
 import { nominatimJson } from './nominatim.js';
 
 // Only ever an ESTIMATE: the admin confirms the km a customer is charged on.
@@ -63,9 +63,11 @@ export function parseOrs(body: OrsBody): TruckRoute {
   const meters = feature?.properties?.summary?.distance;
   if (!Number.isFinite(meters) || !feature?.geometry) throw new UnprocessableEntityException({ error: 'no_route_found' });
   const steps = feature.properties?.segments?.flatMap((segment) => segment.steps ?? []) ?? [];
+  const km = Math.max(0.1, Math.round(meters! / 100) / 10);
   return {
-    km: Math.max(0.1, Math.round(meters! / 100) / 10),
-    minutes: Math.round((feature.properties?.summary?.duration ?? 0) / 60),
+    km,
+    // Truck minutes, not router minutes: every stored ETA and map label reads this one value.
+    minutes: truckMinutes(km, (feature.properties?.summary?.duration ?? 0) / 60, true),
     line: routeLine(feature.geometry.coordinates),
     truckSafe: true,
     ...(steps.length ? { tollHints: tollHintsFromSteps(steps.map((step) => ({
@@ -83,9 +85,10 @@ export function parseOsrm(body: OsrmBody): TruckRoute {
     throw new UnprocessableEntityException({ error: 'no_route_found' });
   const line = routeLine(route?.geometry?.coordinates);
   const steps = route?.legs?.flatMap((leg) => leg.steps ?? []) ?? [];
+  const km = Math.max(0.1, Math.round(meters / 100) / 10);
   return {
-    km: Math.max(0.1, Math.round(meters / 100) / 10),
-    minutes: Math.round((route?.duration ?? 0) / 60),
+    km,
+    minutes: truckMinutes(km, (route?.duration ?? 0) / 60, false),
     line,
     truckSafe: false,
     ...(steps.length ? { tollHints: tollHintsFromSteps(steps) } : {}),

@@ -10,6 +10,7 @@ import { Button } from './button.js';
 import { Input } from './input.js';
 import { Select } from './select.js';
 import { useToast } from './toast.js';
+import { BlankEdtrDownload } from './blank-edtr-download.js';
 
 const thisMonday = () => weekStart(localDate(new Date()));
 
@@ -26,23 +27,19 @@ export function EdtrSheetCard({ bookingId, printable }: { bookingId: string; pri
   useEffect(() => {
     if (settings.data) setPage(settings.data.paperSize);
   }, [settings.data]);
-  // A hand-fill fallback with no booking, QR or dates: office only.
-  const canPrintBlank = me.data?.role === 'admin' || me.data?.role === 'owner';
   const tenant = useTenant();
   const units = context.data?.equipment ?? [];
   const unit = equipmentId || units[0]?.id || '';
 
-  async function download(kind: 'pdf' | 'png', blank = false) {
-    setBusy(`${blank ? 'blank-' : ''}${kind}`);
+  async function download(kind: 'pdf' | 'png') {
+    if (!context.data) return;
+    setBusy(kind);
     try {
       const sheet = await import('../lib/edtr-sheet.js');
       const companyName = me.data?.tenantName ?? '';
       const logo = await sheet.logoDataUri(context.data?.tenant?.logoUrl);
       const brand = { logoDataUri: logo, accent: tenant?.primaryColor ?? null, tin: me.data?.tenantTin ?? null };
-      const input =
-        blank || !context.data
-          ? { companyName, page, ...brand }
-          : { context: context.data, equipmentId: unit, weekStart: weekStart(week), companyName, page, ...brand };
+      const input = { context: context.data, equipmentId: unit, weekStart: weekStart(week), companyName, page, ...brand };
       const png = await sheet.svgToPng(sheet.buildEdtrSheetSvg(input), page);
       sheet.downloadBlob(kind === 'png' ? png : await sheet.pngToPdf(png, page), sheet.edtrSheetFilename(input, kind));
     } catch (e) {
@@ -89,17 +86,9 @@ export function EdtrSheetCard({ bookingId, printable }: { bookingId: string; pri
         <option value="legal">Legal (8.5 x 14 in), recommended</option>
         <option value="letter">Letter (8.5 x 11 in)</option>
       </Select>
-      {canPrintBlank && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-sm">
-          <span className="text-text-muted">Blank sheet (fill the header by hand):</span>
-          <Button variant="ghost" loading={busy === 'blank-pdf'} onClick={() => void download('pdf', true)}>
-            PDF
-          </Button>
-          <Button variant="ghost" loading={busy === 'blank-png'} onClick={() => void download('png', true)}>
-            PNG
-          </Button>
-        </div>
-      )}
+      <div className="border-t border-border pt-3">
+        <BlankEdtrDownload page={page} label="Blank sheet (fill the header by hand)" />
+      </div>
     </Surface>
   );
 }

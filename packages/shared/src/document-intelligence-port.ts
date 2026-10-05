@@ -58,10 +58,18 @@ export function spanConfidence(words: DocumentTextWord[], start: number, end: nu
   return Number.isFinite(min) ? min : 0;
 }
 
+export interface ExtractedBarcode {
+  kind: string;
+  value: string;
+  confidence: number;
+}
+
 export interface DocumentExtractionResult {
   fields: Record<string, ExtractedField>;
   tables?: ExtractedTable[];
   text?: DocumentText;
+  // Read only when the model asks for the barcodes add-on (the eDTR sheet's QR).
+  barcodes?: ExtractedBarcode[];
 }
 
 // Extraction only: never decides, activates a tenant, or moves money (RFC-2).

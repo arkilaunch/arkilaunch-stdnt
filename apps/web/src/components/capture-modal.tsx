@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { EdtrCaptureResponse, EdtrDetailResponse } from '@arkilaunch/shared';
+import { parseEdtrSheetQr, type EdtrCaptureResponse, type EdtrDetailResponse, type ScanTarget } from '@arkilaunch/shared';
 import { apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
-import type { EquipmentRef, RentalRef } from '../lib/reference-client.js';
 import { explainEdtrError } from '../lib/edtr-error.js';
 import { formatDate, formatHours, formatStatus, shortCode } from '../lib/format.js';
 import { manilaDate } from '@arkilaunch/shared';
@@ -14,7 +13,8 @@ import { Select } from './select.js';
 import { Surface } from './surface.js';
 import { Modal } from './modal.js';
 import { ScanReview } from './scan-review.js';
-import { referenceQueries } from '../lib/queries.js';
+import { edtrQueries, referenceQueries } from '../lib/queries.js';
+import { readSheetQr } from '../lib/sheet-qr.js';
 import { useToast } from './toast.js';
 
 const TERMINAL_STATUSES = new Set(['review', 'reconciled', 'hard_failed']);
@@ -28,13 +28,15 @@ const SCANNING_TIPS = [
   { title: 'Hold still', detail: 'A steady shot is what keeps the handwritten totals readable.' },
 ];
 
+export const targetLabel = (t: ScanTarget) =>
+  [t.siteName, t.bookingCode, t.customerName].filter(Boolean).join(' · ');
+
 export interface CaptureModalProps {
   open: boolean;
   onClose: () => void;
-  rentals: RentalRef[];
-  equipmentList: EquipmentRef[];
-  rentalLabel: (rental: RentalRef) => string;
   onCaptured: () => void;
+  /** Only this site's bookings (the site hub). */
+  siteId?: string;
   initialRentalId?: string;
   initialSource?: 'digital_entry' | 'paper_ocr';
   submitOnly?: boolean;
@@ -43,9 +45,7 @@ export interface CaptureModalProps {
 export function CaptureModal({
   open,
   onClose,
-  rentals,
-  equipmentList,
-  rentalLabel,
+  siteId,
   onCaptured,
   initialRentalId,
   initialSource = 'digital_entry',
@@ -60,6 +60,14 @@ export function CaptureModal({
   const [scanFile, setScanFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Set when the photographed sheet's QR picked the booking and machine; the pickers then stay locked to it.
+  const [fromQr, setFromQr] = useState(false);
+  // The QR names a machine outside this user's scope: the photo is of the wrong sheet, so it is not sent.
+  const [qrBlocked, setQrBlocked] = useState(false);
+
+  // QA 32: only bookings and machines the server will accept: on site now (and, for staff, just returned).
+  const scanTargets = useQuery({ ...edtrQueries.scanTargets(), enabled: open });
+  const targets = (scanTargets.data?.items ?? []).filter((t) => !siteId || t.siteId === siteId);
 
   // With the OCR pipeline on, a paper scan must not carry typed hours (422 line_items_not_accepted).
   const capabilities = useQuery(referenceQueries.capabilities());
@@ -77,9 +85,38 @@ export function CaptureModal({
     setSource(initialSource);
   }, [initialSource]);
 
+  // One booking or one machine to choose from: choose it.
+  const onlyRental = targets.length === 1 ? targets[0]!.rentalId : null;
   useEffect(() => {
-    if (rentals[0] && !rentalId) setRentalId(rentals[0].id);
-  }, [rentals, rentalId]);
+    if (onlyRental && !rentalId) setRentalId(onlyRental);
+  }, [onlyRental, rentalId]);
+  const target = targets.find((t) => t.rentalId === rentalId);
+  const onlyUnit = target?.units.length === 1 ? target.units[0]!.equipmentId : null;
+  useEffect(() => {
+    if (onlyUnit) setEquipmentId(onlyUnit);
+    else if (target && !target.units.some((u) => u.equipmentId === equipmentId)) setEquipmentId('');
+  }, [onlyUnit, target, equipmentId]);
+
+  // The printed sheet's QR names its booking and machine: match it before upload so nobody picks by hand.
+  async function onScanFile(file: File | null) {
+    setScanFile(file);
+    setFromQr(false);
+    setQrBlocked(false);
+    if (!file) return;
+    const raw = await readSheetQr(file);
+    const qr = raw ? parseEdtrSheetQr(raw) : null;
+    if (!qr) return;
+    const match = targets.find((t) => t.rentalId === qr.rentalId && t.units.some((u) => u.equipmentId === qr.equipmentId));
+    if (!match) {
+      setError({ payload: { error: 'sheet_unit_out_of_scope' } });
+      setQrBlocked(true);
+      return;
+    }
+    setError(null);
+    setRentalId(match.rentalId);
+    setEquipmentId(qr.equipmentId);
+    setFromQr(true);
+  }
 
   const capturedRef = useRef(onCaptured);
   capturedRef.current = onCaptured;
@@ -117,6 +154,8 @@ export function CaptureModal({
     setDetail(null);
     setError(null);
     setScanFile(null);
+    setFromQr(false);
+    setQrBlocked(false);
     setSubmitting(false);
   }
 
@@ -178,10 +217,9 @@ export function CaptureModal({
 
   const explained = error != null ? explainEdtrError(error) : null;
 
-  const equipment = equipmentList.find((eq) => eq.id === equipmentId);
-  const equipmentLabel = equipment ? `${equipment.model} (${equipment.serialNo})` : 'Not set';
-  const rental = rentals.find((r) => r.id === rentalId);
-  const rentalSessionLabel = rental ? rentalLabel(rental) : 'Not set';
+  const unit = target?.units.find((u) => u.equipmentId === equipmentId);
+  const equipmentLabel = unit ? `${unit.name} (${unit.serialNo})` : 'Not set';
+  const rentalSessionLabel = target ? targetLabel(target) : 'Not set';
 
   return (
     <Modal
@@ -199,7 +237,7 @@ export function CaptureModal({
             variant="primary"
             onClick={capture}
             loading={submitting}
-            disabled={!reportDate || !equipmentId || pollUrl !== null}
+            disabled={!reportDate || !equipmentId || pollUrl !== null || qrBlocked}
           >
             Record log
           </Button>
@@ -235,34 +273,41 @@ export function CaptureModal({
           </div>
         </fieldset>
 
+        {fromQr && (
+          <p role="status" className="rounded-sm border border-success/40 bg-success/10 px-3 py-2 text-sm text-text">
+            Matched from the sheet&apos;s QR code: {equipmentLabel} at {rentalSessionLabel}.
+          </p>
+        )}
         <Select
           id="rentalId"
-          label="Rental"
+          label="Site and booking"
           value={rentalId}
           onChange={(e) => setRentalId(e.target.value)}
+          disabled={fromQr}
           required
         >
-          {rentals.length === 0 && <option value="">No rentals available</option>}
-          {rentals.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.code} · {rentalLabel(r)}
+          <option value="">
+            {scanTargets.isPending ? 'Loading your sites…' : targets.length === 0 ? 'No machine is on site at your sites' : 'Choose the site'}
+          </option>
+          {targets.map((t) => (
+            <option key={t.rentalId} value={t.rentalId}>
+              {targetLabel(t)}
             </option>
           ))}
         </Select>
 
         <Select
           id="equipmentId"
-          label="Machine"
+          label="Machine on site"
           value={equipmentId}
           onChange={(e) => setEquipmentId(e.target.value)}
+          disabled={fromQr || !target}
           required
         >
-          <option value="">
-            {equipmentList.length === 0 ? 'No machines available' : 'Choose the machine'}
-          </option>
-          {equipmentList.map((eq) => (
-            <option key={eq.id} value={eq.id}>
-              {eq.model} ({eq.serialNo})
+          <option value="">{target ? 'Choose the machine' : 'Choose the site first'}</option>
+          {target?.units.map((u) => (
+            <option key={u.equipmentId} value={u.equipmentId}>
+              {u.name} ({u.serialNo}){u.onSite ? '' : ' - returned'}
             </option>
           ))}
         </Select>
@@ -274,11 +319,11 @@ export function CaptureModal({
           value={reportDate}
           onChange={(e) => setReportDate(e.target.value)}
           required
-          {...(rental?.startDate ? { min: manilaDate(rental.startDate) } : {})}
-          {...(rental?.endDate ? { max: manilaDate(rental.endDate) } : {})}
+          {...(target?.startDate ? { min: manilaDate(target.startDate) } : {})}
+          {...(target?.endDate ? { max: manilaDate(target.endDate) } : {})}
           hint={
-            rental?.startDate
-              ? `Within the rental: ${formatDate(rental.startDate)} to ${rental.endDate ? formatDate(rental.endDate) : 'open'}`
+            target?.startDate
+              ? `Within the rental: ${formatDate(target.startDate)} to ${target.endDate ? formatDate(target.endDate) : 'open'}`
               : undefined
           }
         />
@@ -290,7 +335,7 @@ export function CaptureModal({
             accept="image/*"
             size="field"
             value={scanFile}
-            onChange={setScanFile}
+            onChange={(file) => void onScanFile(file)}
             tips={SCANNING_TIPS}
             sessionData={[
               { label: 'Machine', value: equipmentLabel },

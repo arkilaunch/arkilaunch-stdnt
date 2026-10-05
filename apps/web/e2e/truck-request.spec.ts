@@ -123,7 +123,7 @@ test.describe('self-loading truck', () => {
     await admin.locator('tr, li').filter({ hasText: code }).first().click();
     const dispatchDrawer = admin.getByRole('dialog', { name: code });
     await dispatchDrawer.getByRole('tab', { name: 'Actions' }).click();
-    await dispatchDrawer.getByRole('button', { name: 'Dispatch truck' }).click();
+    await dispatchDrawer.getByRole('button', { name: 'Dispatch now' }).click();
     await expect(admin.getByText('Truck dispatched')).toBeVisible({ timeout: 60_000 });
     await customer.reload();
     await customer.getByRole('tab', { name: 'Self-loading truck' }).click();

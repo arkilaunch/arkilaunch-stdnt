@@ -62,6 +62,7 @@ import {
   type RequestContext,
 } from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
+import { onSiteNow } from '../common/deployed.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
 import { num, unitReportSpan } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
@@ -179,6 +180,17 @@ export class EdtrService {
           );
           await this.events.emit(ctx, 'edtr_site_scope_denied', { rental_id: rental.id, project_site_id: rental.projectSiteId });
           throw new ForbiddenException({ error: 'site_not_assigned' });
+        }
+        // QA 32: a timekeeper records only a machine that is on site now on this booking: no yard units, no other
+        // booking's units, nothing before delivery or after return. Staff keep the span rule below for late paper.
+        const [deployed] = await tx
+          .select({ id: equipmentAssignments.id })
+          .from(equipmentAssignments)
+          .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+          .where(and(eq(equipmentAssignments.rentalId, rental.id), eq(equipmentAssignments.equipmentId, body.equipmentId), onSiteNow))
+          .limit(1);
+        if (!deployed) {
+          throw new UnprocessableEntityException({ error: 'equipment_not_deployed', rentalStatus: rental.status });
         }
       }
 

@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import { LEAKAGE_BONES, type LeakageMetric, type LeakageReport } from '@arkilaunch/shared';
+import type { LeakageKpi, LeakageReport } from '@arkilaunch/shared';
 import type { StatementBrand } from '../billing/statement-pdf.js';
 import { isPng } from '../common/tenant-brand.js';
 
@@ -19,20 +19,14 @@ const ascii = (s: string) => s.replace(/[–—]/g, '-').replace(/[·•]/g, '|'
 const label = (s: string) => s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
 const NO_DATA = 'No data in period';
-export function formatMetric(x: LeakageMetric): string {
+export function formatKpi(x: LeakageKpi): string {
   if (x.value === null) return NO_DATA;
-  const v = x.value;
-  const body =
-    x.unit === 'php' ? php(v)
-    : x.unit === 'pct' ? `${v.toFixed(1)}%`
-    : x.unit === 'hours' ? `${v.toFixed(2)} h`
-    : x.unit === 'days' ? `${v.toFixed(1)} days`
-    : x.unit === 'km' ? `${v.toLocaleString('en-PH')} km`
-    : v.toLocaleString('en-PH');
-  return x.proxy ? `${body} (*)` : body;
+  return x.unit === 'php' ? php(x.value) : x.unit === 'pct' ? `${x.value.toFixed(1)}%` : `${x.value.toFixed(1)} days`;
 }
+const KIND: Record<string, string> = { lost: 'Lost unless acted on', delayed: 'Cash delayed', opportunity: 'Missed opportunity' };
+const SEVERITY_COLOR = { high: rgb(0.77, 0.17, 0.11), medium: rgb(0.85, 0.38, 0.04), low: MUTED } as const;
 
-// Revenue Leakage Report: maintenance data, then the fishbone causes with the tenant's own numbers, then transactions.
+// Revenue Leakage Report (QA 35): what is at risk in pesos, what to do first, each leak explained, then context.
 export async function renderLeakageReportPdf(r: LeakageReport, brand: StatementBrand): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   pdf.setTitle(`Revenue Leakage Report ${r.period.from} to ${r.period.to}`);
@@ -108,7 +102,7 @@ export async function renderLeakageReportPdf(r: LeakageReport, brand: StatementB
   y -= 22;
   write(M, 'REVENUE LEAKAGE REPORT', 13, bold);
   y -= 14;
-  write(M, 'Operations summary: from maintenance to transactions', 9, font, MUTED);
+  write(M, 'Where money is leaking, what it costs, and what to do about it', 9, font, MUTED);
   y -= 18;
   for (const [k, v] of [
     ['Period', `${day(r.period.from)} - ${day(r.period.to)}`],
@@ -122,55 +116,97 @@ export async function renderLeakageReportPdf(r: LeakageReport, brand: StatementB
   }
   y -= 8;
 
-  heading('1. Executive summary');
-  rows([
-    ['Invoiced', php(r.summary.invoiced)],
-    ['Collected', php(r.summary.collected)],
-    ['Collection rate', r.summary.collectionRatePct === null ? NO_DATA : `${r.summary.collectionRatePct.toFixed(1)}%`],
-    ['Revenue captured through reconciled time records', php(r.summary.verifiedRevenue)],
-    ['Outstanding (potential leakage)', php(r.summary.outstanding)],
-  ], true);
 
-  heading('2. Maintenance: master data');
+  const para = (s: string, size = 8.5, color = INK, indent = 0, f: PDFFont = font) => {
+    for (const line of wrap(s, W - 2 * M - indent, size, f)) {
+      need(12);
+      write(M + indent, line, size, f, color);
+      y -= size + 3;
+    }
+  };
+
+  heading('1. What is at risk');
+  need(60);
+  y -= 10;
+  write(M, php(r.summary.atRisk.total), 20, bold);
+  y -= 16;
+  para(`at risk in this period. ${php(r.summary.atRisk.lost)} is earned but will be lost unless someone acts, ${php(r.summary.atRisk.delayed)} is owed but not yet collected, and ${php(r.summary.atRisk.opportunity)} is capacity that earned nothing.`, 9, MUTED);
+  y -= 6;
+  rows([
+    ['Invoiced this period', php(r.summary.invoiced)],
+    ['Collected', php(r.summary.collected)],
+    ['Billed from reconciled time records', php(r.summary.verifiedRevenue)],
+  ]);
+  if (r.summary.topActions.length) {
+    write(M, 'Do these first', 10, bold);
+    y -= 14;
+    r.summary.topActions.forEach((a, i) => {
+      need(30);
+      write(M, `${i + 1}. ${a.title}`, 9, bold);
+      right(W - M, php(a.amountPhp), 9, bold);
+      y -= 12;
+      para(a.whatToDo, 8.5, INK, 12);
+      y -= 4;
+    });
+  } else {
+    para('No leaks found in this period. Keep recording every day and billing approved hours promptly.', 9);
+  }
+
+  heading('2. Key figures, and what they mean');
+  for (const k of r.kpis) {
+    need(30);
+    write(M, k.label, 9, bold);
+    right(W - M, formatKpi(k), 9, bold, k.value === null ? MUTED : INK);
+    y -= 12;
+    para(k.meaning, 8, MUTED, 12);
+    y -= 4;
+  }
+
+  heading('3. Every leak, by what it costs');
+  para('Each leak is worked out from your own bookings, time records, invoices and payments. "How measured" says exactly how, so every figure can be checked. Money lost or owed comes first; missed opportunity last.', 8, MUTED);
+  y -= 6;
+  r.findings.forEach((f, i) => {
+    need(70);
+    write(M, `3.${i + 1}  ${f.title}`, 10, bold);
+    right(W - M, php(f.amountPhp), 10, bold, f.amountPhp > 0 ? SEVERITY_COLOR[f.severity] : MUTED);
+    y -= 12;
+    write(M + 12, `${KIND[f.kind]}  |  ${f.severity.toUpperCase()} priority  |  ${f.count} item${f.count === 1 ? '' : 's'}`, 7.5, font, MUTED);
+    y -= 12;
+    if (f.amountPhp <= 0 && f.count === 0) {
+      para('None this period.', 8.5, MUTED, 12);
+      y -= 6;
+      return;
+    }
+    write(M + 12, 'Why it matters', 8, bold);
+    y -= 11;
+    para(f.whyItMatters, 8.5, INK, 12);
+    write(M + 12, 'What to do', 8, bold);
+    y -= 11;
+    para(f.whatToDo, 8.5, INK, 12);
+    write(M + 12, 'How measured', 8, bold, MUTED);
+    y -= 11;
+    para(f.howMeasured, 7.5, MUTED, 12);
+    for (const rec of f.records) {
+      need(12);
+      const text = wrap(`${rec.label}: ${rec.detail}`, W - 2 * M - 110, 7.5)[0] ?? '';
+      write(M + 18, text, 7.5);
+      right(W - M, php(rec.amountPhp), 7.5);
+      y -= 10;
+    }
+    y -= 8;
+  });
+
+  heading('4. Operations context');
   rows([
     ['Fleet units', String(r.master.fleetTotal)],
     ...Object.entries(r.master.fleetByStatus).map(([s, c]) => [`   ${label(s)}`, String(c)] as [string, string]),
     ['Units due for maintenance', String(r.master.maintenanceDue)],
-    ['Customers on file', String(r.master.customersTotal)],
-    ['Customers KYC-approved', String(r.master.customersKycApproved)],
+    ['Customers on file (KYC-approved)', `${r.master.customersTotal} (${r.master.customersKycApproved})`],
     ['Project sites', String(r.master.projectSites)],
   ]);
 
-  heading('3. Revenue leakage by root cause');
-  write(M, 'Each cause from the study\'s fishbone, what the system does about it, and what it measured this period.', 8, font, MUTED);
-  y -= 16;
-  for (const bone of LEAKAGE_BONES) {
-    const causes = r.causes.filter((c) => c.bone === bone);
-    if (!causes.length) continue;
-    need(60);
-    write(M, bone.toUpperCase(), 10, bold);
-    y -= 15;
-    for (const c of causes) {
-      const answer = wrap(c.answer, W - 2 * M - 12, 8);
-      need(16 + answer.length * 10 + c.metrics.length * 12);
-      write(M + 6, c.cause, 9, bold);
-      y -= 11;
-      for (const line of answer) {
-        write(M + 12, line, 8, font, MUTED);
-        y -= 10;
-      }
-      y -= 2;
-      for (const x of c.metrics) {
-        write(M + 12, x.label, 9);
-        right(W - M, formatMetric(x), 9, x.value === null ? font : bold, x.value === null ? MUTED : INK);
-        y -= 12;
-      }
-      y -= 6;
-    }
-    y -= 4;
-  }
-
-  heading('4. Transactions');
+  write(M, 'Transactions', 10, bold);
+  y -= 14;
   rows([
     ['Bookings created', String(r.ledger.bookings.count)],
     ...Object.entries(r.ledger.bookings.byStatus).map(([s, c]) => [`   ${label(s)}`, String(c)] as [string, string]),
@@ -186,7 +222,7 @@ export async function renderLeakageReportPdf(r: LeakageReport, brand: StatementB
 
   need(40);
   for (const line of wrap(
-    'Figures cover only this tenant and period. (*) marks a proxy metric: the cause cannot be measured directly, so the report counts the manual steps the system performed instead. Truck trips are left out when a customer or equipment filter is set.',
+    'Figures cover only this company and period; overdue invoices and machines kept past their end date are as of today. Hours are valued at the hourly rate card in force on the day (8 billable hours per day where a booking has none). Lost: earned but never billed unless someone acts. Cash delayed: billed or billable, not yet collected. Missed opportunity: capacity that earned nothing, not money owed. Truck trips are left out when a customer or equipment filter is set.',
     W - 2 * M,
     7,
   )) {

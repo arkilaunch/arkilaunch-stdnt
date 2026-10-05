@@ -368,9 +368,24 @@ describe('AzureDocumentIntelligenceAdapter', () => {
     expect(result.tables![0]!.cells[0]!.boundingRegion).toBeUndefined();
   });
 
-  it('sends the EDTR model to prebuilt-layout without queryFields', async () => {
+  it('sends the EDTR model to prebuilt-layout without queryFields, with the barcodes add-on', async () => {
     // queryFields returned the letterhead as Operator at 0.883 against the live resource.
-    expect(resolveModelRequest(EDTR_MODEL_ID)).toEqual({ kind: 'model', modelId: 'prebuilt-layout' });
+    expect(resolveModelRequest(EDTR_MODEL_ID)).toEqual({ kind: 'model', modelId: 'prebuilt-layout', features: ['barcodes'] });
+  });
+
+  it("asks for barcodes on an EDTR read and returns the sheet's QR", async () => {
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: 'succeeded',
+          analyzeResult: { pages: [{ barcodes: [{ kind: 'QRCode', value: 'ARKI-EDTR3:a:b:2026-10-05', confidence: 0.99 }, { kind: 'QRCode' }] }] },
+        }),
+      );
+    const adapter = new AzureDocumentIntelligenceAdapter({ endpoint: ENDPOINT, apiKey: 'k' });
+    const result = await adapter.analyze(EDTR_MODEL_ID, Buffer.from('x'));
+    expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toContain('features=barcodes');
+    expect(result.barcodes).toEqual([{ kind: 'QRCode', value: 'ARKI-EDTR3:a:b:2026-10-05', confidence: 0.99 }]);
   });
 });
 

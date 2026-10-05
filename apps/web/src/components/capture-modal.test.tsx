@@ -7,8 +7,11 @@ import { CaptureModal } from './capture-modal.js';
 import { ToastProvider } from './toast.js';
 
 const LOG_ID = '11111111-1111-4111-8111-111111111111';
-const RENTAL = { id: 'rental-1', code: 'BK-1', customerId: 'c', projectSiteId: 's', startDate: null, endDate: null };
-const EQUIPMENT = { id: 'eq-1', model: 'CAT 320D', serialNo: 'SN-1', equipmentTypeId: 't', availabilityStatus: 'deployed' };
+const unit = (equipmentId: string, serialNo: string) => ({ equipmentId, name: 'Excavator · CAT 320D', serialNo, onSite: true });
+const TARGET = {
+  rentalId: 'rental-1', bookingCode: 'EQR-1', status: 'active', customerName: 'Almara', siteId: 's', siteName: 'Taytay, Rizal',
+  startDate: '2026-08-01T00:00:00.000Z', endDate: null, units: [unit('eq-1', 'SN-1'), unit('eq-2', 'SN-2')],
+};
 
 function Harness() {
   const [renders, setRenders] = useState(0);
@@ -20,9 +23,6 @@ function Harness() {
       <CaptureModal
         open
         onClose={() => {}}
-        rentals={[RENTAL] as never}
-        equipmentList={[EQUIPMENT] as never}
-        rentalLabel={() => 'Almara'}
         onCaptured={() => {}}
       />
     </>
@@ -36,6 +36,7 @@ describe('CaptureModal', () => {
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const json = (v: unknown) => Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
       if (url.includes('/reference/capabilities')) return json({ ocrPipeline: false });
+      if (url.includes('/field/scan-targets')) return json({ items: [TARGET] });
       if (init?.method === 'POST') return json({ id: LOG_ID, pollUrl: `/api/v1/edtr/${LOG_ID}` });
       return json({ id: LOG_ID, status: 'reconciled', lineItems: [], fields: [], reconciliation: null });
     });
@@ -49,7 +50,9 @@ describe('CaptureModal', () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole('combobox', { name: /machine/i })).toHaveTextContent('Choose the machine');
+    // The only site is picked for them; with two machines on it, the machine is theirs to choose.
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /site and booking/i })).toHaveTextContent('Taytay, Rizal · EQR-1 · Almara'));
+    expect(screen.getByRole('combobox', { name: /machine on site/i })).toHaveTextContent('Choose the machine');
     await userEvent.click(screen.getByRole('button', { name: /day worked/i }));
     const calendar = screen.getByRole('dialog', { name: 'Choose day worked' });
     const [month, year] = calendar.querySelectorAll('select[aria-hidden]');
@@ -75,5 +78,21 @@ describe('CaptureModal', () => {
 
     fireEvent.submit(screen.getByRole('button', { name: /day worked/i }).closest('form')!);
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('picks the only machine on the only site, and offers nothing that is not on site', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      const json = (v: unknown) => Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
+      if (url.includes('/field/scan-targets')) return json({ items: [{ ...TARGET, units: [unit('eq-9', 'SN-9')] }] });
+      return json({ ocrPipeline: false });
+    }));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <CaptureModal open onClose={() => {}} onCaptured={() => {}} />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /machine on site/i })).toHaveTextContent('SN-9'));
   });
 });

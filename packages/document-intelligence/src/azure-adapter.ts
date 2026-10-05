@@ -84,6 +84,7 @@ interface AzurePage {
   height?: number;
   words?: AzureWord[];
   lines?: AzureLine[];
+  barcodes?: { kind?: string; value?: string; confidence?: number }[];
 }
 
 interface AzureWord {
@@ -155,10 +156,16 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
 
     const tables = mapTables(analyzeResult.tables, analyzeResult.pages);
     const text = mapText(analyzeResult.content, analyzeResult.pages);
+    const barcodes = (analyzeResult.pages ?? []).flatMap((page) =>
+      (page.barcodes ?? []).flatMap((b) =>
+        typeof b.value === 'string' ? [{ kind: b.kind ?? 'unknown', value: b.value, confidence: unitConfidence(b.confidence) }] : [],
+      ),
+    );
     return {
       fields: this.mapFields(request, analyzeResult),
       ...(tables.length > 0 ? { tables } : {}),
       ...(text ? { text } : {}),
+      ...(barcodes.length > 0 ? { barcodes } : {}),
     };
   }
 
@@ -167,6 +174,8 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
     if (request.kind === 'query-fields') {
       query.set('features', 'queryFields');
       query.set('queryFields', request.queryFields.join(','));
+    } else if (request.features?.length) {
+      query.set('features', request.features.join(','));
     }
 
     const res = await fetchThrottled(
