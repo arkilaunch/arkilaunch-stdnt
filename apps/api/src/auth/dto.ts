@@ -4,6 +4,7 @@ import {
   ForgotPasswordRequestSchema,
   LoginRequestSchema,
   RefreshRequestSchema,
+  ResetPasswordRequestSchema,
   UserActivateRequestSchema,
   Verify2faRequestSchema,
 } from '@arkilaunch/shared';
@@ -14,3 +15,4 @@ export class Verify2faDto extends createZodDto(Verify2faRequestSchema) {}
 export class Enroll2faConfirmDto extends createZodDto(Enroll2faConfirmRequestSchema) {}
 export class UserActivateDto extends createZodDto(UserActivateRequestSchema) {}
 export class ForgotPasswordDto extends createZodDto(ForgotPasswordRequestSchema) {}
+export class ResetPasswordDto extends createZodDto(ResetPasswordRequestSchema) {}

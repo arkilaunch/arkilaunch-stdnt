@@ -21,10 +21,13 @@ import {
 import { eq } from 'drizzle-orm';
 import { notifyStaff } from '../common/notify-customer.js';
 import { verifyTurnstile } from '../common/turnstile.js';
+import { PLATFORM_TENANT_SLUG, tenantWebOrigin } from '@arkilaunch/shared';
+import { recoveryEmail, revokeRecovery, sendRecoveryEmail } from './supabase-recovery.js';
 import type {
   CustomerSignup,
   AuthTokens,
   ForgotPasswordRequest,
+  ResetPasswordRequest,
   Enroll2faConfirmRequest,
   LoginRequest,
   RefreshRequest,
@@ -138,7 +141,7 @@ export class AuthService {
     }
   }
 
-  // Only tells the tenant's admins, who reset it; the same answer for every email, so nothing is revealed.
+  // Emails a Supabase reset link and tells the tenant's admins; the same answer for every email, so nothing is revealed.
   async forgotPassword({ email }: ForgotPasswordRequest, tenantSlug: string): Promise<{ ok: true }> {
     const normalizedEmail = email.toLowerCase();
     const user = await findUserByEmailForAuth(normalizedEmail, tenantSlug);
@@ -146,7 +149,29 @@ export class AuthService {
       await withTenantTx({ tenantId: user.tenantId, userId: user.id, role: BOOTSTRAP_ROLE }, (tx) =>
         notifyStaff(tx, user.tenantId, 'password_reset_requested', { email: normalizedEmail, user_id: user.id }),
       );
+      const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
+      // Platform admins sign in on the bare host, which sends no tenant slug.
+      const origin =
+        tenantSlug === PLATFORM_TENANT_SLUG
+          ? webOrigin.replace(/\/$/, '')
+          : tenantWebOrigin(tenantSlug, webOrigin, process.env.PLATFORM_DOMAIN);
+      await sendRecoveryEmail(normalizedEmail, `${origin}/reset-password`);
     }
+    return { ok: true };
+  }
+
+  // The Supabase token only proves inbox control; the account is still looked up on the request host's tenant.
+  async resetPassword({ accessToken, password }: ResetPasswordRequest, tenantSlug: string): Promise<{ ok: true }> {
+    const email = await recoveryEmail(accessToken);
+    const user = email ? await findUserByEmailForAuth(email, tenantSlug) : null;
+    if (!user || user.status !== 'active') throw new UnauthorizedException('invalid_reset_token');
+
+    const passwordHash = await hash(password);
+    const ctx = { tenantId: user.tenantId, userId: user.id, role: BOOTSTRAP_ROLE };
+    await withTenantTx(ctx, (tx) => tx.update(users).set({ passwordHash }).where(eq(users.id, user.id)));
+    // A session hijacked before the reset must not survive it.
+    await this.refreshTokens.revokeAllForUser(ctx, user.id);
+    await revokeRecovery(accessToken);
     return { ok: true };
   }
 

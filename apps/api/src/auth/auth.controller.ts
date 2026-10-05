@@ -4,7 +4,7 @@ import { Public } from '../common/decorators/public.decorator.js';
 import { LoginTenantSlug, StorefrontSlug } from '../common/decorators/tenant-slug.decorator.js';
 import { TURNSTILE_HEADER, TurnstileGuard } from '../common/turnstile.js';
 import { AuthService } from './auth.service.js';
-import { ForgotPasswordDto, LoginDto, RefreshDto, UserActivateDto, Verify2faDto } from './dto.js';
+import { ForgotPasswordDto, LoginDto, RefreshDto, ResetPasswordDto, UserActivateDto, Verify2faDto } from './dto.js';
 import { CustomerSignupDto } from '../customers/dto.js';
 
 // Public: no tenant context yet. 2fa/verify and activate live here because the caller holds only a
@@ -41,6 +41,14 @@ export class AuthController {
   @UseGuards(TurnstileGuard)
   forgotPassword(@Body() body: ForgotPasswordDto, @LoginTenantSlug() tenantSlug: string) {
     return this.auth.forgotPassword(body, tenantSlug);
+  }
+
+  // The emailed Supabase recovery token is the credential here; throttled since it spends an argon2 hash.
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  resetPassword(@Body() body: ResetPasswordDto, @LoginTenantSlug() tenantSlug: string) {
+    return this.auth.resetPassword(body, tenantSlug);
   }
 
   @Post('refresh')
