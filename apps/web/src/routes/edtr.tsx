@@ -87,7 +87,6 @@ function EdtrPage() {
     equipmentList,
     rentals,
     customers,
-    rentalLabel,
     sites,
     error: refError,
   } = useScanDeployments();
