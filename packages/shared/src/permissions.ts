@@ -4,6 +4,8 @@ export const PERMISSION_CODES = [
   'quote:create',
   'quote:read',
   'quote:approve',
+  // owner only: approve a negotiated discount above the customer's tier cap.
+  'quote:approve_cap',
   // edtr:read (queue, detail, scan) is staff only.
   'edtr:create',
   'edtr:read',

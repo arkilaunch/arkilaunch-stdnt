@@ -8,7 +8,8 @@ import { Button } from './button.js';
 import { Input } from './input.js';
 
 // The API derives who is speaking from the JWT, so both sides mount the same thread.
-export function NegotiationThread({ base, disabled = false }: { base: string; disabled?: boolean }) {
+// noOffer: an overdue customer may still message, but not propose a price.
+export function NegotiationThread({ base, disabled = false, noOffer = false }: { base: string; disabled?: boolean; noOffer?: boolean }) {
   const queryClient = useQueryClient();
   const queryKey = ['thread', base] as const;
   const messages = useQuery({
@@ -24,7 +25,7 @@ export function NegotiationThread({ base, disabled = false }: { base: string; di
     mutationFn: () =>
       apiPost(`${base}/messages`, {
         body: body.trim(),
-        offerPhp: offer ? Number(offer) : undefined,
+        offerPhp: offer && !noOffer ? Number(offer) : undefined,
       }),
     onSuccess: () => {
       setBody('');
@@ -93,7 +94,7 @@ export function NegotiationThread({ base, disabled = false }: { base: string; di
             />
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="w-48">
+            {!noOffer && <div className="w-48">
               <Input
                 label="Counter-offer (PHP, optional)"
                 id={`offer${fieldId}`}
@@ -104,7 +105,7 @@ export function NegotiationThread({ base, disabled = false }: { base: string; di
                 value={offer}
                 onChange={(e) => setOffer(e.target.value)}
               />
-            </div>
+            </div>}
             <Button type="submit" variant="primary" loading={send.isPending} disabled={!body.trim()}>
               Send
             </Button>

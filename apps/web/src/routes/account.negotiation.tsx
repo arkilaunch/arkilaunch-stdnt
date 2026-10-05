@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { quoteExpiresAt, type BookingDetailResponse } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
 import { useTenant } from '../lib/tenant.js';
-import { bookingsQueries, quotesQueries } from '../lib/queries.js';
+import { bookingsQueries, quotesQueries, tierQueries } from '../lib/queries.js';
 import { ApiError, apiErrorText, apiPost } from '../lib/api-client.js';
 import { formatDate, formatPeso, shortCode } from '../lib/format.js';
 import { amountDue } from './account.checkout.js';
@@ -14,6 +14,7 @@ import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
 import { Check, Clock } from 'lucide-react';
 import { NegotiationThread } from '../components/negotiation-thread.js';
+import { TierNote } from '../components/tier-cap.js';
 import { QuoteLines } from '../components/quote-lines.js';
 import { PrintFrame } from '../components/print-frame.js';
 import { useToast } from '../components/toast.js';
@@ -154,6 +155,8 @@ function NotFound() {
 
 function NegotiationPage({ bookingId }: { bookingId: string }) {
   const booking = useQuery(bookingsQueries.detail(bookingId));
+  const customerId = booking.data?.customerId ?? '';
+  const tier = useQuery({ ...tierQueries.customer(customerId), enabled: Boolean(customerId) });
 
   return (
     <div className="flex flex-col gap-5">
@@ -168,7 +171,10 @@ function NegotiationPage({ bookingId }: { bookingId: string }) {
       {booking.isError && <LoadFailed error={booking.error} onRetry={() => booking.refetch()} />}
       {booking.data && (
         <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
-          <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} />
+          <div className="flex flex-col gap-3">
+            <TierNote customerId={booking.data.customerId} audience="customer" />
+            <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
+          </div>
           <QuoteCard booking={booking.data} />
         </div>
       )}

@@ -554,6 +554,13 @@
       "when": 1790400040000,
       "tag": "0079_equipment_type_costs",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790400041000,
+      "tag": "0080_customer_tiers",
+      "breakpoints": true
     }
   ]
 }

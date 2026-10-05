@@ -25,6 +25,10 @@ export const customers = pgTable(
     cureDocuments: jsonb('cure_documents').$type<string[]>().notNull().default([]),
     rejectedAt: timestamp('rejected_at', { withTimezone: true }),
     identityChecks: jsonb('identity_checks'),
+    // Negotiation tier (bronze|silver|gold|platinum); recomputed daily and on every settled invoice.
+    tier: text('tier').notNull().default('bronze'),
+    tierScore: integer('tier_score'),
+    tierComputedAt: timestamp('tier_computed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [tenantIsolationPolicy(),

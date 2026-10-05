@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import postgres from 'postgres';
-import { events, negotiationMessages, pricingParameters, rateCards, rentals, withTenantTx } from '@arkilaunch/db';
+import { auditLogs, customers, events, negotiationMessages, recomputeCustomerTier, pricingParameters, rateCards, rentals, withTenantTx } from '@arkilaunch/db';
 import { eq, and, desc } from 'drizzle-orm';
 import type { RequestContext } from '@arkilaunch/shared';
 import { QuotesService } from '../src/quotes/quotes.service.js';
@@ -387,4 +387,51 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     const read = await quotes.get(customerCtxA, mine.id);
     expect(read.id).toBe(mine.id);
   });
+
+  // UC 005: the customer's tier caps the discount; above it, the Owner decides.
+  describe('tier negotiation cap', () => {
+    const setTier = (tier: string) =>
+      withTenantTx(ctxA, (tx) => tx.update(customers).set({ tier }).where(eq(customers.id, customerIdA)));
+    const discounted = async (pct: number) => {
+      const rentalId = await bookingFor(customerIdA);
+      const body = { customerId: customerIdA, projectSiteId: siteIdA, rentalId, discount: { type: 'percent' as const, value: pct }, items: itemsFor(rateCardIdA, equipmentTypeIdA) };
+      return quotes.create(ctxA, body);
+    };
+
+    it('applies a discount within the cap and audits the decision', async () => {
+      await setTier('silver'); // default cap 3%
+      try {
+        const quote = await discounted(2);
+        expect(quote.capStatus).toBe('within');
+        const audit = await withTenantTx(ctxA, (tx) => tx.select().from(auditLogs).where(eq(auditLogs.entityId, quote.id)));
+        expect(audit.some((row) => row.reason?.startsWith('cap ok: silver'))).toBe(true);
+        await expect(quotes.approve(ctxA, quote.id)).resolves.toMatchObject({ status: 'approved' });
+      } finally {
+        await setTier('bronze');
+      }
+    });
+
+    it('sends a discount above the cap to the Owner: admin cannot approve, Owner can', async () => {
+      await setTier('bronze'); // other specs settle invoices, which can promote the fixture customer
+      const quote = await discounted(5); // bronze cap 0%
+      expect(quote.capStatus).toBe('pending_owner');
+      await expect(quotes.approve(ctxA, quote.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+      const ruled = await quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, true);
+      expect(ruled).toMatchObject({ status: 'approved', capStatus: 'owner_approved' });
+    });
+
+    it('an Owner rejection keeps the quote from going out', async () => {
+      await setTier('bronze');
+      const quote = await discounted(5);
+      await quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, false);
+      await expect(quotes.approve(ctxA, quote.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+      await expect(quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, true)).rejects.toMatchObject({ response: { error: 'quote_not_pending_owner' } });
+    });
+
+    it('a new customer with no settled invoice computes to bronze', async () => {
+      const fresh = await withTenantTx(ctxA, (tx) => recomputeCustomerTier(tx, ctxA.tenantId, otherCustomerIdA));
+      expect(fresh.tier).toBe('bronze');
+    });
+  });
 });
+
