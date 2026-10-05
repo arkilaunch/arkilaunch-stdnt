@@ -101,19 +101,19 @@ describe('Truck request list and route', () => {
     await expect(trucks.route(otherCustomer, ids[0]!)).rejects.toMatchObject({ response: { error: 'truck_request_not_found' } });
   });
 
-  it('parses the OSRM route into km, minutes and a [lng, lat] line', () => {
+  it('parses the OSRM route into km, truck minutes and a [lng, lat] line', () => {
     const route = parseOsrm({
       code: 'Ok',
       routes: [{ distance: 12_345, duration: 1_830, geometry: { coordinates: [[121.08, 14.57], [121.05, 14.56], ['x', 1], [121.02, 14.55]] } }],
     });
-    expect(route).toEqual({ km: 12.3, minutes: 31, line: [[121.08, 14.57], [121.05, 14.56], [121.02, 14.55]], truckSafe: false });
+    expect(route).toEqual({ km: 12.3, minutes: 44, line: [[121.08, 14.57], [121.05, 14.56], [121.02, 14.55]], truckSafe: false });
     expect(() => parseOsrm({ code: 'NoRoute' })).toThrow();
   });
 
   it('parses ORS HGV GeoJSON and flags the truck route', () => {
     expect(parseOrs({ features: [{ geometry: { coordinates: [[121, 14], [122, 15]] },
       properties: { summary: { distance: 12000, duration: 1800 }, segments: [] } }] }))
-      .toMatchObject({ km: 12, minutes: 30, line: [[121, 14], [122, 15]], truckSafe: true });
+      .toMatchObject({ km: 12, minutes: 35, line: [[121, 14], [122, 15]], truckSafe: true });
   });
 
   it('falls back to a flagged OSRM car route when ORS fails', async () => {

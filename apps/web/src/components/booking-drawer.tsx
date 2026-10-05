@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { BookingDetailResponse, BookingService, TruckRequestResponse } from '@arkilaunch/shared';
-import { tripSteps, type TripStep } from './truck-trip.js';
+import { arrivalText, tripSteps, type TripStep } from './truck-trip.js';
 import { banHits } from '@arkilaunch/shared';
 import { bookingsQueries, truckBanRulesQuery, trucksQueries } from '../lib/queries.js';
 import { apiErrorText } from '../lib/api-client.js';
@@ -251,8 +251,7 @@ function TruckOverview({ truck }: { truck: TruckRequestResponse }) {
             )}
           </Row>
           <Row label="Pickup">{formatDateTime(truck.scheduledFor)}</Row>
-          <Row label="Est. arrival">{truck.etaAt ? formatDateTime(truck.etaAt)
-            : truck.routeMinutes !== null ? `~ pickup + ${truck.routeMinutes} min drive` : '--'}</Row>
+          <Row label="Est. arrival">{arrivalText({ ...truck, routeCities: cities }, rules.data ?? []) ?? '--'}</Row>
           <Row label="Distance">
             <span className="font-mono tabular-nums">
               {truck.confirmedKm !== null ? `${truck.confirmedKm} km confirmed` : `~${truck.estimatedKm} km estimated`}

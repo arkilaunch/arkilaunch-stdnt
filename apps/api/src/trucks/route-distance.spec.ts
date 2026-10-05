@@ -8,7 +8,7 @@ describe('truck routing providers', () => {
   it('reads HGV GeoJSON and its duration', () => {
     expect(parseOrs({ features: [{ geometry: { coordinates: [[121, 14], [122, 15]] },
       properties: { summary: { distance: 5000, duration: 600 }, segments: [] } }] }))
-      .toMatchObject({ km: 5, minutes: 10, truckSafe: true });
+      .toMatchObject({ km: 5, minutes: 12, truckSafe: true }); // 10 router min x 1.15
   });
 
   it('flags an OSRM fallback when HGV routing fails', async () => {

@@ -27,9 +27,20 @@ describe('tripSteps', () => {
 });
 
 describe('trip arrival display', () => {
-  it('shows drive time before dispatch and the saved ETA after', () => {
-    expect(tripArrivalText({ routeMinutes: 45, etaAt: null })).toBe('Est. arrival ~ pickup + 45 min drive');
-    expect(tripArrivalText({ routeMinutes: 45, etaAt: '2026-09-29T02:00:00Z' })).toContain('Est. arrival');
-    expect(tripArrivalText({ routeMinutes: null, etaAt: null })).toBeNull();
+  const trip = { scheduledFor: '2026-10-05T00:00:00Z', routeCities: null }; // Mon 8:00 AM Manila
+
+  it('shows a clock-time range from the booked pickup before dispatch', () => {
+    // QA case: 70 truck min at the 8 AM rush becomes 91-114 min.
+    expect(tripArrivalText({ ...trip, routeMinutes: 70, etaAt: null })).toBe(
+      'Est. arrival Mon, Oct 5, 9:31 AM – 9:54 AM (91–114 min truck drive)',
+    );
+    const offPeak = tripArrivalText({ ...trip, scheduledFor: '2026-10-05T04:00:00Z', routeMinutes: 70, etaAt: null });
+    expect(offPeak).toContain('(70–88 min truck drive)');
+  });
+
+  it('shows the saved ETA after dispatch, and nothing without a route', () => {
+    expect(tripArrivalText({ ...trip, routeMinutes: 45, etaAt: '2026-09-29T02:00:00Z' })).toContain('Est. arrival');
+    expect(tripArrivalText({ ...trip, routeMinutes: 45, etaAt: '2026-09-29T02:00:00Z' })).not.toContain('truck drive');
+    expect(tripArrivalText({ ...trip, routeMinutes: null, etaAt: null })).toBeNull();
   });
 });

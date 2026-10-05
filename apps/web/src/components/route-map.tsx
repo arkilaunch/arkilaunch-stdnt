@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { MapPinned } from 'lucide-react';
 import type { PaddingOptions } from 'maplibre-gl';
-import type { TruckRoute } from '@arkilaunch/shared';
+import { TRUCK_TIME, type TruckRoute } from '@arkilaunch/shared';
 import type { LatLng } from './pin-map.js';
 
 // Needs WebGL; without it RouteMap falls back to the printed coordinates.
@@ -52,11 +52,15 @@ export function hasWebGL(): boolean {
   return webgl;
 }
 
+const duration = (minutes: number) => {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h > 0 ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`;
+};
+
+// route.minutes is already truck time; the range's slow end allows for traffic on the day.
 export function formatDrive(route: Pick<TruckRoute, 'km' | 'minutes'>): string {
-  const h = Math.floor(route.minutes / 60);
-  const m = route.minutes % 60;
-  const time = h > 0 ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`;
-  return `~${route.km} km · ~${time} drive`;
+  return `~${route.km} km · ${duration(route.minutes)}–${duration(Math.round(route.minutes * TRUCK_TIME.spread))} truck drive`;
 }
 
 export const pinned = (p: LatLng | null) => (p ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'not pinned');
