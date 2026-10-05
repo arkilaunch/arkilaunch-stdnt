@@ -2,7 +2,7 @@ import { createRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { appLayoutRoute } from './_app.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { manilaDate, type LeakageMetric, type LeakageReport, type LeakageReportQuery, type StatementPdfResponse } from '@arkilaunch/shared';
+import { manilaDate, type LeakageFinding, type LeakageKpi, type LeakageReport, type LeakageReportQuery, type StatementPdfResponse } from '@arkilaunch/shared';
 import { leakageParams, referenceQueries, reportQueries } from '../lib/queries.js';
 import { apiErrorText, apiGet } from '../lib/api-client.js';
 import { Button } from '../components/button.js';
@@ -13,31 +13,83 @@ import { SegmentedControl } from '../components/segmented-control.js';
 import { useToast } from '../components/toast.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
-import { PAGE_SIZE, Pagination } from '../components/pagination.js';
-import { Table, type TableColumn } from '../components/table.js';
+import { Surface } from '../components/surface.js';
 import { StatTile } from '../components/stat-tile.js';
-import { formatHours, formatPeso } from '../lib/format.js';
+import { formatPeso } from '../lib/format.js';
 import { FileDown } from 'lucide-react';
 
-function formatMetric(x: LeakageMetric): string {
-  if (x.value === null) return 'No data in period';
-  const v = x.value;
-  const body =
-    x.unit === 'php' ? formatPeso(v)
-    : x.unit === 'pct' ? `${v.toFixed(1)}%`
-    : x.unit === 'hours' ? formatHours(v)
-    : x.unit === 'days' ? `${v.toFixed(1)} days`
-    : x.unit === 'km' ? `${v.toLocaleString('en-PH')} km`
-    : v.toLocaleString('en-PH');
-  return x.proxy ? `${body} *` : body;
-}
+const formatKpi = (k: LeakageKpi) =>
+  k.value === null ? null : k.unit === 'php' ? formatPeso(k.value) : k.unit === 'pct' ? `${k.value.toFixed(1)}%` : `${k.value.toFixed(1)} days`;
 
-type LeakageRow = { key: string; bone: string; cause: string; metric: LeakageMetric };
-const LEAKAGE_COLUMNS: TableColumn<LeakageRow>[] = [
-  { header: 'Cause', kind: 'text', cell: (row) => <span><span className="text-text-muted">{row.bone} · </span>{row.cause}</span> },
-  { header: 'Measured', kind: 'text', cell: (row) => row.metric.label },
-  { header: 'Value', kind: 'number', cell: (row) => formatMetric(row.metric) },
-];
+const KIND_LABEL: Record<LeakageFinding['kind'], string> = {
+  lost: 'Lost unless acted on',
+  delayed: 'Cash delayed',
+  opportunity: 'Missed opportunity',
+};
+const SEVERITY_CLASS: Record<LeakageFinding['severity'], string> = {
+  high: 'border-error/40 bg-error/10 text-error',
+  medium: 'border-warning/40 bg-warning/10 text-text',
+  low: 'border-border bg-surface-sunk text-text-muted',
+};
+
+// QA 35: one leak, readable at a glance (what, how much, how urgent), with the why, the fix and the evidence one tap away.
+function FindingCard({ f, index }: { f: LeakageFinding; index: number }) {
+  const none = f.amountPhp <= 0 && f.count === 0;
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-heading-md text-text">
+            {index}. {f.title}
+          </h3>
+          <p className="text-xs text-text-muted">
+            {KIND_LABEL[f.kind]} · {f.count} item{f.count === 1 ? '' : 's'}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!none && (
+            <span className={['rounded-sm border px-2 py-0.5 text-xs font-semibold uppercase', SEVERITY_CLASS[f.severity]].join(' ')}>
+              {f.severity} priority
+            </span>
+          )}
+          <span className="font-mono text-lg font-semibold tabular-nums text-text">{formatPeso(f.amountPhp)}</span>
+        </div>
+      </div>
+      {none ? (
+        <p className="text-sm text-text-muted">None this period.</p>
+      ) : (
+        <>
+          <p className="text-sm text-text">
+            <strong>What to do:</strong> {f.whatToDo}
+          </p>
+          <details className="text-sm">
+            <summary className="cursor-pointer font-medium text-accent">Why it matters, and the records behind it</summary>
+            <div className="mt-2 flex flex-col gap-2">
+              <p className="text-text">{f.whyItMatters}</p>
+              <p className="text-xs text-text-muted">How measured: {f.howMeasured}</p>
+              <ul className="flex flex-col divide-y divide-border rounded-sm border border-border">
+                {f.records.map((rec, i) => (
+                  <li key={i} className="flex flex-wrap justify-between gap-x-4 gap-y-1 px-3 py-2">
+                    <span className="min-w-0">
+                      <span className="text-text">{rec.label}</span>
+                      <span className="block text-xs text-text-muted">{rec.detail}</span>
+                    </span>
+                    <span className="font-mono tabular-nums text-text">{formatPeso(rec.amountPhp)}</span>
+                  </li>
+                ))}
+              </ul>
+              {f.count > f.records.length && (
+                <p className="text-xs text-text-muted">
+                  Showing the {f.records.length} largest of {f.count}.
+                </p>
+              )}
+            </div>
+          </details>
+        </>
+      )}
+    </Surface>
+  );
+}
 
 type ExportFormat = 'pdf' | 'xlsx' | 'csv';
 const FORMATS: { id: ExportFormat; label: string }[] = [
@@ -46,16 +98,19 @@ const FORMATS: { id: ExportFormat; label: string }[] = [
   { id: 'csv', label: 'CSV' },
 ];
 
-// One flat table for spreadsheets: raw numbers, so the cells stay summable.
-function exportRows(r: LeakageReport): (string | number)[][] {
+// Spreadsheets: raw numbers so cells stay summable; the summary, then one row per leak, then its records.
+export function exportRows(r: LeakageReport): (string | number)[][] {
   return [
-    ['Category', 'Cause', 'Measured', 'Value', 'Unit', 'Proxy'],
-    ['Summary', 'Invoiced', 'Invoiced', r.summary.invoiced, 'php', ''],
-    ['Summary', 'Collected', 'Collected', r.summary.collected, 'php', ''],
-    ['Summary', 'Collection rate', 'Collection rate', r.summary.collectionRatePct ?? '', 'pct', ''],
-    ['Summary', 'Verified by reconciliation', 'Verified revenue', r.summary.verifiedRevenue, 'php', ''],
-    ['Summary', 'Outstanding', 'Potential leakage', r.summary.outstanding, 'php', ''],
-    ...r.causes.flatMap((c) => c.metrics.map((m) => [c.bone, c.cause, m.label, m.value ?? '', m.unit, m.proxy ? 'yes' : ''])),
+    ['Section', 'Item', 'Kind', 'Priority', 'Amount (PHP)', 'Count', 'Detail'],
+    ['Summary', 'At risk this period', '', '', r.summary.atRisk.total, '', ''],
+    ['Summary', 'Lost unless acted on', 'lost', '', r.summary.atRisk.lost, '', ''],
+    ['Summary', 'Cash delayed', 'delayed', '', r.summary.atRisk.delayed, '', ''],
+    ['Summary', 'Missed opportunity', 'opportunity', '', r.summary.atRisk.opportunity, '', ''],
+    ['Summary', 'Invoiced', '', '', r.summary.invoiced, '', ''],
+    ['Summary', 'Collected', '', '', r.summary.collected, '', ''],
+    ...r.kpis.map((k) => ['Key figure', k.label, '', '', k.value ?? '', '', `${k.unit}; ${k.meaning}`]),
+    ...r.findings.map((f) => ['Leak', f.title, f.kind, f.severity, f.amountPhp, f.count, `What to do: ${f.whatToDo} Why: ${f.whyItMatters}`]),
+    ...r.findings.flatMap((f) => f.records.map((rec) => ['Record', f.title, f.kind, '', rec.amountPhp, '', `${rec.label}: ${rec.detail}`])),
   ];
 }
 
@@ -77,7 +132,6 @@ function ReportsPage() {
   const toast = useToast();
   const [query, setQuery] = useState<LeakageReportQuery>({ from: monthStart(), to: today() });
   const [exporting, setExporting] = useState(false);
-  const [offset, setOffset] = useState(0);
   const [busy, setBusy] = useState(false);
   const [format, setFormat] = useState<ExportFormat>('pdf');
   const queryClient = useQueryClient();
@@ -85,7 +139,6 @@ function ReportsPage() {
   const types = useQuery(referenceQueries.equipmentTypes());
   const set = (patch: Partial<LeakageReportQuery>) => {
     setQuery((q) => ({ ...q, ...patch }));
-    setOffset(0);
   };
 
   const customerName = customers.data?.find((c) => c.id === query.customerId)?.companyName ?? 'All customers';
@@ -123,7 +176,7 @@ function ReportsPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Reports"
-        description="Money you have earned but not yet collected, and what is holding it up."
+        description="Where money is leaking, what it costs, and what to do about it first."
         actions={
           <Button variant="secondary" onClick={() => setExporting(true)}>
             <FileDown className="size-4" aria-hidden /> Export
@@ -153,30 +206,54 @@ function ReportsPage() {
         emptyDescription="Pick a wider date range or clear the filters."
         isEmpty={() => false}
         render={(r) => (
-          <div className="flex flex-col gap-3">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <StatTile label="Collection rate" value={r.summary.collectionRatePct === null ? null : `${r.summary.collectionRatePct.toFixed(1)}%`} />
-              <StatTile label="Verified by reconciliation" value={formatPeso(r.summary.verifiedRevenue)} />
-              <StatTile label="Outstanding" value={formatPeso(r.summary.outstanding)} hint="Potential leakage" />
-            </div>
-            {(() => {
-              const rows = r.causes.flatMap((c) =>
-                c.metrics.map((metric) => ({ key: `${c.cause}:${metric.label}`, bone: c.bone, cause: c.cause, metric })),
-              );
-              return (
-                <Table
-                  header={{
-                    title: 'Revenue leakage',
-                    count: rows.length,
-                    pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={rows.length} onOffsetChange={setOffset} noun="causes" />,
-                  }}
-                  columns={LEAKAGE_COLUMNS}
-                  rows={rows.slice(offset, offset + PAGE_SIZE)}
-                  rowKey={(row) => row.key}
-                />
-              );
-            })()}
-            <p className="text-sm text-text-muted">* Proxy metric: the cause cannot be measured directly.</p>
+          <div className="flex flex-col gap-5">
+            <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
+              <p className="text-sm font-medium text-text-muted">At risk this period</p>
+              <p className="font-mono text-display-md font-semibold tabular-nums text-text">{formatPeso(r.summary.atRisk.total)}</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <StatTile label="Lost unless acted on" value={formatPeso(r.summary.atRisk.lost)} hint="Earned, but never billed unless someone acts." />
+                <StatTile label="Cash delayed" value={formatPeso(r.summary.atRisk.delayed)} hint="Billed or billable, not yet collected." />
+                <StatTile label="Missed opportunity" value={formatPeso(r.summary.atRisk.opportunity)} hint="Machines that earned nothing; nobody owes it." />
+              </div>
+            </Surface>
+            <section aria-labelledby="do-first" className="flex flex-col gap-2">
+              <h2 id="do-first" className="text-heading-md text-text">Do these first</h2>
+              {r.summary.topActions.length ? (
+                <ol className="flex flex-col gap-2">
+                  {r.summary.topActions.map((a, i) => (
+                    <li key={a.title} className="flex flex-col gap-1 rounded-md border border-border bg-surface p-3 text-sm">
+                      <span className="flex flex-wrap justify-between gap-2 font-semibold text-text">
+                        <span>
+                          {i + 1}. {a.title}
+                        </span>
+                        <span className="font-mono tabular-nums">{formatPeso(a.amountPhp)}</span>
+                      </span>
+                      <span className="text-text-muted">{a.whatToDo}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-sm text-text-muted">No leaks found in this period. Keep recording every day and billing approved hours promptly.</p>
+              )}
+            </section>
+            <section aria-labelledby="key-figures" className="flex flex-col gap-2">
+              <h2 id="key-figures" className="text-heading-md text-text">Key figures, and what they mean</h2>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {r.kpis.map((k) => (
+                  <StatTile key={k.label} label={k.label} value={formatKpi(k) ?? 'No data'} hint={k.meaning} />
+                ))}
+              </div>
+            </section>
+            <section aria-labelledby="leaks" className="flex flex-col gap-3">
+              <h2 id="leaks" className="text-heading-md text-text">Every leak, by what it costs</h2>
+              <p className="text-sm text-text-muted">
+                Worked out from your own bookings, time records, invoices and payments. Money lost or owed comes first, missed
+                opportunity last. Open a leak for why it matters and the records behind it.
+              </p>
+              {r.findings.map((f, i) => (
+                <FindingCard key={f.key} f={f} index={i + 1} />
+              ))}
+            </section>
           </div>
         )}
       />

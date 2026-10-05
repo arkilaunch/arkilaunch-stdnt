@@ -4,7 +4,7 @@
 **Project:** ArkiLaunch
 **Date:** 2026-10-06
 **Version:** 0.1
-**Status:** `In progress` (branch `feat/qa-batch-29-36`)
+**Status:** `Applied` (branch `feat/qa-batch-29-36`)
 **Trigger doc:** Owner QA feedback items 29–36 (2026-10-05)
 **Docs touched by this record:** [sdd-arkilaunch.md](sdd-arkilaunch.md) §3 and the trucks contract (updated per section as each lands)
 
@@ -129,3 +129,31 @@
 - Anything a layout can't find falls back to the query-field value, as before.
 - Company documents are unchanged: the BIR COR 2303 already reads `registered_address`, and the SEC certificate rightly has none.
 - The read remains a typing aid: staff still confirm every field under RFC-2, and confidence comes from the words' own spans.
+
+## 8. Revenue leakage report rebuilt around pesos (QA 35)
+
+**Before:** the report mapped the tenant's records onto the study's 15-cause fishbone. Most rows were counts ("Invoices generated", "Records consolidated") that described what the system does rather than what the business is losing, and nothing said what to do next.
+
+**After (fishbone removed, per the owner's choice):** `buildLeakageReport` returns ranked **findings**, each with:
+- `amountPhp`, a `kind` (lost unless acted on / cash delayed / missed opportunity) and a `severity` (high at ≥5% of invoiced, medium at ≥1%; missed opportunity is never high)
+- `whyItMatters`, `whatToDo`, `howMeasured`, and the five largest records
+
+Hours are valued at the unit's or category's hourly rate card in force that day, at the booking's hours per day or 8 h (`WORKDAY_HOURS`).
+
+| Leak | Measured as | Kind |
+|---|---|---|
+| Approved hours never billed | approved reconciliations with no invoice line and no deposit deduction × rate | lost |
+| Days on site with no field log | each day a unit was out on a booking with no log × hours/day × rate | lost |
+| Machines kept past the end date | active assignments past their end with no approved extension, days × 8 h × rate (as of today) | lost |
+| Invoices past due | issued invoices past their due date, aged 1–30 / 31–60 / 61–90 / 90+ (as of today) | delayed |
+| Cash promised, not recorded | pending cash payments over 3 days old on unpaid invoices | delayed |
+| Hours stuck in review or dispute | logs in review or with a discrepancy × rate | delayed |
+| Unreadable time sheets | hard-failed logs × 8 h × rate | delayed |
+| Discounts given | coupons redeemed + trucks agreed below their routed price | lost |
+| Machines that earned nothing | zero-utilization units not in maintenance, days × 8 h × rate (dropped under a customer filter) | opportunity |
+
+- **Ranking.** Money lost or owed is sorted by pesos, and missed opportunity always comes last.
+- **Summary.** It leads with **₱ at risk** split by kind, then **Do these first** (the three biggest leaks' next steps), then **key figures with their meaning**: collection rate, average days to pay, fleet utilization, outstanding.
+- **Page.** The Reports page shows the at-risk hero, the three actions and the key figures, then one card per leak (amount, priority badge, what to do), with the why and the records one tap away.
+- **PDF.** The narrative runs in this order: what is at risk → key figures → every leak with why/what/how/records → operations context and transactions → a plain-words glossary.
+- **Excel/CSV.** The summary, key figures, one row per leak, then its records, all as raw numbers.
