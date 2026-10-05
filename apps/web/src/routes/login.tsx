@@ -129,13 +129,13 @@ function LoginPage() {
         </h1>
         {forgot === 'sent' ? (
           <p role="status" className="mb-6 text-sm text-text-muted">
-            If that email has an account, the rental team has been told. They will send you a link to
-            set a new password.
+            If that email has an account, we've sent it a link to set a new password. Check your inbox
+            and spam folder.
           </p>
         ) : (
           <form onSubmit={onForgot} aria-labelledby="forgot-heading">
             <p className="mb-6 text-sm text-text-muted">
-              Enter your account email. The rental team will send you a link to set a new password.
+              Enter your account email and we'll send you a link to set a new password.
             </p>
             <Input
               label="Email address"
@@ -152,7 +152,7 @@ function LoginPage() {
               <Turnstile key={captchaKey} onToken={setCaptcha} />
             </div>
             <Button type="submit" loading={submitting} disabled={submitting || waitingOnCaptcha} className="mt-4 w-full">
-              Request a reset
+              Send reset link
             </Button>
           </form>
         )}
