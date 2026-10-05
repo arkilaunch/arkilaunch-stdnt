@@ -33,7 +33,8 @@ for (const width of [360, 375, 390, 393, 430, 1440]) {
     expect(list.ok()).toBe(true);
     const bookingId = (await list.json()).items[0].id as string;
     // Exercise rejection at the real API boundary, before any checkout preconditions.
-    for (const method of ['gcash', 'paymaya', 'dob', 'card']) {
+    // Once per run, not per width: the API throttles at 120 requests a minute.
+    for (const method of width === 360 ? ['gcash', 'paymaya', 'dob', 'card'] : []) {
       const rejected = await page.request.post(`/api/v1/bookings/${bookingId}/checkout`, { headers, data: { method } });
       expect(rejected.status()).toBe(400);
     }

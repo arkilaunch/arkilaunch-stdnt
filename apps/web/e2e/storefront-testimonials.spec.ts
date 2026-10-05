@@ -98,7 +98,8 @@ test('landing and signed-out cart work at each required width', async ({ page },
       await expect(cart).toBeVisible();
       expect((await cart.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await cart.click();
-      await expect.soft(page).toHaveURL(/\/account\/cart$/);
+      // The cart lives in the customer shell: a guest signs in first and returns to it.
+      await expect.soft(page).toHaveURL(/\/login\?redirect=%2Faccount%2Fcart$/);
       await noOverflow(page);
     }
   }

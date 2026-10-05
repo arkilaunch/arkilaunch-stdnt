@@ -8,7 +8,7 @@ test.describe('customer journey', () => {
     await signInAsCustomer(page);
     await page.goto('/equipment');
 
-    const cart = page.getByRole('link', { name: /^Cart/ });
+    const cart = page.getByRole('link', { name: /^Cart,/ });
     const bell = page.getByRole('button', { name: /^Notifications/ });
     await expect(bell).toBeVisible();
     const [cartBox, bellBox] = [await cart.boundingBox(), await bell.boundingBox()];
