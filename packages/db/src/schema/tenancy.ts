@@ -109,6 +109,10 @@ export const users = pgTable(
     firstName: text('first_name'),
     middleName: text('middle_name'),
     lastName: text('last_name'),
+    // Signup contact details are distinct from the staff-confirmed legal name.
+    contactFirstName: text('contact_first_name'),
+    contactLastName: text('contact_last_name'),
+    jobTitle: text('job_title'),
     // avatarKey is a private-bucket object key, never a public URL.
     phone: text('phone'),
     address: text('address'),

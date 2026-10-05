@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Button } from './button.js';
 import { describeUploadProblem, prepareUpload, type PrepareUploadOptions } from '../lib/image-compression.js';
-import { analyzeDocument, loadDocumentScanner, steadyHold, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
+import { analyzeDocument, analyzePickedDocument, loadDocumentScanner, steadyHold, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
 
 // getUserMedia is missing on insecure origins and rejects without permission or a camera: always keep the file-input fallback.
 // KYC enables local edge detection; field sheets keep the lightweight manual frame.
@@ -238,7 +238,7 @@ export function CaptureField({
     }
   }
 
-  async function hand(picked: File) {
+  async function hand(picked: File, pickedFile = true) {
     setProblem(null);
     if (scanner) {
       setPreparing(true);
@@ -263,7 +263,7 @@ export function CaptureField({
             sample.height = Math.round(source.height * sampleScale);
             const sampleContext = sample.getContext('2d', { willReadFrequently: true });
             sampleContext?.drawImage(source, 0, 0, sample.width, sample.height);
-            const found = sampleContext && analyzeDocument(cv, sampleContext.getImageData(0, 0, sample.width, sample.height));
+            const found = sampleContext && (pickedFile ? analyzePickedDocument : analyzeDocument)(cv, sampleContext.getImageData(0, 0, sample.width, sample.height));
             if (found) {
               detected = found.corners.map(({ x, y }) => ({ x: x / sampleScale, y: y / sampleScale })) as ScanCorners;
               clear = found.quality === 'ready';
@@ -294,7 +294,7 @@ export function CaptureField({
     if (cameraRef.current) cameraRef.current.value = '';
     if (fileRef.current) fileRef.current.value = '';
     if (!picked) return;
-    await hand(picked);
+    await hand(picked, event.target === fileRef.current);
   }
 
   // Full sensor resolution; prepareUpload downscales afterwards.
@@ -317,7 +317,7 @@ export function CaptureField({
     }
     stopCamera();
     const file = new File([blob], `document-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    await hand(file);
+    await hand(file, false);
   }
   captureRef.current = (detected) => {
     const video = videoRef.current;

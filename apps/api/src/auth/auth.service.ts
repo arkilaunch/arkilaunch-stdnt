@@ -123,10 +123,10 @@ export class AuthService {
   }
 
   // 'email_taken' does reveal an address has an account, as every signup does; login stays non-enumerating.
-  async registerCustomer({ email, password }: CustomerSignup, tenantSlug: string): Promise<AuthTokens> {
+  async registerCustomer({ email, password, ...contact }: CustomerSignup, tenantSlug: string): Promise<AuthTokens> {
     const passwordHash = await hash(password);
     try {
-      const created = await registerCustomerUser(tenantSlug, email.toLowerCase(), passwordHash);
+      const created = await registerCustomerUser(tenantSlug, email.toLowerCase(), passwordHash, contact);
       return this.issueTokens(created.tenantId, created.userId, 'customer');
     } catch (err) {
       if (err instanceof EmailTakenError) throw new ConflictException({ error: 'email_taken' });

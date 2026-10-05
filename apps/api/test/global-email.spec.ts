@@ -27,11 +27,11 @@ describe('one account per email', () => {
 
   it('refuses the same Gmail, however it is written, in every signup path', async () => {
     const id = randomUUID().slice(0, 8);
-    await auth.registerCustomer({ email: `juan.dc${id}@gmail.com`, password: 'a long enough password', acceptedTerms: true }, 'test-tenant-a');
+    await auth.registerCustomer({ email: `juan.dc${id}@gmail.com`, password: 'a long enough password', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true }, 'test-tenant-a');
     const alias = `JuanDC${id}+rentals@googlemail.com`;
 
     await expect(
-      auth.registerCustomer({ email: alias, password: 'a long enough password', acceptedTerms: true }, 'test-tenant-b'),
+      auth.registerCustomer({ email: alias, password: 'a long enough password', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true }, 'test-tenant-b'),
     ).rejects.toBeInstanceOf(ConflictException);
 
     await expect(

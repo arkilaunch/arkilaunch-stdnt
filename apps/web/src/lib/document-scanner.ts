@@ -54,7 +54,7 @@ function orderCorners(points: ScanPoint[]): ScanCorners {
   ];
 }
 
-function qualityOf(image: ImageData): ScanResult['quality'] {
+function qualityOf(image: ImageData, pickedFile = false): ScanResult['quality'] {
   const { width, height, data } = image;
   let brightness = 0;
   let strongEdges = 0;
@@ -69,8 +69,37 @@ function qualityOf(image: ImageData): ScanResult['quality'] {
     }
   }
   if (!count || brightness / count < 40) return 'dark';
-  if (brightness / count > 248) return 'glare';
+  if (!pickedFile && brightness / count > 248) return 'glare';
   return strongEdges / count < 0.002 ? 'blurry' : 'ready';
+}
+
+export function analyzePickedDocument(cv: Cv, image: ImageData): ScanResult | null {
+  const found = analyzeDocument(cv, image);
+  if (found) return { ...found, quality: qualityOf(image, true) };
+  return fullFrameDocument(image);
+}
+
+export function fullFrameDocument(image: ImageData): ScanResult | null {
+  const { width, height, data } = image;
+  const ratio = Math.max(width, height) / Math.min(width, height);
+  // Picked scans only: ID-1 and A4/Letter (either orientation), with a small
+  // aspect tolerance. Require distributed readable contrast, not a blank scan,
+  // a tiny card in a large scene or dense random noise. Camera rules stay stricter.
+  if (Math.min(width, height) < 100 || ratio < 1.24 || ratio > 1.70 || qualityOf(image, true) !== 'ready') return null;
+  let minX = width, maxX = 0, minY = height, maxY = 0, edges = 0, samples = 0;
+  for (let y = 2; y < height - 2; y += 2) {
+    for (let x = 2; x < width - 2; x += 2) {
+      const i = (y * width + x) * 4;
+      const light = (data[i]! + data[i + 1]! + data[i + 2]!) / 3;
+      samples++;
+      if (Math.abs(light - (data[i + 4]! + data[i + 5]! + data[i + 6]!) / 3) > 12) {
+        edges++; minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  if (edges / samples > 0.18 || maxX - minX < width * 0.55 || maxY - minY < height * 0.35) return null;
+  return { corners: [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }], width, height, quality: 'ready' };
 }
 
 export function analyzeDocument(cv: Cv, image: ImageData): ScanResult | null {

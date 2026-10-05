@@ -118,14 +118,19 @@ describe('Customer onboarding', () => {
     const tokens = await auth.registerCustomer({
       email,
       password: 'correct horse battery',
-      acceptedTerms: true,
+      firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
     }, 'test-tenant-a');
     const ctx = decodeCtx(tokens.accessToken);
     expect(ctx).toMatchObject({ tenantId, role: 'customer' });
+    const signupDb = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
+    try {
+      const [contact] = await signupDb`select contact_first_name, contact_last_name, phone, job_title, first_name, middle_name, last_name from users where id = ${ctx.userId}`;
+      expect(contact).toMatchObject({ contact_first_name: 'Ana', contact_last_name: 'Peña', phone: '+639171234567', job_title: 'Engineer', first_name: null, middle_name: null, last_name: null });
+    } finally { await signupDb.end(); }
 
     // The same email cannot sign up twice, in any tenant.
     await expect(
-      auth.registerCustomer({ email, password: 'another long password', acceptedTerms: true }, 'test-tenant-a'),
+      auth.registerCustomer({ email, password: 'another long password', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true }, 'test-tenant-a'),
     ).rejects.toBeInstanceOf(ConflictException);
 
     const details = {
@@ -255,7 +260,7 @@ describe('Customer onboarding', () => {
     const tokens = await auth.registerCustomer({
       email: `signup-${randomUUID().slice(0, 8)}@onboarding.test`,
       password: 'correct horse battery',
-      acceptedTerms: true,
+      firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
     }, 'test-tenant-a');
     const ctx = decodeCtx(tokens.accessToken);
     const mine = await companies.createCompany(ctx, {
@@ -376,7 +381,7 @@ describe('Customer onboarding', () => {
       const tokens = await auth.registerCustomer({
         email: `forecast-${randomUUID().slice(0, 8)}@onboarding.test`,
         password: 'correct horse battery',
-        acceptedTerms: true,
+        firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
       }, 'test-tenant-a');
       ownerCtx = decodeCtx(tokens.accessToken);
     });
@@ -464,6 +469,24 @@ describe('Customer onboarding', () => {
   // Scan-first onboarding: the scan only fills the form in. It must not
   // write a document row or decide anything -- staff still review.
   describe('company document scan', () => {
+    it('parses raw licence names and multiline address over mistaken query fields', async () => {
+      const content = 'Last Name, First Name, Middle Name\nSAN JUAN, ANA MARIA REYES\nAddress\n12 SAMPLE STREET\nBARANGAY UNO\nQUEZON CITY\nLicense No.\nN01-23-456789';
+      let offset = 0;
+      const lines = content.split('\n').map((value) => {
+        const line = { offset, length: value.length, page: 1, polygon: [] };
+        offset += value.length + 1;
+        return line;
+      });
+      const service = new CustomersService(events, new FixtureDocumentIntelligenceAdapter({
+        fields: { first_name: { value: 'REYES', confidence: 0.99 }, middle_name: { value: 'ANA', confidence: 0.99 }, last_name: { value: 'SAN', confidence: 0.99 }, address: { value: '', confidence: 0.99 } },
+        text: { content, lines, words: lines.map((line) => ({ offset: line.offset, length: line.length, confidence: 0.94 })) },
+      }));
+      const scan = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('licence-fixture'), 'drivers_license');
+      expect(scan.suggestions).toMatchObject({ firstName: 'ANA MARIA', middleName: 'REYES', lastName: 'SAN JUAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
+      expect(scan.confidence).toBe(0.94);
+      const national = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('same-text-other-id'), 'philsys');
+      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '' });
+    });
     const scanner = (fields: Record<string, { value: string; confidence: number }>) =>
       new CustomersService(events, new FixtureDocumentIntelligenceAdapter({ fields }));
     const bytes = Buffer.from('not-really-an-image');
@@ -654,7 +677,7 @@ describe('Customer onboarding', () => {
       const tokens = await auth.registerCustomer({
         email: `staff-review-${randomUUID().slice(0, 8)}@onboarding.test`,
         password: 'correct horse battery',
-        acceptedTerms: true,
+        firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
       }, 'test-tenant-a');
       reviewCtx = decodeCtx(tokens.accessToken);
     });
@@ -701,7 +724,7 @@ describe('Customer onboarding', () => {
       decodeCtx(
         (
           await auth.registerCustomer(
-            { email: `one-id-${randomUUID().slice(0, 8)}@onboarding.test`, password: 'correct horse battery', acceptedTerms: true },
+            { email: `one-id-${randomUUID().slice(0, 8)}@onboarding.test`, password: 'correct horse battery', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true },
             'test-tenant-a',
           )
         ).accessToken,
@@ -805,7 +828,7 @@ describe('Customer onboarding', () => {
       };
       const first = await apply(owner, `First ${randomUUID().slice(0, 6)} Corp`);
       await companies.addDocument(owner, first, 'government_id', `storage://fixtures/${randomUUID()}.jpg`, bytes, {
-        idNumber: '9876-5432-1098-7654',
+        idNumber: `${randomTin()}${randomTin().slice(0, 7)}`,
       });
       // The ID step is skipped: createCompany copies the login's ID on file.
       const second = await apply(owner, `Second ${randomUUID().slice(0, 6)} Corp`);
