@@ -82,6 +82,8 @@ function describeForStaff(type: string, p: Record<string, unknown>): Described |
   const ref = typeof p.booking_code === 'string' ? p.booking_code : 'a booking';
   const trip = typeof p.truck_request_id === 'string';
   switch (type) {
+    case 'support_ticket_created':
+      return { title: 'New support ticket', body: `Ticket #${String(p.ticket_code ?? '')} was submitted.`, action: { label: 'Open tickets', to: '/app/tickets', params: {} } };
     case 'booking_requested':
       return { title: 'New booking', body: `${ref} was requested.`, action: staffBooking(p) };
     case 'statement_ready':
@@ -331,6 +333,7 @@ export function describeNotification(type: string, payload: unknown, area: FeedA
           },
         };
   }
+  if (type === 'support_ticket_status_changed') return { title: 'Support ticket updated', body: `Ticket #${String(p.ticket_code ?? '')}: ${formatStatus(String(p.status ?? ''))}.`, action: { label: 'Open help center', to: '/account/help', params: {} } };
   if (typeof p.truck_request_id === 'string') {
     const code = typeof p.booking_code === 'string' ? p.booking_code : 'your truck request';
     const offer = typeof p.offer_php === 'number' ? ` with an offer of ${formatPeso(p.offer_php)}` : '';

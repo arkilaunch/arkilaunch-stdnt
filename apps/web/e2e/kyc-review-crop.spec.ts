@@ -62,7 +62,7 @@ let idRead = false;
 
 async function signUpCustomer(page: Page) {
   const res = await page.request.post('/api/v1/auth/register-customer', {
-    data: { email: customerEmail, password: customerPassword, acceptedTerms: true },
+    data: { firstName: 'Juan', lastName: 'Dela Cruz', mobileNumber: '+639170001234', jobTitle: 'Engineer', email: customerEmail, password: customerPassword, acceptedTerms: true },
     headers: TENANT_HEADERS,
   });
   expect(res.ok(), `register-customer answered ${res.status()}`).toBe(true);

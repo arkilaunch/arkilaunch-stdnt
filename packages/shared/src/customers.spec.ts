@@ -20,7 +20,7 @@ describe('findSameCompany', () => {
 
 describe('CustomerSignupSchema', () => {
   it('requires a 12-character password', () => {
-    const base = { email: 'a@b.test', acceptedTerms: true };
+    const base = { firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', email: 'a@b.test', acceptedTerms: true };
     expect(CustomerSignupSchema.safeParse({ ...base, password: 'a'.repeat(11) }).success).toBe(false);
     expect(CustomerSignupSchema.safeParse({ ...base, password: 'a'.repeat(12) }).success).toBe(true);
   });

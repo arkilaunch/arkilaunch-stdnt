@@ -6,7 +6,11 @@ import { UserPasswordSchema } from './users.js';
 
 // The tenant is the request host's; nothing here names a tenant.
 export const CustomerSignupSchema = z.object({
+  firstName: z.string().trim().min(1, 'Enter your first name').max(80),
+  lastName: z.string().trim().min(1, 'Enter your last name').max(80),
+  mobileNumber: PhMobileSchema,
   email: z.string().trim().email().max(254),
+  jobTitle: z.string().trim().min(1, 'Enter your job title or position').max(80),
   password: UserPasswordSchema,
   acceptedTerms: z.literal(true),
 });

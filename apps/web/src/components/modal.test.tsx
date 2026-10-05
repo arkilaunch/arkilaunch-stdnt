@@ -5,6 +5,25 @@ import { Modal } from './modal.js';
 import { ConfirmDialog } from './confirm-dialog.js';
 
 describe('Modal', () => {
+  it('can open on the container while trapping focus and restoring it on close', async () => {
+    const trigger = document.createElement('button');
+    document.body.append(trigger);
+    trigger.focus();
+    const { unmount } = render(
+      <Modal open autoFocusFirst={false} onClose={() => undefined} title="Configure rental" footer={<button>Save</button>}>
+        <input aria-label="Rental start" type="datetime-local" />
+      </Modal>,
+    );
+    expect(screen.getByRole('dialog')).toHaveFocus();
+    expect(screen.getByLabelText('Rental start')).not.toHaveFocus();
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
   it('exposes itself as a dialog named by its title', () => {
     render(
       <Modal open onClose={() => undefined} title="Record a field log">

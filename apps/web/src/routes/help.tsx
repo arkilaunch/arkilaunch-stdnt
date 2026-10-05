@@ -3,7 +3,7 @@ import { Mail, MessageCircle, Phone, Send } from 'lucide-react';
 import { publicLayoutRoute } from './_public.js';
 import { useTenant } from '../lib/tenant.js';
 import { Surface } from '../components/surface.js';
-import { EmptyState } from '../components/empty-state.js';
+
 import { messengerHrefs } from '../components/messenger-links.js';
 import { currentHost } from '../lib/host.js';
 
@@ -62,10 +62,7 @@ function HelpPage() {
         </ul>
       </section>
 
-      <EmptyState
-        title="There are no support articles yet"
-        description="Nothing in the schema holds a help article or a support ticket, and no endpoint serves one, so this page has no knowledge base to search and no form that would reach anybody. Use a channel above and a person will answer."
-      />
+      <Link to="/login" search={{ redirect: '/account/help' }} className="inline-flex min-h-11 items-center text-accent underline">Sign in to submit a ticket</Link>
     </div>
   );
 }

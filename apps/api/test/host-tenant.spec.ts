@@ -56,7 +56,7 @@ describe('host-resolved storefront tenant', () => {
     await expect(catalog.getTenant(slug)).rejects.toThrow(NotFoundException);
     await expect(catalog.listEquipment(slug, { limit: 10, offset: 0 })).resolves.toEqual({ items: [] });
     await expect(
-      auth.registerCustomer({ email: `c-${slug}@host-tenant.test`, password: 'a long enough password', acceptedTerms: true }, slug),
+      auth.registerCustomer({ email: `c-${slug}@host-tenant.test`, password: 'a long enough password', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true }, slug),
     ).rejects.toThrow(NotFoundException);
   });
 });

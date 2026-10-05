@@ -6,8 +6,17 @@ export interface CheckoutSession {
 }
 
 // No card/bank data is stored. amountPhp is PHP; the adapter converts to centavos at the boundary.
-export const CHECKOUT_METHODS = ['gcash', 'paymaya', 'qrph', 'dob', 'card'] as const;
+// Only QR Ph is activated on the account. Re-enable channels by extending this list.
+export const CHECKOUT_METHODS = ['qrph'] as const;
 export type CheckoutMethod = (typeof CHECKOUT_METHODS)[number];
+// Labels for activated channels; inactive entries never render or validate.
+export const CHECKOUT_METHOD_INFO: Record<string, { title: string; description: string }> = {
+  qrph: { title: 'QR Ph', description: 'Scan the QR code with any banking or e-wallet app that supports QR Ph.' },
+  gcash: { title: 'GCash', description: 'Confirm with GCash on the secure payment page.' },
+  paymaya: { title: 'Maya', description: 'Confirm with Maya on the secure payment page.' },
+  dob: { title: 'Online banking', description: 'Pay through your bank on the secure payment page.' },
+  card: { title: 'Credit or debit card', description: 'Enter card details only on the secure payment page.' },
+};
 
 export interface CheckoutOptions {
   label?: string;

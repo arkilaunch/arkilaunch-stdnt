@@ -152,10 +152,11 @@ export async function registerCustomerUser(
   tenantSlug: string,
   email: string,
   passwordHash: string,
+  contact: { firstName: string; lastName: string; mobileNumber: string; jobTitle: string },
 ): Promise<{ tenantId: string; userId: string }> {
   try {
     const rows = await db.execute<{ tenant_id: string; user_id: string }>(
-      sql`select * from customer_register(${tenantSlug}, ${email}, ${passwordHash})`,
+      sql`select * from customer_register(${tenantSlug}, ${email}, ${passwordHash}, ${contact.firstName}, ${contact.lastName}, ${contact.mobileNumber}, ${contact.jobTitle})`,
     );
     const row = rows[0];
     if (!row) throw new Error('customer_register returned no row');

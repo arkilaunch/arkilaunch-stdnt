@@ -47,7 +47,7 @@ test.describe('cart', () => {
     await page.goto('/account/cart');
     await openSidebar(page);
     await expect(sidebarLink(page, 'Home')).not.toHaveAttribute('aria-current', 'page');
-    await expect(sidebarLink(page, 'My bookings')).toHaveAttribute('aria-current', 'page');
+    await expect(sidebarLink(page, 'Cart')).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('link', { name: /^cart,/i })).toBeVisible();
   });
 });

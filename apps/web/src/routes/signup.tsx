@@ -1,5 +1,6 @@
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
+import { CustomerSignupSchema } from '@arkilaunch/shared';
 import { authLayoutRoute } from './_auth.js';
 import { registerCustomer } from '../lib/auth-client.js';
 import { Button } from '../components/button.js';
@@ -23,6 +24,11 @@ export function signupError(code: string): string {
 function SignupPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [jobTitle, setJobTitle] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [accepted, setAccepted] = useState(false);
@@ -37,10 +43,17 @@ function SignupPage() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (mismatch || !accepted || waitingOnCaptcha) return;
+    const parsed = CustomerSignupSchema.safeParse({ firstName, lastName, mobileNumber, email, jobTitle, password, acceptedTerms: true });
+    if (!parsed.success) {
+      setFieldErrors(Object.fromEntries(parsed.error.issues.map((issue) => [String(issue.path[0]), issue.message])));
+      return;
+    }
+    if (confirm !== password || !confirm) { setFieldErrors({ confirm: 'Confirm your password.' }); return; }
+    setFieldErrors({});
     setBusy(true);
     setError(null);
     try {
-      await registerCustomer({ email, password, acceptedTerms: true }, captcha);
+      await registerCustomer(parsed.data, captcha);
       await navigate({ to: '/account/companies/new', replace: true });
     } catch (err) {
       setError(signupError(err instanceof Error ? err.message : ''));
@@ -54,21 +67,26 @@ function SignupPage() {
 
   return (
     <Surface radius="lg" elevation="md" className="w-full max-w-md p-8">
-      <form onSubmit={onSubmit} aria-labelledby="signup-heading" className="flex flex-col gap-4">
+      <form noValidate onSubmit={onSubmit} aria-labelledby="signup-heading" className="flex flex-col gap-4">
         <div>
           <h1 id="signup-heading" className="text-heading-lg text-text">
             Create account
           </h1>
           <p className="text-sm text-text-muted">Rent equipment for your projects. Company details come next.</p>
         </div>
-        <Input label="Email address" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        <Input label="First name" autoComplete="given-name" required maxLength={80} value={firstName} onChange={(e) => setFirstName(e.target.value)} error={fieldErrors.firstName} />
+        <Input label="Last name" autoComplete="family-name" required maxLength={80} value={lastName} onChange={(e) => setLastName(e.target.value)} error={fieldErrors.lastName} />
+        <Input label="Mobile number" type="tel" autoComplete="tel" required value={mobileNumber} onChange={(e) => { setMobileNumber(e.target.value); setFieldErrors((errors) => ({ ...errors, mobileNumber: '' })); }} error={fieldErrors.mobileNumber} hint="e.g. +63 917 123 4567" />
+        <Input label="Email address" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} error={fieldErrors.email} />
+        <Input label="Job title/position" autoComplete="organization-title" required maxLength={80} value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} error={fieldErrors.jobTitle} />
         <Input
           label="Password"
           type="password"
           autoComplete="new-password"
           required
           minLength={MIN_PASSWORD}
-          hint={`At least ${MIN_PASSWORD} characters.`}
+          hint={`Minimum ${MIN_PASSWORD} characters required.`}
+          error={fieldErrors.password}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
@@ -79,7 +97,7 @@ function SignupPage() {
           required
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          {...(mismatch ? { error: 'Passwords do not match.' } : {})}
+          error={mismatch ? 'Passwords do not match.' : fieldErrors.confirm}
         />
         <label className="flex items-start gap-2 text-sm text-text">
           <input

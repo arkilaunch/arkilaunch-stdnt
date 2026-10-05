@@ -122,6 +122,7 @@ export const catalogQueries = {
     queryOptions({
       queryKey: ['catalog', 'testimonials'] as const,
       queryFn: () => apiGet<CatalogTestimonialListResponse>('/catalog/testimonials'),
+      staleTime: 60_000,
     }),
 };
 

@@ -55,6 +55,8 @@ export function followCheckout(url: string | null): boolean {
 export function apiErrorText(error: unknown): string {
   if (error instanceof ApiError) {
     const code = error.message;
+    if (code === 'payment_provider_rejected') return 'The payment provider could not start QR Ph. Please try again or contact support.';
+    if (code === 'payment_provider_unavailable') return 'The payment provider is unavailable. Please try again later.';
     if (code === 'online_payment_unavailable') {
       return 'This rental company does not take online payment yet. Choose cash at the office instead.';
     }
