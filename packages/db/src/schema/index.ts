@@ -8,3 +8,4 @@ export * from './pricing.js';
 export * from './events.js';
 export * from './testimonials.js';
 export * from './trucks.js';
+export * from './support.js';

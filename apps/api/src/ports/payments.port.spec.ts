@@ -21,7 +21,7 @@ describe('PayMongoAdapter', () => {
     const session = await new PayMongoAdapter('sk_test_x').createCheckoutSession(1234.56, 'inv-1', {
       label: 'Rental deposit',
       bookingCode: 'EQR-2026-0001',
-      methods: ['gcash'],
+      methods: ['qrph'],
       transferTo: 'org_child',
       successUrl: 'https://almara.example.com/account/checkout/success?invoice=inv-1',
       cancelUrl: 'https://almara.example.com/account/checkout/failed?invoice=inv-1',
@@ -33,7 +33,7 @@ describe('PayMongoAdapter', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe(`Basic ${Buffer.from('sk_test_x:').toString('base64')}`);
     const attrs = JSON.parse(init.body as string).data.attributes;
     expect(attrs.line_items[0].amount).toBe(123456);
-    expect(attrs.payment_method_types).toEqual(['gcash']);
+    expect(attrs.payment_method_types).toEqual(['qrph']);
     expect(attrs.split_payment).toEqual({ transfer_to: 'org_child' });
     expect(attrs.metadata).toEqual({ invoice_id: 'inv-1', booking_code: 'EQR-2026-0001' });
     expect(attrs.line_items[0].name).toBe('EQR-2026-0001 · Rental deposit');
@@ -49,6 +49,14 @@ describe('PayMongoAdapter', () => {
     });
     stubFetch({ data: { attributes: { payments: [] } } });
     expect(await new PayMongoAdapter('sk_test_x').getCheckoutSession('cs_1')).toEqual({ paid: false });
+  });
+
+  it('maps provider rejection to a safe typed error without returning its payload', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('secret provider details', { status: 400 })));
+    const adapter = new PayMongoAdapter('sk_test_x');
+    const error = await adapter.createCheckoutSession(100, 'inv-1', { successUrl: 'https://example.test/success', cancelUrl: 'https://example.test/cancel' }).catch((err: unknown) => err);
+    expect(error).toMatchObject({ response: { error: 'payment_provider_rejected' } });
+    expect(JSON.stringify(error)).not.toContain('secret provider details');
   });
 
   it('refuses to boot with payments on but a secret missing', () => {

@@ -198,8 +198,8 @@ describe('Customer journey', () => {
     // hours bill weekly against the deposit. A retry reuses it.
     const [stored] = await withTenantTx(adminCtx, (tx) => tx.select().from(quotations).where(eq(quotations.id, second.id)));
     const upfrontLines = [deposit, Number(stored?.mobilizationPhp ?? 0), Number(stored?.demobilizationPhp ?? 0)].filter((n) => n > 0);
-    const checkout = await payments.checkout(customerCtx, booking.id, { method: 'gcash' });
-    const retry = await payments.checkout(customerCtx, booking.id, { method: 'gcash' });
+    const checkout = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
+    const retry = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
     expect(retry.invoiceId).toBe(checkout.invoiceId);
     const [invoice] = await withTenantTx(adminCtx, (tx) => tx.select().from(invoices).where(eq(invoices.id, checkout.invoiceId)));
     expect(invoice?.invoiceType).toBe('booking');

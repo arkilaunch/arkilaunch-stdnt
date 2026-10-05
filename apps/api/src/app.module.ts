@@ -19,6 +19,7 @@ import { BillingModule } from './billing/billing.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { CustomersModule } from './customers/customers.module.js';
+import { SupportModule } from './support/support.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 import { TenantContextGuard } from './common/guards/tenant-context.guard.js';
 import { PermissionsGuard } from './common/guards/permissions.guard.js';
@@ -47,6 +48,7 @@ import { PermissionsGuard } from './common/guards/permissions.guard.js';
     NotificationsModule,
     CatalogModule,
     CustomersModule,
+    SupportModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
