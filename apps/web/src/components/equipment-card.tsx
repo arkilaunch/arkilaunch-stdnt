@@ -8,6 +8,7 @@ export interface EquipmentCardProps {
   model: string;
   make: string;
   rateValue?: number | null;
+  showPrice?: boolean;
   unavailable?: boolean;
   rentLabel?: string;
   onRent?: () => void;
@@ -20,6 +21,7 @@ export function EquipmentCard({
   model,
   make,
   rateValue = null,
+  showPrice = true,
   unavailable = false,
   rentLabel = 'Rent',
   onRent,
@@ -57,11 +59,11 @@ export function EquipmentCard({
             )}
           </h3>
           <p className="text-sm text-text-muted">{make}</p>
-          <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
+          {showPrice && <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
             {rateValue != null
               ? `${formatPeso(rateValue)} / hour`
               : 'Price on request'}
-          </p>
+          </p>}
         </div>
         <Button size="default" variant="primary" className="mt-auto self-start" disabled={unavailable} onClick={onRent}>
           {rentLabel}
