@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { platformUrl } from './sign-in.js';
 
 const almara = { slug: 'almara', name: 'Almara Construction', logoUrl: null, tagline: 'Construction equipment rentals', city: 'Quezon City', province: null, primaryColor: '#f2a100', categories: ['Excavator', 'Bulldozer'] };
-const other = { ...almara, slug: 'sample-rental', name: 'Sample Rental Company' };
+const other = { ...almara, slug: 'sample-rental-and-heavy-equipment-company', name: 'Sample Rental Company', tagline: 'Supercalifragilisticheavyequipmentrentalsandlogistics' };
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/**', async (route) => {
@@ -23,7 +23,7 @@ test('SaaS landing remains usable across responsive widths', async ({ page }, te
     await page.goto(platformUrl('/'));
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Run your equipment rental business in one place.');
     await expect(page.getByText('Pilot partner', { exact: true })).toBeVisible();
-    const image = page.getByRole('img', { name: /ArkiLaunch equipment inventory/ });
+    const image = page.getByRole('img', { name: /ArkiLaunch dashboard/ });
     await expect.poll(() => image.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
     await expect(page).toHaveTitle('ArkiLaunch | Equipment rental management software');
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
