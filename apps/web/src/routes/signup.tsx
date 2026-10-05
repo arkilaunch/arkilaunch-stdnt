@@ -14,6 +14,7 @@ const MIN_PASSWORD = 12;
 export function signupError(code: string): string {
   const captcha = captchaError(code);
   if (captcha) return captcha;
+  if (code === 'email_disabled') return "This email's access was removed. Ask the company to restore it.";
   if (code === 'email_taken') return 'That email already has an account. Log in instead.';
   if (code === 'signup_unavailable') return 'Sign-up is not open on this site yet.';
   return 'We could not create your account. Check the details and try again.';

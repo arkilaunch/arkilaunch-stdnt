@@ -183,6 +183,14 @@ export class UsersService {
         throw new UnprocessableEntityException({ error: 'role_has_no_site_assignments' });
       }
 
+      // Checked before the insert: a failed insert aborts the tx, so the status can't be read after it.
+      const [removed] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.email, input.email.toLowerCase()), eq(users.status, 'disabled')))
+        .limit(1);
+      if (removed) throw new ConflictException({ error: 'email_disabled' });
+
       // Nobody, including the inviting admin, knows a working password; only activate() sets one.
       const placeholderHash = await hash(randomBytes(32).toString('hex'));
 
