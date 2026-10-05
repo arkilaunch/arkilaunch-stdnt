@@ -19,7 +19,7 @@ describe('support ownership, staff workflow and RLS', () => {
   const subject = `Support QA ${randomUUID()}`;
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT!;
-    if (new URL(url).hostname !== 'localhost' || new URL(url).port !== '5444') throw new Error('Support tests require assigned local DB :5444');
+    if (!['localhost', '127.0.0.1'].includes(new URL(url).hostname)) throw new Error('Support tests require a local database');
     direct = postgres(url, { max: 1 });
     const accounts = await direct`select u.id,u.tenant_id,r.name role,u.email from users u join roles r on r.id=u.role_id where u.email in ('customer@test-tenant-a.test','customer@test-tenant-b.test','admin@test-tenant-a.test','admin@test-tenant-b.test')`;
     const ctx = (email: string) => { const user = accounts.find((row) => row.email === email)!; return { tenantId: user.tenant_id, userId: user.id, role: user.role } as RequestContext; };
