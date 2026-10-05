@@ -7,6 +7,10 @@ import { Surface } from './surface.js';
 import { Button } from './button.js';
 import { Input } from './input.js';
 
+export function negotiationMessageId(base: string): string {
+  return `message${base.replace(/\W/g, '-')}`;
+}
+
 // The API derives who is speaking from the JWT, so both sides mount the same thread.
 // noOffer: an overdue customer may still message, but not propose a price.
 export function NegotiationThread({ base, disabled = false, noOffer = false }: { base: string; disabled?: boolean; noOffer?: boolean }) {
@@ -80,11 +84,11 @@ export function NegotiationThread({ base, disabled = false, noOffer = false }: {
       {!disabled && (
         <form onSubmit={submit} className="flex flex-col gap-3 border-t border-border px-4 py-4">
           <div className="flex flex-col gap-1">
-            <label htmlFor={`message${fieldId}`} className="text-sm font-medium text-text">
+            <label htmlFor={negotiationMessageId(base)} className="text-sm font-medium text-text">
               Message
             </label>
             <textarea
-              id={`message${fieldId}`}
+              id={negotiationMessageId(base)}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               maxLength={2000}
