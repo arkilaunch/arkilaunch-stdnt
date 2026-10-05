@@ -155,6 +155,18 @@ async function approvedDays(tx: Tx, where: SQL | undefined) {
   });
 }
 
+// A maintenance window touching the Manila days [from, to]; an open `to` means from that day on.
+function blockedIn(from: string | undefined, to: string | undefined) {
+  const start = from ? new Date(`${from}T00:00:00+08:00`).toISOString() : null;
+  const end = to ? new Date(new Date(`${to}T00:00:00+08:00`).getTime() + 86_400_000).toISOString() : null;
+  return sql`exists (
+    select 1 from maintenance_windows mw
+    where mw.tenant_id = ${equipment.tenantId} and mw.equipment_id = ${equipment.id}
+      ${start ? sql`and mw.ends_at > ${start}::timestamptz` : sql``}
+      ${end ? sql`and mw.starts_at < ${end}::timestamptz` : sql``}
+  )`;
+}
+
 @Injectable()
 export class FleetService {
   constructor(private readonly events: EventsService) {}
@@ -179,6 +191,7 @@ export class FleetService {
           : undefined,
         query.missing === 'photo' ? and(isNull(equipment.photoUri), isNull(equipment.photoCredit)) : undefined,
         query.missing === 'price' ? sql`not ${priced}` : undefined,
+        query.blockedFrom || query.blockedTo ? blockedIn(query.blockedFrom, query.blockedTo) : undefined,
       );
       const where = and(base, query.typeId ? eq(equipment.equipmentTypeId, query.typeId) : undefined);
       const rows = await tx
@@ -197,8 +210,24 @@ export class FleetService {
         .where(base)
         .groupBy(equipmentTypes.id, equipmentTypes.name)
         .orderBy(asc(equipmentTypes.name));
+      // The current or next blocked window per listed unit (one query for the page).
+      const windows = rows.length
+        ? await tx
+            .select()
+            .from(maintenanceWindows)
+            .where(and(inArray(maintenanceWindows.equipmentId, rows.map((r) => r.unit.id)), gt(maintenanceWindows.endsAt, new Date())))
+            .orderBy(asc(maintenanceWindows.startsAt))
+        : [];
+      const nextBlock = new Map<string, { startsAt: Date; endsAt: Date; notes: string | null }>();
+      for (const w of windows) {
+        if (!nextBlock.has(w.equipmentId)) nextBlock.set(w.equipmentId, { startsAt: w.startsAt, endsAt: w.endsAt, notes: w.notes });
+      }
       return {
-        items: rows.map(({ unit, typeName }) => ({ ...toEquipmentResponse(unit), equipmentTypeName: typeName })),
+        items: rows.map(({ unit, typeName }) => ({
+          ...toEquipmentResponse(unit),
+          equipmentTypeName: typeName,
+          nextBlock: nextBlock.get(unit.id) ?? null,
+        })),
         total,
         categories,
       };
