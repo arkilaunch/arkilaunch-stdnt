@@ -18,7 +18,7 @@ describe('picked full-frame scans', () => {
   it.each([[640, 404, 0, false], [640, 404, 0.01, false], [640, 404, 0, true], [404, 640, 0, false], [454, 640, 0, true]] as const)('accepts a populated %sx%s scan with %s margin', (width, height, margin, white) => {
     expect(fullFrameDocument(syntheticScan(width, height, margin, white))).toMatchObject({ quality: 'ready', corners: [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: width, y: height }, { x: 0, y: height }] });
   });
-  it('keeps blank and tiny-content images in manual review', () => {
+  it('keeps blank, tiny-content and dense-noise images in manual review', () => {
     expect(fullFrameDocument({ width: 640, height: 404, data: new Uint8ClampedArray(640 * 404 * 4).fill(255) } as ImageData)).toBeNull();
     const image = syntheticScan(640, 404);
     for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) if (x < 280 || x > 360 || y < 180 || y > 240) {
@@ -26,6 +26,12 @@ describe('picked full-frame scans', () => {
       image.data[i] = image.data[i + 1] = image.data[i + 2] = 245;
     }
     expect(fullFrameDocument(image)).toBeNull();
+    const noise = syntheticScan(640, 404);
+    for (let y = 0; y < noise.height; y++) for (let x = 0; x < noise.width; x++) {
+      const i = (y * noise.width + x) * 4;
+      noise.data[i] = noise.data[i + 1] = noise.data[i + 2] = x % 2 ? 255 : 0;
+    }
+    expect(fullFrameDocument(noise)).toBeNull();
   });
 });
 
