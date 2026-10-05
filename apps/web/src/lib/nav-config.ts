@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   TriangleAlert,
   Store,
+  Award,
   ExternalLink,
   CalendarCheck,
   TrendingDown,
@@ -133,6 +134,7 @@ export const APP_NAV: NavGroup[] = [
     items: [
       { label: 'Business settings', to: '/app/settings', icon: Settings, roles: ['admin'] },
       { label: 'Storefront branding', to: '/app/branding', icon: Store },
+      { label: 'Customer tiers', to: '/app/tiers', icon: Award },
       { label: 'People', to: '/app/users', icon: Users, roles: ['admin'] },
     ],
   },

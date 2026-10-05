@@ -13,6 +13,7 @@ import type {
   SiteForecastResponse,
   AreaForecastResponse,
   CustomerSiteResponse,
+  CustomerTierResponse,
   BookingListResponse,
   BookingStatus,
   CatalogEquipment,
@@ -282,6 +283,7 @@ export interface QuoteDetail {
   id: string;
   revision: number;
   status: string;
+  capStatus?: string | null;
   dieselPrice: number;
   dieselPriceDate: string;
   priceStale: boolean;
@@ -401,6 +403,14 @@ export function saveParams(row: PricingParametersRow | null | undefined, patch: 
     ...patch,
   });
 }
+
+export const tierQueries = {
+  customer: (customerId: string) =>
+    queryOptions({
+      queryKey: ['customer', customerId, 'tier'] as const,
+      queryFn: () => apiGet<CustomerTierResponse>(`/customers/${customerId}/tier`),
+    }),
+};
 
 export const usersQueries = {
   me: () =>

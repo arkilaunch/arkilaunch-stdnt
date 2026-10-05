@@ -8,6 +8,7 @@ import {
   RateCardCreateRequestSchema,
   RateCardListQuerySchema,
   RateCardSupersedeRequestSchema,
+  TierPolicySchema,
 } from '@arkilaunch/shared';
 
 export class DieselPriceEntryDto extends createZodDto(DieselPriceEntrySchema) {}
@@ -18,3 +19,5 @@ export class RateCardSupersedeDto extends createZodDto(RateCardSupersedeRequestS
 export class RateCardListQueryDto extends createZodDto(RateCardListQuerySchema) {}
 export class BillingSettingsDto extends createZodDto(BillingSettingsSchema) {}
 export class EquipmentTypeCostsInputDto extends createZodDto(EquipmentTypeCostsInputSchema) {}
+
+export class TierPolicyDto extends createZodDto(TierPolicySchema) {}

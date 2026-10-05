@@ -268,6 +268,24 @@ module "hold_expiry_job" {
   depends_on                   = [module.acr_identity]
 }
 
+module "tier_recompute_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-tier-recompute"
+  entrypoint                   = "tier-recompute"
+  cron_expression              = var.tier_recompute_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
 output "api_fqdn" {
   value = module.api_app.fqdn
 }

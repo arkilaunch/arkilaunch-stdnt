@@ -38,6 +38,13 @@ export class CustomersController {
     private readonly storage: StorageService,
   ) {}
 
+  // The company's negotiation tier and discount cap; a customer sees only their own.
+  @Get('customers/:id/tier')
+  @RequirePermission('quote:read')
+  tier(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.customers.tier(req.ctx, id);
+  }
+
   @Get('me/companies')
   @RequirePermission('booking:read')
   listCompanies(@Req() req: CtxRequest) {

@@ -55,6 +55,7 @@ import { appBillingWeeklyRoute } from './routes/app.billing.weekly.js';
 import { appUsersRoute } from './routes/app.users.js';
 import { appSettingsRoute } from './routes/app.settings.js';
 import { appBrandingRoute } from './routes/app.branding.js';
+import { appTiersRoute } from './routes/app.tiers.js';
 import { appTrucksRoute } from './routes/app.trucks.js';
 import { quotesRoute } from './routes/quotes.js';
 import { quotePrintRoute } from './routes/quote-print.js';
@@ -149,6 +150,7 @@ export const routeTree = rootRoute.addChildren([
     appUsersRoute,
     appSettingsRoute,
     appBrandingRoute,
+    appTiersRoute,
     appTrucksRoute,
     quotesRoute,
     quotePrintRoute,

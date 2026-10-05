@@ -125,6 +125,18 @@ function describeForStaff(type: string, p: Record<string, unknown>): Described |
         action: staffBooking(p, 'Open conversation', 'negotiation'),
       };
     }
+    case 'quote_cap_review':
+      return {
+        title: 'Discount needs the Owner',
+        body: `A revised quote on ${ref} gives more than the customer's tier allows. The Owner must approve or reject it.`,
+        action: staffBooking(p),
+      };
+    case 'quote_cap_rejected':
+      return {
+        title: 'Discount rejected',
+        body: `The Owner rejected the over-cap discount on ${ref}. Revise the quote within the tier cap.`,
+        action: staffBooking(p),
+      };
     case 'quote_accepted':
     case 'quote_declined':
       return {

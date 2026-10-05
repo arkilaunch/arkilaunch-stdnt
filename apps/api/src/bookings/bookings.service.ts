@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, like, lt, ne, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, ne, or, type SQL } from 'drizzle-orm';
 import {
   type Tx,
   addresses,
@@ -11,6 +11,7 @@ import {
   equipmentAssignments,
   getBillingSettings,
   invoices,
+  customerTier,
   negotiationMessages,
   payments,
   projectSites,
@@ -477,6 +478,7 @@ export class BookingsService {
               demobilizationPhp: Number(quotation.demobilizationPhp),
               createdAt: quotation.createdAt,
               inNegotiation: await inNegotiation(tx, quotation),
+              capStatus: quotation.capStatus as 'within' | 'pending_owner' | 'owner_approved' | 'owner_rejected' | null,
             }
           : null,
         invoices: invoiceRows.map((invoice) => ({
@@ -574,12 +576,39 @@ export class BookingsService {
     });
   }
 
+  // Tier rules on a customer price offer: none while overdue, one per quote revision.
+  private async requireOfferAllowed(tx: Tx, ctx: RequestContext, rental: { id: string; customerId: string }) {
+    if ((await customerTier(tx, ctx.tenantId, rental.customerId)).hasOverdue) {
+      throw new ConflictException({ error: 'negotiation_unavailable_overdue' });
+    }
+    const [latest] = await tx
+      .select({ createdAt: quotations.createdAt })
+      .from(quotations)
+      .where(eq(quotations.rentalId, rental.id))
+      .orderBy(desc(quotations.createdAt))
+      .limit(1);
+    const [pending] = await tx
+      .select({ id: negotiationMessages.id })
+      .from(negotiationMessages)
+      .where(
+        and(
+          eq(negotiationMessages.rentalId, rental.id),
+          eq(negotiationMessages.authorRole, 'customer'),
+          isNotNull(negotiationMessages.offerPhp),
+          ...(latest ? [gt(negotiationMessages.createdAt, latest.createdAt)] : []),
+        ),
+      )
+      .limit(1);
+    if (pending) throw new ConflictException({ error: 'offer_pending_staff_reply' });
+  }
+
   // authorRole comes from the JWT role, never from the body.
   async postMessage(ctx: RequestContext, id: string, body: NegotiationMessageCreate) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       if (rental.status === 'cancelled') throw new ConflictException({ error: 'booking_cancelled' });
       const authorRole = ctx.role === 'customer' ? 'customer' : 'staff';
+      if (authorRole === 'customer' && body.offerPhp !== undefined) await this.requireOfferAllowed(tx, ctx, rental);
       const [row] = await tx
         .insert(negotiationMessages)
         .values({

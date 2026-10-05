@@ -121,6 +121,8 @@ export const quotations = pgTable(
     parentQuotationId: uuid('parent_quotation_id').references((): AnyPgColumn => quotations.id),
     discountType: text('discount_type').notNull().default('none'), // none|percent|fixed
     discountValue: numeric('discount_value', { precision: 12, scale: 2 }).notNull().default('0'),
+    // Tier-cap check on the discount: within|pending_owner|owner_approved|owner_rejected; null when no discount.
+    capStatus: text('cap_status'),
     subtotalPhp: numeric('subtotal_php', { precision: 14, scale: 2 }),
     totalPhp: numeric('total_php', { precision: 14, scale: 2 }),
     printableUrl: text('printable_url'),

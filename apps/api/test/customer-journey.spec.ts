@@ -3,6 +3,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
 import { and, eq } from 'drizzle-orm';
 import {
+  customers,
   equipmentAssignments,
   invoiceLineItems,
   invoices,
@@ -181,11 +182,16 @@ describe('Customer journey', () => {
     // In negotiation now: the revised quote supersedes the first, which can
     // no longer be taken.
     const undiscounted = await quotes.preview(adminCtx, quoteBody(booking.id, booking.customerId));
+    // Pin the tier: earlier payments in this file can promote the fixture customer.
+    await withTenantTx(adminCtx, (tx) => tx.update(customers).set({ tier: 'bronze' }).where(eq(customers.id, booking.customerId)));
     const second = await quotes.create(adminCtx, quoteBody(booking.id, booking.customerId, 50));
     expect(second.revision).toBe(first.revision + 1);
     expect(second.total).toBeCloseTo(undiscounted.total - 50, 2);
     await expect(quotes.accept(customerCtx, first.id)).rejects.toMatchObject({ response: { error: 'quote_not_open' } });
-    await quotes.approve(adminCtx, second.id);
+    // A new customer is bronze (0% cap): the discount waits for the Owner.
+    expect(second.capStatus).toBe('pending_owner');
+    await expect(quotes.approve(adminCtx, second.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+    await quotes.approveCap({ ...adminCtx, role: 'owner' }, second.id, true);
     await quotes.accept(customerCtx, second.id);
 
     const [contract] = await withTenantTx(adminCtx, (tx) =>

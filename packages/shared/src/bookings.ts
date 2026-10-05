@@ -177,6 +177,8 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       demobilizationPhp: z.number().optional(),
       createdAt: z.coerce.date(),
       inNegotiation: z.boolean().optional(),
+      // Tier-cap check on the discount; 'pending_owner' waits for the Owner.
+      capStatus: z.enum(['within', 'pending_owner', 'owner_approved', 'owner_rejected']).nullable().optional(),
     })
     .nullable(),
   deposit: z.object({

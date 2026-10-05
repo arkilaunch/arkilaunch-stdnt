@@ -18,6 +18,7 @@ import {
   tenants,
   truckRequests,
   withTenantTx,
+  recomputeCustomerTier,
 } from '@arkilaunch/db';
 import {
   round2HalfUp,
@@ -464,6 +465,8 @@ export class PaymentsService {
           .where(and(eq(rentals.id, invoice.rentalId), ne(rentals.status, 'cancelled')));
       }
       await notifyBookingCustomer(tx, tenantId, invoice.rentalId, 'payment_received', { invoice_id: invoiceId });
+      const [rental] = await tx.select({ customerId: rentals.customerId }).from(rentals).where(eq(rentals.id, invoice.rentalId)).limit(1);
+      if (rental) await recomputeCustomerTier(tx, tenantId, rental.customerId);
     }
     if (invoice?.truckRequestId) {
       const [request] = await tx
