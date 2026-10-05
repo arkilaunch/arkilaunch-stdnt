@@ -49,7 +49,7 @@ import {
 const heading = 'text-heading-md text-text';
 
 // <input type="date"> speaks YYYY-MM-DD in local time; the cart stores ISO.
-const toDateInput = (iso: string) => localDate(new Date(iso));
+const toDateInput = (iso: string) => iso ? localDate(new Date(iso)) : '';
 
 function fromDateInput(value: string, hour: number): string {
   const [y, m, d] = value.split('-').map(Number);
@@ -93,12 +93,14 @@ function CartItemDates({
   onProblem: (problem: string | null) => void;
   onEstimate: (estimate: LineEstimate) => void;
 }) {
+  const [editingDates, setEditingDates] = useState(false);
   const availability = useAvailability(item.equipmentId, item.end);
   const hours = availability.data?.hours;
   const openHour = hours ? Number(hours.openTime.slice(0, 2)) + (hours.openTime.slice(3) === '00' ? 0 : 1) : 8;
   const closeHour = hours ? Number(hours.closeTime.slice(0, 2)) : 17;
   const dailyHours = availability.data?.dailyHours ?? 8;
   const days = rentalDays(item);
+  const datesChosen = Boolean(item.start && item.end && Number.isFinite(days) && days > 0);
   const minHours = minBookingHours(days, dailyHours);
   const maxHours = maxBookingHours(days);
   const wanted = item.hours ?? minHours;
@@ -116,51 +118,66 @@ function CartItemDates({
   useEffect(() => onProblem(problem), [problem, onProblem]);
   // Rent only, from the published card; the quote adds diesel, operator and transport.
   const estimate =
-    rate != null && !problem
+    datesChosen && rate != null && !problem
       ? rentFor(rate, wanted).rentPhp
       : null;
   useEffect(() => onEstimate({ rent: estimate, hours: wanted }), [estimate, wanted, onEstimate]);
+  const collapsed = datesChosen && !problem && !editingDates;
   return (
     <>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Input
-          label="Rental start"
-          type="date"
-          value={toDateInput(item.start)}
-          min={toDateInput(new Date().toISOString())}
-          onChange={(e) => onDate('start', e.target.value, openHour)}
+      {collapsed && (
+        <div className="flex min-w-0 items-center justify-between gap-2 md:hidden" data-testid="cart-dates-summary">
+          <p className="min-w-0 whitespace-nowrap text-[13px] text-text">
+            {toDateInput(item.start).slice(5)} to {toDateInput(item.end).slice(5)} · {days}d / {wanted}h
+          </p>
+          <Button variant="ghost" className="shrink-0 px-2!" onClick={() => setEditingDates(true)}>Edit dates</Button>
+        </div>
+      )}
+      <div className={collapsed ? 'hidden md:flex md:flex-col md:gap-3' : 'flex flex-col gap-3'} data-testid="cart-dates-editor">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Input
+            label="Rental start"
+            type="date"
+            value={toDateInput(item.start)}
+            min={toDateInput(new Date().toISOString())}
+            onChange={(e) => onDate('start', e.target.value, openHour)}
+          />
+          <Input
+            label="Rental end"
+            type="date"
+            value={toDateInput(item.end)}
+            min={toDateInput(item.start)}
+            onChange={(e) => onDate('end', e.target.value, closeHour)}
+            {...(dateProblem ? { error: dateProblem } : {})}
+          />
+        </div>
+        {datesChosen && <Input
+          label="Rental hours"
+          type="number"
+          min={minHours}
+          max={maxHours}
+          step="1"
+          numeric
+          placeholder={String(minHours)}
+          value={item.hours === undefined ? '' : String(item.hours)}
+          onChange={(e) => onHours(e.target.value === '' ? undefined : Number(e.target.value))}
+          hint={`${minHours} to ${maxHours} hours for these dates; left blank, ${minHours}.${estimate !== null ? ` Estimated rent ${formatPeso(estimate)}.` : ''}`}
+          {...(hoursProblem ? { error: hoursProblem } : {})}
+        />}
+        <RangeCalendar
+          equipmentId={item.equipmentId}
+          start={item.start}
+          end={item.end}
+          onRange={(startDate, endDate) => {
+            onDate('start', startDate, openHour);
+            onDate('end', endDate, closeHour);
+            setEditingDates(startDate === endDate);
+          }}
         />
-        <Input
-          label="Rental end"
-          type="date"
-          value={toDateInput(item.end)}
-          min={toDateInput(item.start)}
-          onChange={(e) => onDate('end', e.target.value, closeHour)}
-          {...(dateProblem ? { error: dateProblem } : {})}
-        />
+        {editingDates && datesChosen && !problem && (
+          <Button variant="secondary" className="self-start md:hidden" onClick={() => setEditingDates(false)}>Done editing dates</Button>
+        )}
       </div>
-      <Input
-        label="Rental hours"
-        type="number"
-        min={minHours}
-        max={maxHours}
-        step="1"
-        numeric
-        placeholder={String(minHours)}
-        value={item.hours === undefined ? '' : String(item.hours)}
-        onChange={(e) => onHours(e.target.value === '' ? undefined : Number(e.target.value))}
-        hint={`${minHours} to ${maxHours} hours for these dates; left blank, ${minHours}.${estimate !== null ? ` Estimated rent ${formatPeso(estimate)}.` : ''}`}
-        {...(hoursProblem ? { error: hoursProblem } : {})}
-      />
-      <RangeCalendar
-        equipmentId={item.equipmentId}
-        start={item.start}
-        end={item.end}
-        onRange={(startDate, endDate) => {
-          onDate('start', startDate, openHour);
-          onDate('end', endDate, closeHour);
-        }}
-      />
     </>
   );
 }
@@ -236,7 +253,7 @@ function CartPage() {
   const [estimates, setEstimates] = useState<Record<number, LineEstimate>>({});
   const reportEstimate = (index: number, estimate: LineEstimate) =>
     setEstimates((prev) =>
-      prev[index]?.rent === estimate.rent && prev[index]?.hours === estimate.hours ? prev : { ...prev, [index]: estimate },
+      Object.is(prev[index]?.rent, estimate.rent) && Object.is(prev[index]?.hours, estimate.hours) ? prev : { ...prev, [index]: estimate },
     );
   const rates = useQuery(catalogQueries.equipment());
   const rateById = new Map(rates.data?.items.map((eq) => [eq.id, eq.rateValue ?? null]));
@@ -370,7 +387,7 @@ function CartPage() {
   const totalDays = items.reduce((sum, item) => sum + rentalDays(item), 0);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 pb-[calc(7rem+env(safe-area-inset-bottom))] md:pb-0 [&_input]:scroll-mb-[calc(7rem+env(safe-area-inset-bottom))] md:[&_input]:scroll-mb-0">
       <div>
         <PageHeader title="Shopping cart" />
         <Link to="/equipment" className="text-sm text-accent underline">
@@ -380,6 +397,7 @@ function CartPage() {
 
       {/* noValidate: validateCart() knows verification and stale dates, which no HTML constraint can. */}
       <form
+        id="cart-quote-form"
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
@@ -408,7 +426,7 @@ function CartPage() {
                 aria-label={item.model}
                 className="flex flex-col gap-3 rounded-md border border-border p-3"
               >
-                <div className="flex items-start gap-3">
+                <div className="flex flex-col items-start gap-3 sm:flex-row">
                   <Link
                     to="/equipment/$equipmentId"
                     params={{ equipmentId: item.equipmentId }}
@@ -433,7 +451,7 @@ function CartPage() {
                         {shortCode('equipment', item.equipmentId)}
                       </p>
                       <p className="mt-1 text-sm text-text-muted">
-                        {rentalDays(item)} rental {rentalDays(item) === 1 ? 'day' : 'days'}
+                        {Number.isFinite(rentalDays(item)) ? `${rentalDays(item)} rental ${rentalDays(item) === 1 ? 'day' : 'days'}` : 'Choose rental dates'}
                       </p>
                     </div>
                   </Link>
@@ -484,7 +502,7 @@ function CartPage() {
 
           <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-4">
             <h2 className={heading}>Logistics and delivery</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {(allCompanies.length > 1 || selectable.length === 0) && (
                 <Select
                   label="Company"
@@ -588,8 +606,8 @@ function CartPage() {
                     <span className="min-w-0">
                       <span className="block truncate text-text">{item.model}</span>
                       <span className="text-text-muted">
-                        {days} {days === 1 ? 'day' : 'days'}
-                        {line ? ` · ${line.hours} h` : ''}
+                        {Number.isFinite(days) ? `${days} ${days === 1 ? 'day' : 'days'}` : 'Choose rental dates'}
+                        {line && Number.isFinite(line.hours) ? ` · ${line.hours} h` : ''}
                       </span>
                     </span>
                     <span className="shrink-0 text-text">
@@ -607,7 +625,7 @@ function CartPage() {
             </div>
             <div className="flex justify-between gap-3">
               <span className="text-text-muted">Machine-days</span>
-              <span className="text-text">{totalDays}</span>
+              <span className="text-text">{Number.isFinite(totalDays) ? totalDays : 'Choose rental dates'}</span>
             </div>
             {estimatedTotal !== null && (
               <div className="flex justify-between gap-3 font-semibold">
@@ -622,14 +640,16 @@ function CartPage() {
             rental team. You can negotiate it before anything is charged.
           </p>
           {/* Not disabled on invalid: submitting runs validation, which says what is wrong. */}
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={createBooking.isPending}
-            loading={createBooking.isPending}
-          >
-            Request a quote
-          </Button>
+          <div className="hidden md:block">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={createBooking.isPending}
+              loading={createBooking.isPending}
+            >
+              Request a quote
+            </Button>
+          </div>
           {error && (
             <p role="alert" className="text-sm text-error">
               {error}
@@ -652,6 +672,15 @@ function CartPage() {
           )}
         </Surface>
       </form>
+      <div data-testid="cart-mobile-actions" className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-border bg-surface px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+        <div className="min-w-0 text-sm text-text">
+          <p>Estimated rent</p>
+          <p className="font-mono font-semibold">{estimatedTotal !== null ? formatPeso(estimatedTotal) : 'Priced in quote'}</p>
+        </div>
+        <Button type="submit" form="cart-quote-form" variant="primary" disabled={createBooking.isPending} loading={createBooking.isPending}>
+          Request a quote
+        </Button>
+      </div>
       {companyId && (
         <SiteDialog
           open={siteOpen}

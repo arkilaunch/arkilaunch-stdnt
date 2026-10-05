@@ -15,6 +15,7 @@ export interface ModalProps {
   closeDisabled?: boolean;
   placement?: 'center' | 'right';
   role?: 'dialog' | 'alertdialog';
+  autoFocusFirst?: boolean;
 }
 
 const SIZE_CLASSES: Record<ModalSize, string> = {
@@ -48,6 +49,7 @@ export function Modal({
   closeDisabled = false,
   placement = 'center',
   role = 'dialog',
+  autoFocusFirst = true,
 }: ModalProps) {
   const fullScreen = size === 'full' && placement === 'center';
   const panel = useRef<HTMLDivElement>(null);
@@ -79,7 +81,7 @@ export function Modal({
       if (focusable.length === 0) return;
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -99,7 +101,7 @@ export function Modal({
 
     // A nested dialog (its effect runs first) may already hold focus. Never open on the dismiss X.
     if (!panel.current?.contains(document.activeElement)) {
-      (focusables(body.current)[0] ?? focusables(foot.current)[0] ?? panel.current)?.focus();
+      (autoFocusFirst ? (focusables(body.current)[0] ?? focusables(foot.current)[0] ?? panel.current) : panel.current)?.focus();
     }
 
     return () => {
@@ -107,7 +109,7 @@ export function Modal({
       document.body.style.overflow = overflow;
       restoreFocusTo.current?.focus();
     };
-  }, [open, handleKeyDown]);
+  }, [open, handleKeyDown, autoFocusFirst]);
 
   if (!open) return null;
 

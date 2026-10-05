@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderRoute } from '../test/render-route.js';
 import { makeToken, makeValidClaims } from '../test/make-token.js';
 import { setAccessToken } from '../lib/auth-client.js';
@@ -48,4 +49,35 @@ describe('Negotiation finalised', () => {
     expect(screen.getByRole('link', { name: 'Proceed to payment' })).toBeInTheDocument();
     expect(document.querySelector('a button')).toBeNull();
   });
+});
+
+it('keeps the pending quote ahead of an available conversation', async () => {
+  setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    const body = String(url).includes('/messages') ? [] : String(url).includes(`/bookings/${BOOKING_ID}`)
+      ? { ...BOOKING, quotation: null } : [];
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  }));
+  const { unmount } = await renderRoute(`/account/negotiation/${BOOKING_ID}`);
+  expect((await screen.findByRole('heading', { name: 'Quote' })).closest('.order-1')).toHaveClass('lg:order-2');
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Accept quote' })).not.toBeInTheDocument();
+  unmount();
+});
+
+it('Negotiate focuses the thread message and the quote leads on mobile', async () => {
+  setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    const u = String(url);
+    const body = u.includes('/messages') ? [] : u.includes(`/bookings/${BOOKING_ID}`)
+      ? { ...BOOKING, quotation: { ...BOOKING.quotation, status: 'approved', createdAt: new Date().toISOString() } }
+      : u.includes(`/quotes/${QUOTE_ID}`) ? { lineItems: [] } : [];
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  }));
+  const { unmount } = await renderRoute(`/account/negotiation/${BOOKING_ID}`);
+  await userEvent.click(await screen.findByRole('button', { name: 'Negotiate' }));
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
+  expect(screen.getByRole('button', { name: 'Accept quote' }).closest('.order-1')).toHaveClass('lg:order-2');
+  expect(screen.getByRole('heading', { name: 'Conversation' }).closest('.order-2')).toHaveClass('lg:order-1');
+  unmount();
 });

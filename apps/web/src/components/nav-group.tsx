@@ -64,7 +64,7 @@ export function NavGroupList({ groups, pathname, onNavigate, collapsed = false }
               aria-current={isActive ? 'page' : undefined}
               className={[
                 // Cloudscape side nav: the active page is bold link-colour text, no fill or bar.
-                'flex min-h-10 items-center rounded-sm text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+                'flex min-h-11 items-center rounded-sm text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
                 collapsed ? 'justify-center px-0' : 'gap-3 px-3',
                 isActive ? 'font-bold text-accent' : 'text-text hover:text-accent',
               ].join(' ')}

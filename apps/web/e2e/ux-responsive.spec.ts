@@ -66,3 +66,12 @@ test('row action menus stay reachable on a phone', async ({ page }) => {
   await page.getByRole('button', { name: /more actions for/i }).first().click();
   await expect(page.getByRole('menuitem', { name: 'Retire equipment' })).toBeVisible();
 });
+
+for (const width of [360, 768, 1440]) {
+  test(`rental surfaces fit the ${width}px responsive matrix`, async ({ page }, info) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height: 900 });
+    const { rentalJourney } = await import('./rental-journey.js');
+    await rentalJourney(page, info, true);
+  });
+}

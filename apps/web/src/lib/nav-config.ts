@@ -57,6 +57,7 @@ export const ACCOUNT_NAV: NavGroup[] = [
     items: [
       { label: 'Home', to: '/account', icon: LayoutDashboard, exact: true },
       { label: 'Browse equipment', to: '/equipment', icon: Boxes },
+      { label: 'Cart', to: '/account/cart', icon: ShoppingCart, roles: ['customer'] },
       { label: 'Self-loading truck', to: '/account/trucks', icon: Truck },
     ],
   },

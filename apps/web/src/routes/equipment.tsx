@@ -87,6 +87,7 @@ function ConfigureRentalDialog({
       open
       onClose={onClose}
       title="Configure rental"
+      autoFocusFirst={false}
       description={equipment.model}
       size="md"
       footer={

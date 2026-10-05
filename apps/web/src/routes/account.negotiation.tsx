@@ -13,7 +13,7 @@ import { Button, buttonClass } from '../components/button.js';
 import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
 import { Check, Clock } from 'lucide-react';
-import { NegotiationThread } from '../components/negotiation-thread.js';
+import { NegotiationThread, negotiationMessageId } from '../components/negotiation-thread.js';
 import { TierNote } from '../components/tier-cap.js';
 import { QuoteLines } from '../components/quote-lines.js';
 import { PrintFrame } from '../components/print-frame.js';
@@ -90,7 +90,7 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
             >
               Accept quote
             </Button>
-            <Button variant="secondary" onClick={() => document.getElementById(`message-${booking.id}`)?.focus()}>
+            <Button variant="secondary" onClick={() => document.getElementById(negotiationMessageId(`/bookings/${booking.id}`))?.focus()}>
               Negotiate
             </Button>
             <Button
@@ -171,11 +171,13 @@ function NegotiationPage({ bookingId }: { bookingId: string }) {
       {booking.isError && <LoadFailed error={booking.error} onRetry={() => booking.refetch()} />}
       {booking.data && (
         <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
-          <div className="flex flex-col gap-3">
+          <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1">
             <TierNote customerId={booking.data.customerId} audience="customer" />
             <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
           </div>
-          <QuoteCard booking={booking.data} />
+          <div className="order-1 min-w-0 lg:order-2">
+            <QuoteCard booking={booking.data} />
+          </div>
         </div>
       )}
     </div>
