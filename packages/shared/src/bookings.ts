@@ -120,7 +120,14 @@ export interface FieldSheetListResponse {
   weekStart: string;
   items: FieldSheetUnit[];
 }
-export const FieldSheetDownloadRequestSchema = z.object({ rentalId: z.string().uuid(), equipmentId: z.string().uuid() }).strict();
+export const FieldSheetDownloadRequestSchema = z
+  .object({
+    rentalId: z.string().uuid(),
+    equipmentId: z.string().uuid(),
+    // A past week of the rental; omitted means this week.
+    weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .strict();
 export type FieldSheetDownloadRequest = z.infer<typeof FieldSheetDownloadRequestSchema>;
 export interface FieldSheetDownloadResponse {
   context: EdtrSheetContext;

@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, asc, count, eq, gte, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import {
   addresses,
@@ -30,7 +30,7 @@ import { buildEdtrSheetContext, edtrPaperSize, isAssignedToSite } from '../commo
 import { EventsService } from '../events/events.service.js';
 import { onSiteNow } from '../common/deployed.js';
 
-// Timekeepers print their own sheets: current Manila week only, FIELD_SHEET_DAILY_LIMIT per unit per day.
+// Timekeepers print their own sheets: a week of the rental up to this one, FIELD_SHEET_DAILY_LIMIT per unit per day.
 @Injectable()
 export class FieldSheetsService {
   constructor(private readonly events: EventsService) {}
@@ -184,7 +184,8 @@ export class FieldSheetsService {
   async download(ctx: RequestContext, body: FieldSheetDownloadRequest): Promise<FieldSheetDownloadResponse> {
     requireTimekeeper(ctx);
     const now = new Date();
-    const weekStart = manilaWeekStart(now);
+    const thisWeek = manilaWeekStart(now);
+    const weekStart = body.weekStart ?? thisWeek;
     const today = manilaDate(now);
     const result = await withTenantTx(ctx, async (tx) => {
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, body.rentalId)).limit(1);
@@ -208,6 +209,13 @@ export class FieldSheetsService {
         )
         .limit(1);
       if (!onRental) throw new NotFoundException({ error: 'equipment_not_on_rental' });
+      // Only a Monday from the rental's first week up to this week.
+      const firstWeek = manilaWeekStart(rental.startDate);
+      const lastWeek = rental.endDate && manilaWeekStart(rental.endDate) < thisWeek ? manilaWeekStart(rental.endDate) : thisWeek;
+      const noon = `${weekStart}T12:00:00+08:00`;
+      if (Number.isNaN(Date.parse(noon)) || manilaWeekStart(noon) !== weekStart ||weekStart < firstWeek || weekStart > lastWeek) {
+        throw new UnprocessableEntityException({ error: 'edtr_sheet_week_out_of_rental', firstWeek, lastWeek });
+      }
 
       // Serialise concurrent downloads of one unit so two taps cannot both pass the count.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`edtr-sheet:${body.equipmentId}`}))`);
