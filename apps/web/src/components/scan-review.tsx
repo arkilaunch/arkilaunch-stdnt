@@ -5,6 +5,7 @@ import { rotateImage, toScannedPage } from '../lib/document-scanner.js';
 import { formatHours } from '../lib/format.js';
 import { ConfidenceChip } from './confidence-chip.js';
 import { Surface } from './surface.js';
+import { Modal } from './modal.js';
 
 // Boxes only where a polygon exists: inventing a position would tell the reviewer the model read a cell it did not.
 
@@ -101,14 +102,25 @@ export function ParsedColumns({ item }: { item: LineItem }) {
   );
 }
 
+const ZOOMS = [1, 1.5, 2, 3, 4] as const;
+
+// Anything but a quarter-turn value (an older API without the field) starts upright.
+function asRotation(value: unknown): Rotation {
+  return value === 90 || value === 180 || value === 270 ? value : 0;
+}
+
 export function ScanReview({ detail, onRotate }: ScanReviewProps) {
-  const [rotation, setRotation] = useState<Rotation>(detail.scanRotation);
-  useEffect(() => setRotation(detail.scanRotation), [detail.id, detail.scanRotation]);
+  // Local state leads: only a different log resets it, so a save or refetch never undoes a click.
+  const [rotation, setRotation] = useState<Rotation>(asRotation(detail.scanRotation));
+  useEffect(() => setRotation(asRotation(detail.scanRotation)), [detail.id]);
+  // 0 -> 90 -> 180 -> 270 -> 0, clockwise every press.
   function turn() {
-    const next = ((rotation + 90) % 360) as Rotation;
+    const next = asRotation((rotation + 90) % 360);
     setRotation(next);
     onRotate?.(next);
   }
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const [zoom, setZoom] = useState<(typeof ZOOMS)[number]>(1);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageUnavailable, setImageUnavailable] = useState(false);
   const [view, setView] = useState<'scanned' | 'original'>('original');
@@ -177,6 +189,40 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
     .map((box) => rotateBox(box, boxRotation));
   const needsReview = detail.fields.filter((field) => field.belowGate);
 
+  // The page with its boxes; the frame is exactly the picture's size, so box percentages land on the page.
+  const page = (imageClass: string, frameClass: string) =>
+    shown && (
+      <div className={`relative overflow-hidden rounded-sm border border-border bg-surface ${frameClass}`}>
+        <img src={shown} alt="The scanned sheet, with the readings the model took marked on it" className={`block ${imageClass}`} />
+        {boxes.map((box) => (
+          <span
+            key={box.name}
+            title={box.name}
+            className={[
+              'pointer-events-none absolute border-2',
+              box.belowGate ? 'border-recon-review bg-recon-review/20' : 'border-recon-match',
+            ].join(' ')}
+            style={{
+              left: `${box.left * 100}%`,
+              top: `${box.top * 100}%`,
+              width: `${box.width * 100}%`,
+              height: `${box.height * 100}%`,
+            }}
+          />
+        ))}
+      </div>
+    );
+  const rotateButton = (
+    <button
+      type="button"
+      onClick={turn}
+      className="rounded-sm border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text hover:bg-black/5"
+      aria-label={`Rotate clockwise 90 degrees, now at ${rotation} degrees`}
+    >
+      Rotate 90° ↻
+    </button>
+  );
+
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
       <div className="flex-1">
@@ -197,13 +243,14 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
                 {option === 'scanned' ? 'Black & white' : 'Photo'}
               </button>
             ))}
+            {rotateButton}
             <button
               type="button"
-              onClick={turn}
-              className="rounded-sm border border-border px-3 py-1 text-sm text-text"
-              aria-label={`Rotate the sheet 90 degrees, now at ${rotation} degrees`}
+              onClick={() => setZoomOpen(true)}
+              disabled={!shown}
+              className="rounded-sm border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text hover:bg-black/5"
             >
-              Rotate 90°
+              Enlarge
             </button>
             {turnFailed && <span className="text-xs text-text-muted">This photo cannot be turned here.</span>}
             {view === 'scanned' && !scannedUrl && (
@@ -214,30 +261,10 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
           </div>
         )}
         {shown ? (
-          // The frame is exactly the picture's size, so box percentages land on the page.
-          <div className="relative mx-auto w-fit max-w-full overflow-hidden rounded-sm border border-border bg-surface">
-            <img
-              src={shown}
-              alt="The scanned sheet, with the readings the model took marked on it"
-              className="block h-auto max-h-[75vh] w-auto max-w-full"
-            />
-            {boxes.map((box) => (
-              <span
-                key={box.name}
-                title={box.name}
-                className={[
-'pointer-events-none absolute border-2',
-                  box.belowGate ? 'border-recon-review bg-recon-review/20' : 'border-recon-match',
-                ].join(' ')}
-                style={{
-                  left: `${box.left * 100}%`,
-                  top: `${box.top * 100}%`,
-                  width: `${box.width * 100}%`,
-                  height: `${box.height * 100}%`,
-                }}
-              />
-            ))}
-          </div>
+          // Click the page to open it full screen.
+          <button type="button" onClick={() => setZoomOpen(true)} className="mx-auto block w-fit max-w-full cursor-zoom-in" aria-label="Enlarge the sheet">
+            {page('h-auto max-h-[80vh] w-auto max-w-full', 'w-fit max-w-full')}
+          </button>
         ) : imageUnavailable ? (
           <p className="text-sm text-text-muted">
             The scanned page could not be loaded, so only the readings below are shown.
@@ -245,6 +272,45 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
         ) : (
           <p className="text-sm text-text-muted">Loading the scanned page...</p>
         )}
+        <Modal open={zoomOpen} onClose={() => setZoomOpen(false)} size="full" title="Field sheet">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Zoom">
+              <button
+                type="button"
+                onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)]!)}
+                disabled={zoom === ZOOMS[0]}
+                className="rounded-sm border border-border px-3 py-1.5 text-sm font-medium text-text disabled:opacity-50"
+                aria-label="Zoom out"
+              >
+                -
+              </button>
+              <span className="w-14 text-center font-mono text-sm tabular-nums text-text" aria-live="polite">
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)]!)}
+                disabled={zoom === ZOOMS[ZOOMS.length - 1]}
+                className="rounded-sm border border-border px-3 py-1.5 text-sm font-medium text-text disabled:opacity-50"
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                className="rounded-sm border border-border px-3 py-1.5 text-sm font-medium text-text"
+              >
+                Fit
+              </button>
+              {rotateButton}
+            </div>
+            {/* Zoomed, the page grows past the screen and is moved by scrolling (or dragging on a phone). */}
+            <div className="max-h-[calc(100dvh-10rem)] overflow-auto rounded-sm bg-black/5">
+              <div style={{ width: `${zoom * 100}%` }}>{page('h-auto w-full', 'w-full')}</div>
+            </div>
+          </div>
+        </Modal>
         {boxes.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-text-muted">
             <span className="flex items-center gap-1.5">

@@ -1,6 +1,14 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { ParsedColumns, rotateBox } from './scan-review.js';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import type { EdtrDetailResponse } from '@arkilaunch/shared';
+import { ParsedColumns, ScanReview, rotateBox } from './scan-review.js';
+
+vi.mock('../lib/api-client.js', () => ({ apiGet: vi.fn().mockResolvedValue({ url: 'https://storage.test/scan.jpg' }) }));
+vi.mock('../lib/document-scanner.js', () => ({
+  rotateImage: vi.fn().mockResolvedValue('data:image/jpeg;base64,turned'),
+  toScannedPage: vi.fn(),
+}));
 
 describe('ParsedColumns', () => {
   it('shows every sheet column, marks Running as the billed one, and keeps blank apart from zero', () => {
@@ -50,5 +58,32 @@ describe('rotateBox', () => {
     const half = rotateBox(box, 180);
     expect(twice.left).toBeCloseTo(half.left);
     expect(twice.top).toBeCloseTo(half.top);
+  });
+});
+
+describe('ScanReview rotate', () => {
+  it('turns clockwise a quarter per click, loops back to upright, and saves each turn', async () => {
+    const onRotate = vi.fn();
+    const detail = {
+      id: '00000000-0000-4000-8000-000000000001',
+      status: 'review',
+      source: 'paper_ocr',
+      lineItems: [],
+      fields: [],
+      reconciliation: null,
+      extraction: null,
+      weather: null,
+      reportDate: '2026-10-07',
+      failureReason: null,
+      // An older API without the field must still turn.
+    } as unknown as EdtrDetailResponse;
+    render(<ScanReview detail={detail} onRotate={onRotate} />);
+
+    const button = await screen.findByRole('button', { name: /rotate clockwise 90 degrees, now at 0/i });
+    for (const expected of [90, 180, 270, 0]) {
+      await userEvent.click(button);
+      expect(screen.getByRole('button', { name: new RegExp(`now at ${expected} degrees`) })).toBe(button);
+    }
+    expect(onRotate.mock.calls.map(([d]) => d)).toEqual([90, 180, 270, 0]);
   });
 });
