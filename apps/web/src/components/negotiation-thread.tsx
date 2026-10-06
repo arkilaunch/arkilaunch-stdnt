@@ -7,6 +7,9 @@ import { Surface } from './surface.js';
 import { Button } from './button.js';
 import { Input } from './input.js';
 
+// Off by default: customers negotiate in the tenant's Messenger instead (NegotiateChoice).
+export const inAppNegotiation = (): boolean => import.meta.env.VITE_ENABLE_IN_APP_NEGOTIATION === 'true';
+
 export function negotiationMessageId(base: string): string {
   return `message${base.replace(/\W/g, '-')}`;
 }

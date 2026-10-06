@@ -22,7 +22,9 @@ import { StatusPill } from '../components/status-pill.js';
 import { Check } from 'lucide-react';
 import { apiPost } from '../lib/api-client.js';
 import { bookingAlternatives, explainBookingError } from '../lib/booking-error.js';
-import { catalogQueries, companiesQueries, customerSitesQueries } from '../lib/queries.js';
+import { bookingsQueries, catalogQueries, companiesQueries, customerSitesQueries } from '../lib/queries.js';
+import { bookingMessage } from '../lib/messenger-message.js';
+import { useTenantName } from '../lib/tenant.js';
 import { SiteDialog } from '../components/site-dialog.js';
 import { NegotiateChoice } from '../components/negotiate-choice.js';
 import { formatPeso, isUuid, shortCode } from '../lib/format.js';
@@ -198,6 +200,9 @@ function CartPage() {
   const catalog = useQuery({ ...catalogQueries.equipment(), enabled: swap !== null });
   const { booked, code } = accountCartRoute.useSearch();
   const booking = booked && code ? { id: booked, code } : null;
+  // The Messenger handoff copies the full booking, which the create response does not carry.
+  const bookedDetail = useQuery({ ...bookingsQueries.detail(booked ?? ''), enabled: Boolean(booking) });
+  const tenantName = useTenantName();
   const companies = useQuery(companiesQueries.mine());
   const sites = useQuery(customerSitesQueries.mine());
   const [submitted, setSubmitted] = useState(false);
@@ -315,7 +320,9 @@ function CartPage() {
           </p>
           <div className="flex flex-wrap gap-2">
             <NegotiateChoice
+              message={bookedDetail.data ? bookingMessage(tenantName, bookedDetail.data) : null}
               onInApp={() => void navigate({ to: '/account/negotiation/$bookingId/chat', params: { bookingId: booking.id } })}
+              fallback={() => void navigate({ to: '/account/negotiation/$bookingId/call', params: { bookingId: booking.id } })}
             />
             <Link to="/account/negotiation/$bookingId/call" params={{ bookingId: booking.id }} className={buttonClass('secondary')}>Negotiate by phone</Link>
             <Link to="/account/bookings/$bookingId" params={{ bookingId: booking.id }} className={buttonClass('ghost')}>Booking details</Link>

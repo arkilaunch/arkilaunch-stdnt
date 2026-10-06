@@ -12,10 +12,11 @@ import { CouponField } from './coupon-field.js';
 import { Modal } from './modal.js';
 import { RouteMap } from './route-map.js';
 import { StatusBadge } from './status-badge.js';
-import { NegotiationThread } from './negotiation-thread.js';
+import { NegotiationThread, inAppNegotiation } from './negotiation-thread.js';
 import { NegotiateChoice } from './negotiate-choice.js';
 import { ConfirmDialog } from './confirm-dialog.js';
 import { useTenant } from '../lib/tenant.js';
+import { truckMessage } from '../lib/messenger-message.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
 // low-high band and the cap note shown with every estimate.
@@ -398,15 +399,17 @@ function TripDetail({ request: r }: { request: TruckRequestResponse }) {
 
       <section id={`thread-${r.id}`} className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-text">Negotiation and price history</h3>
+          <h3 className="text-sm font-semibold text-text">{inAppNegotiation() ? 'Negotiation and price history' : 'Negotiate the price'}</h3>
           {!closed && (
             <NegotiateChoice
               variant="secondary"
+              message={truckMessage(tenant?.name ?? '', r, priceOf(r))}
               onInApp={() => document.getElementById(`message-me-truck-requests-${r.id}`)?.focus()}
+              fallback={() => void navigate({ to: '/contact' })}
             />
           )}
         </div>
-        <NegotiationThread base={`/me/truck-requests/${r.id}`} disabled={closed} />
+        {inAppNegotiation() && <NegotiationThread base={`/me/truck-requests/${r.id}`} disabled={closed} />}
       </section>
 
       <ConfirmDialog

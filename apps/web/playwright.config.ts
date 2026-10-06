@@ -13,6 +13,8 @@ export default defineConfig({
   testDir: './e2e',
   webServer: {
     command: 'pnpm dev',
+    // The journeys drive the in-app negotiation chat, which is off by default.
+    env: { VITE_ENABLE_IN_APP_NEGOTIATION: 'true' },
     url: baseURL,
     ignoreHTTPSErrors: true,
     reuseExistingServer: !process.env.CI,
