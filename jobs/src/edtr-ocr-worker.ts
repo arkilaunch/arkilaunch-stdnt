@@ -151,7 +151,7 @@ export async function runEdtrOcrWorker(
         const qr = sheetQrCheck(result.barcodes, row);
         const sheetFlags = qr === 'mismatch' ? ['sheet_qr_mismatch'] : qr === 'missing' ? ['sheet_unidentified'] : [];
         if (!sheet.ok) {
-          // RFC-2: a sheet not readable in full is never read in part.
+          // RFC-2: a sheet with no readable day, or a structural fault (date, duplicate), is never read in part.
           await db
             .update(edtr)
             .set({ status: 'hard_failed', lockedAt: null, lastError: sheet.reason })
@@ -286,6 +286,32 @@ export async function runEdtrOcrWorker(
                 .set({ status: 'review', lastError: sql`coalesce(${edtr.lastError} || ';', '') || 'sheet_qr_mismatch'` })
                 .where(eq(edtr.id, edtrId));
             }
+
+            // A figure filled from the row's arithmetic, or a row that does not add up, waits for a person (RFC-2).
+            const held = [
+              ...(day.hoursFilled ? [`hours_filled:${day.hoursFilled.join(',')}`] : []),
+              ...(day.rowMismatch ? ['row_mismatch'] : []),
+            ];
+            if (held.length > 0) {
+              await tx
+                .update(edtr)
+                .set({ status: 'review', lastError: sql`coalesce(${edtr.lastError} || ';', '') || ${held.join(';')}` })
+                .where(eq(edtr.id, edtrId));
+            }
+          }
+
+          // A day that could not be read is kept for a person to type in; it never holds back the readable days.
+          for (const reportDate of sheet.unreadable) {
+            await tx.insert(edtr).values({
+              tenantId: row.tenantId,
+              rentalId: row.rentalId,
+              equipmentId: row.equipmentId,
+              source: row.source,
+              reportDate,
+              rawFileUri: row.rawFileUri,
+              status: 'hard_failed',
+              lastError: `unreadable_total_hours:${reportDate}`,
+            });
           }
         });
 

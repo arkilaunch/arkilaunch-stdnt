@@ -344,8 +344,7 @@ describe('edtr-ocr-worker', () => {
     expect(items).toHaveLength(0);
   });
 
-  it('a dated row with an unreadable total fails the whole sheet, naming the lost day', async () => {
-    // Reading the good days and dropping one would silently lose a billable day.
+  it('keeps the readable days and hands an unreadable day to a person, never dropping it', async () => {
     const row = await insertQueuedPaperEdtr('2022-02-06');
 
     await runEdtrOcrWorker(
@@ -355,13 +354,21 @@ describe('edtr-ocr-worker', () => {
 
     const { db, client } = makeJobDb();
     const [updated] = await db.select().from(edtr).where(eq(edtr.id, row.id));
-    const items = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
+    const [lost] = await db
+      .select()
+      .from(edtr)
+      .where(and(eq(edtr.equipmentId, equipmentId), eq(edtr.reportDate, '2022-02-07')));
+    const lostItems = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, lost!.id));
     await client.end();
 
-    expect(updated!.status).toBe('hard_failed');
-    expect(updated!.lastError).toBe('unreadable_total_hours:2022-02-07');
-    // Nothing partial was persisted: it is all days or none.
-    expect(items).toHaveLength(0);
+    expect(updated!.reportDate).toBe('2022-02-06');
+    expect(updated!.status).not.toBe('hard_failed');
+    expect(lost!.status).toBe('hard_failed');
+    expect(lost!.lastError).toBe('unreadable_total_hours:2022-02-07');
+    // No figure is invented for the lost day.
+    expect(lostItems).toHaveLength(0);
+
+    await cleanup([row.id, lost!.id]);
   });
 
   // Placed last: both leave rows behind that a subsequent worker run in this
