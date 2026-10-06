@@ -17,7 +17,9 @@ import {
   type WeatherDiscrepancy,
   type WeatherLevel,
   type WeatherObservation,
+  workedInReportedWeather,
 } from '@arkilaunch/shared';
+import { customers } from './schema/customers.js';
 import { equipment, equipmentTypes } from './schema/fleet.js';
 import { equipmentAssignments, rentals } from './schema/rentals.js';
 import { edtr, edtrLineItems } from './schema/billing.js';
@@ -111,29 +113,93 @@ export interface WorkWindows {
   pm?: [number, number] | null | undefined;
 }
 
-// Evidence only: never touches money or the EDTR's status (RFC-2); the caller decides whether to hold the day.
-// Logged once per EDTR. Returns the halves the machine worked while a stop_work warning was up.
+type UsedDespiteSource = 'system' | 'sheet';
+
+async function edtrIncidentContext(ex: Executor, tenantId: string, edtrId: string) {
+  const [row] = await ex
+    .select({
+      rentalId: edtr.rentalId,
+      equipmentId: edtr.equipmentId,
+      reportDate: edtr.reportDate,
+      siteId: rentals.projectSiteId,
+      equipmentName: equipment.model,
+      companyName: customers.companyName,
+    })
+    .from(edtr)
+    .innerJoin(rentals, eq(rentals.id, edtr.rentalId))
+    .innerJoin(equipment, eq(equipment.id, edtr.equipmentId))
+    .innerJoin(customers, eq(customers.id, rentals.customerId))
+    .where(and(eq(edtr.id, edtrId), eq(edtr.tenantId, tenantId)))
+    .limit(1);
+  if (!row) return null;
+  const [hours] = await ex
+    .select({ active: sql<string>`coalesce(sum(${edtrLineItems.hoursActive}), 0)` })
+    .from(edtrLineItems)
+    .where(and(eq(edtrLineItems.edtrId, edtrId), eq(edtrLineItems.tenantId, tenantId)));
+  return { ...row, reportDate: String(row.reportDate), hoursActive: Number(hours?.active ?? 0) };
+}
+type EdtrIncidentContext = NonNullable<Awaited<ReturnType<typeof edtrIncidentContext>>>;
+
+// One incident per EDTR and source; tenant admins are told when it is first logged. Evidence only (RFC-2).
+async function logUsedDespiteWarning(
+  ex: Executor,
+  tenantId: string,
+  edtrId: string,
+  ctx: EdtrIncidentContext,
+  source: UsedDespiteSource,
+  details: Record<string, unknown> & { half: WorkHalf | 'day'; halves: string[] },
+): Promise<boolean> {
+  const [already] = await ex
+    .select({ id: events.id })
+    .from(events)
+    .where(
+      and(
+        eq(events.tenantId, tenantId),
+        eq(events.name, 'equipment_used_despite_warning'),
+        sql`${events.properties} ->> 'edtr_id' = ${edtrId}`,
+        // Incidents logged before the sheet source existed have no source: they came from the system warning.
+        sql`coalesce(${events.properties} ->> 'source', 'system') = ${source}`,
+      ),
+    )
+    .limit(1);
+  if (already) return false;
+  const properties = {
+    edtr_id: edtrId,
+    rental_id: ctx.rentalId,
+    project_site_id: ctx.siteId,
+    equipment_id: ctx.equipmentId,
+    date: ctx.reportDate,
+    hours_active: ctx.hoursActive,
+    source,
+    ...details,
+  };
+  const [incident] = await ex
+    .insert(events)
+    .values({ tenantId, name: 'equipment_used_despite_warning', properties })
+    .returning({ id: events.id });
+  await notifySiteWeather(
+    ex,
+    tenantId,
+    ctx.siteId,
+    'equipment_used_despite_warning',
+    { ...properties, incident_id: incident!.id, equipment_name: ctx.equipmentName, company_name: ctx.companyName },
+    [],
+    ['staff'],
+  );
+  return true;
+}
+
+// Returns the halves the machine worked while a stop_work warning was up, once per EDTR.
 export async function flagUsedDespiteWarning(
   ex: Executor,
   tenantId: string,
   edtrId: string,
   windows: WorkWindows = {},
 ): Promise<WorkHalf[]> {
-  const [row] = await ex
-    .select({ id: edtr.id, rentalId: edtr.rentalId, equipmentId: edtr.equipmentId, reportDate: edtr.reportDate, siteId: rentals.projectSiteId })
-    .from(edtr)
-    .innerJoin(rentals, eq(rentals.id, edtr.rentalId))
-    .where(and(eq(edtr.id, edtrId), eq(edtr.tenantId, tenantId)))
-    .limit(1);
-  if (!row?.reportDate) return [];
-  const [hours] = await ex
-    .select({ active: sql<string>`coalesce(sum(${edtrLineItems.hoursActive}), 0)` })
-    .from(edtrLineItems)
-    .where(and(eq(edtrLineItems.edtrId, edtrId), eq(edtrLineItems.tenantId, tenantId)));
-  const hoursActive = Number(hours?.active ?? 0);
-  if (hoursActive <= 0) return [];
+  const ctx = await edtrIncidentContext(ex, tenantId, edtrId);
+  if (!ctx || ctx.hoursActive <= 0) return [];
 
-  const { from, to } = manilaDay(String(row.reportDate));
+  const { from, to } = manilaDay(ctx.reportDate);
   const warnings = await ex
     .select()
     .from(events)
@@ -141,7 +207,7 @@ export async function flagUsedDespiteWarning(
       and(
         eq(events.tenantId, tenantId),
         eq(events.name, 'equipment_weather_warning'),
-        sql`${events.properties} ->> 'equipment_id' = ${row.equipmentId}`,
+        sql`${events.properties} ->> 'equipment_id' = ${ctx.equipmentId}`,
         sql`${events.properties} ->> 'level' = 'stop_work'`,
         gte(events.occurredAt, from),
         lt(events.occurredAt, to),
@@ -160,31 +226,62 @@ export async function flagUsedDespiteWarning(
   const halves = worked.filter(([, [, end]]) => warnedMinute < end).map(([half]) => half);
   if (halves.length === 0) return [];
 
-  const [already] = await ex
-    .select({ id: events.id })
-    .from(events)
-    .where(and(eq(events.tenantId, tenantId), eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${edtrId}`))
-    .limit(1);
-  if (already) return [];
   const properties = first.properties as { reasons?: string[] };
-  await ex.insert(events).values({
-    tenantId,
-    name: 'equipment_used_despite_warning',
-    properties: {
-      edtr_id: edtrId,
-      rental_id: row.rentalId,
-      project_site_id: row.siteId,
-      equipment_id: row.equipmentId,
-      date: String(row.reportDate),
-      hours_active: hoursActive,
-      level: 'stop_work',
-      reasons: properties.reasons ?? [],
-      warned_at: first.occurredAt.toISOString(),
-      half: halves.length === 2 ? 'day' : halves[0],
-      halves,
-    },
+  const logged = await logUsedDespiteWarning(ex, tenantId, edtrId, ctx, 'system', {
+    level: 'stop_work',
+    reasons: properties.reasons ?? [],
+    warned_at: first.occurredAt.toISOString(),
+    half: halves.length === 2 ? 'day' : halves[0]!,
+    halves,
   });
-  return halves;
+  return logged ? halves : [];
+}
+
+// The sheet's own HR/W/T tick against its running hours: no weather feed needed. Once per EDTR.
+export async function flagWorkedInReportedWeather(
+  ex: Executor,
+  tenantId: string,
+  edtrId: string,
+  day: ReportedWeatherDay,
+): Promise<(WorkHalf | 'day')[]> {
+  const halves = workedInReportedWeather(day);
+  if (halves.length === 0) return [];
+  const ctx = await edtrIncidentContext(ex, tenantId, edtrId);
+  if (!ctx) return [];
+  const logged = await logUsedDespiteWarning(ex, tenantId, edtrId, ctx, 'sheet', {
+    reported: { am: day.weatherAm, pm: day.weatherPm },
+    weather_hours: day.weatherHours ?? null,
+    half: halves.length === 1 ? halves[0]! : 'day',
+    halves,
+  });
+  return logged ? halves : [];
+}
+
+// Every weather check on one field-log day, for the OCR worker and typed entries alike.
+// Appends the review flags it raised and returns them; the caller decides whether to hold the day. Never money (RFC-2).
+export async function flagEdtrWeather(
+  ex: Executor,
+  tenantId: string,
+  edtrId: string,
+  rentalId: string,
+  reportDate: string,
+  day: ReportedWeatherDay,
+): Promise<string[]> {
+  const system = await flagUsedDespiteWarning(ex, tenantId, edtrId, { am: day.amWindow, pm: day.pmWindow });
+  const sheet = await flagWorkedInReportedWeather(ex, tenantId, edtrId, day);
+  const discrepancies = await logWeatherDiscrepancies(ex, tenantId, edtrId, rentalId, reportDate, day);
+  const flags = [
+    ...new Set(discrepancies.map((f) => `weather_${f.rule}`)),
+    ...system.map((half) => `used_despite_stop_work_${half}`),
+    ...sheet.map((half) => `worked_in_reported_weather_${half}`),
+  ];
+  if (flags.length > 0) {
+    await ex
+      .update(edtrLineItems)
+      .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(flags)}::jsonb` })
+      .where(and(eq(edtrLineItems.edtrId, edtrId), eq(edtrLineItems.tenantId, tenantId)));
+  }
+  return flags;
 }
 
 // A level that stays up does not re-notify every poll.

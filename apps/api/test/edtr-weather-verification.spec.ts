@@ -8,6 +8,7 @@ import {
   equipment as equipmentTable,
   equipmentAssignments,
   events,
+  notifications,
   projectSites,
   quotations,
   rentalContracts,
@@ -136,6 +137,30 @@ describe('EDTR weather verification (digital entry)', () => {
     const { reviewFlags, logged } = await flagsAndIncidents(created.id);
     expect(reviewFlags).toContain('weather_D2');
     expect(logged.map((e) => (e.properties as { half: string }).half).sort()).toEqual(['am', 'pm']);
+  });
+
+  it("logs hours run in a half the entry itself ticks heavy rain, with its company, and tells the admins", async () => {
+    const created = await capture('2022-07-08', { hoursActive: 8, hoursIdle: 0, hoursWeather: 0, weatherAm: 'HR', weatherPm: 'C' });
+    const { reviewFlags } = await flagsAndIncidents(created.id);
+    expect(reviewFlags).toContain('worked_in_reported_weather_am');
+    const { incident, line, told } = await withTenantTx(ctx, async (tx) => {
+      const [incident] = await tx
+        .select()
+        .from(events)
+        .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${created.id}`));
+      const [line] = await tx.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, created.id));
+      const told = await tx
+        .select()
+        .from(notifications)
+        .where(and(eq(notifications.notificationType, 'equipment_used_despite_warning'), sql`${notifications.payload} ->> 'incident_id' = ${incident!.id}`));
+      return { incident, line, told };
+    });
+    expect(incident!.properties).toMatchObject({ source: 'sheet', half: 'am', rental_id: rentalId, reported: { am: 'HR', pm: 'C' } });
+    expect(told.length).toBeGreaterThan(0);
+    expect(told.every((n) => (n.payload as { audience: string }).audience === 'staff')).toBe(true);
+    // The typed ticks are kept and shown back to the reviewer.
+    expect([line!.weatherAm, line!.weatherPm]).toEqual(['HR', 'C']);
+    expect((await service.get(ctx, created.id)).weather).toMatchObject({ am: 'HR', pm: 'C' });
   });
 
   it('an entry that matches the recorded weather is not flagged', async () => {

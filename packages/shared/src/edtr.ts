@@ -368,6 +368,14 @@ export const REVIEW_FLAGS = {
   // QA 32: the printed sheet's QR is the machine-readable identity of the booking and unit.
   sheet_qr_mismatch: "Sheet QR code names a different booking or machine than it was filed under",
   sheet_unidentified: 'No sheet QR code read (blank or damaged sheet): confirm the machine by hand',
+  // Weather evidence for a person (RFC-2); each also sits in the incident log except D1/D2.
+  weather_D1: 'Weather idle claimed, but the site readings show no rain or wind',
+  weather_D2: 'Worked through a weather warning the sheet marks clear or cloudy',
+  used_despite_stop_work_am: 'Ran in the morning while the machine was under a stop-work warning',
+  used_despite_stop_work_pm: 'Ran in the afternoon while the machine was under a stop-work warning',
+  worked_in_reported_weather_am: 'Ran in the morning the sheet itself marks heavy rain, wind or storm',
+  worked_in_reported_weather_pm: 'Ran in the afternoon the sheet itself marks heavy rain, wind or storm',
+  worked_in_reported_weather_day: 'Ran on a day the sheet itself marks heavy rain, wind or storm',
 } as const;
 export type ReviewFlag = keyof typeof REVIEW_FLAGS;
 

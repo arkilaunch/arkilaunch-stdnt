@@ -60,14 +60,14 @@ const asCode = (v: string | null | undefined): WeatherCode | null =>
 
 // One reading of a day for the OCR worker and typed entries alike: v3 weather hours stand in for a weather idle reason.
 export function reportedWeatherDay(input: {
-  weatherAm?: string | null;
-  weatherPm?: string | null;
+  weatherAm?: string | null | undefined;
+  weatherPm?: string | null | undefined;
   hoursActive: number;
-  weatherHours?: number | null;
-  idleHours?: number | null;
-  idleReason?: IdleReason | null;
-  amWindow?: [number, number] | null;
-  pmWindow?: [number, number] | null;
+  weatherHours?: number | null | undefined;
+  idleHours?: number | null | undefined;
+  idleReason?: IdleReason | null | undefined;
+  amWindow?: [number, number] | null | undefined;
+  pmWindow?: [number, number] | null | undefined;
 }): ReportedWeatherDay {
   const weatherHours = input.weatherHours ?? null;
   const weatherIdle = (weatherHours ?? 0) > 0;

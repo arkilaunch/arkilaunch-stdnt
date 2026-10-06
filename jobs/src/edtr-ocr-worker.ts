@@ -1,10 +1,11 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
-import { edtr, edtrLineItems, events, flagUsedDespiteWarning, logWeatherDiscrepancies, reconcileEdtr } from '@arkilaunch/db';
+import { edtr, edtrLineItems, events, flagEdtrWeather, reconcileEdtr } from '@arkilaunch/db';
 import {
   CONFIDENCE_GATE,
   OcrPayloadSchema,
   documentIntelligenceAvailability,
   parseEdtrSheet,
+  reportedWeatherDay,
   sheetQrCheck,
   validateDayEntry,
   type DocumentIntelligencePort,
@@ -217,6 +218,8 @@ export async function runEdtrOcrWorker(
               hourMeterStart: opt(v3?.meterStart),
               hourMeterEnd: opt(v3?.meterEnd),
               reviewFlags: [...reviewFlags, ...sheetFlags],
+              weatherAm: day.v2?.weatherAm ?? null,
+              weatherPm: day.v2?.weatherPm ?? null,
             });
 
             for (const field of ocrPayload.fields) {
@@ -234,10 +237,6 @@ export async function runEdtrOcrWorker(
 
             // RFC-2 money gate: reconcile before anything can deduct.
             await reconcileEdtr(tx, row.tenantId, edtrId);
-            const usedHalves = await flagUsedDespiteWarning(tx, row.tenantId, edtrId, {
-              am: day.v2?.amWindow,
-              pm: day.v2?.pmWindow,
-            });
 
             if (day.totalMismatch) {
               // A self-contradicting sheet overrides a passing reconciliation.
@@ -250,34 +249,29 @@ export async function runEdtrOcrWorker(
                 .where(eq(edtr.id, edtrId));
             }
 
-            // Evidence only, never money. tenant_id from the claimed row, never the sheet.
-            if (day.v2) {
-              const flags = await logWeatherDiscrepancies(tx, row.tenantId, edtrId, row.rentalId, day.reportDate, {
-                ...day.v2,
+            // Weather: a stop-work warning, the sheet's own HR/W/T tick, or a mismatch with the site readings.
+            // Evidence and review flags only, never money (RFC-2). tenant_id from the claimed row, never the sheet.
+            const weatherFlags = await flagEdtrWeather(
+              tx,
+              row.tenantId,
+              edtrId,
+              row.rentalId,
+              day.reportDate,
+              reportedWeatherDay({
+                weatherAm: day.v2?.weatherAm,
+                weatherPm: day.v2?.weatherPm,
                 hoursActive: day.hoursActive,
-              });
-              if (flags.length > 0) {
-                const reason = `weather_${flags.map((f) => `${f.rule}:${f.half}`).join(',')}`;
-                await tx
-                  .update(edtr)
-                  .set({
-                    status: 'review',
-                    lastError: day.totalMismatch
-                      ? sql`coalesce(${edtr.lastError} || ';', '') || ${reason}`
-                      : reason,
-                  })
-                  .where(eq(edtr.id, edtrId));
-              }
-            }
-
-            // Worked through a stop_work warning: a human decides, like D1/D2. Money is untouched (RFC-2).
-            if (usedHalves.length > 0) {
+                weatherHours: v3?.weather,
+                idleHours: day.v2?.idleHours,
+                idleReason: day.v2?.idleReason,
+                amWindow: day.v2?.amWindow,
+                pmWindow: day.v2?.pmWindow,
+              }),
+            );
+            if (weatherFlags.length > 0) {
               await tx
                 .update(edtr)
-                .set({
-                  status: 'review',
-                  lastError: sql`coalesce(${edtr.lastError} || ';', '') || ${`used_despite_stop_work:${usedHalves.join(',')}`}`,
-                })
+                .set({ status: 'review', lastError: sql`coalesce(${edtr.lastError} || ';', '') || ${weatherFlags.join(';')}` })
                 .where(eq(edtr.id, edtrId));
             }
 

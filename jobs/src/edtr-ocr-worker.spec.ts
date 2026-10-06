@@ -474,6 +474,7 @@ describe('edtr-ocr-worker', () => {
 
     const { db: db2, client: c2 } = makeJobDb();
     const [updated] = await db2.select().from(edtr).where(eq(edtr.id, row.id));
+    const [line] = await db2.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
     const logged = await db2
       .select()
       .from(events)
@@ -483,9 +484,56 @@ describe('edtr-ocr-worker', () => {
     await c2.end();
 
     expect(updated!.status).toBe('review');
-    expect(updated!.lastError).toBe('weather_D1:day');
+    expect(updated!.lastError).toBe('weather_D1');
+    // The reviewer sees the same flag the typed path raises.
+    expect(line!.reviewFlags).toContain('weather_D1');
+    // PM is ticked HR, but its time window is blank: the machine did not run then.
+    expect(line!.reviewFlags.filter((f) => f.startsWith('worked_in_reported_weather'))).toEqual([]);
+    expect([line!.weatherAm, line!.weatherPm]).toEqual(['C', 'HR']);
     expect(logged).toHaveLength(1);
     expect((logged[0]!.properties as { rule: string }).rule).toBe('D1');
+
+    await cleanup([row.id]);
+  });
+
+  it("holds a day run through the sheet's own heavy-rain tick and logs it as used despite warning, no weather feed needed", async () => {
+    const reportDate = '2022-06-02';
+    const row = await insertQueuedPaperEdtr(reportDate);
+    const tick = (n: number, at: number) => Array.from({ length: n }, (_, i) => (i === at ? ':selected:' : ':unselected:')).join(' ');
+    const rows = [
+      ['DATE', 'AM', '', 'PM', '', 'OVERTIME', '', 'TOTAL HOURS', 'IDLE HRS', 'IDLE REASON', 'WEATHER AM', 'WEATHER PM', 'INITIAL'],
+      ['', 'IN', 'OUT', 'IN', 'OUT', 'IN', 'OUT', '', '', '', '', '', ''],
+      [reportDate, '07:00', '12:00', '13:00', '17:00', '', '', '9', '', '', tick(6, 3), tick(6, 0), ''],
+    ];
+    await runEdtrOcrWorker(
+      new FixtureDocumentIntelligenceAdapter({
+        fields: {},
+        tables: [
+          {
+            rowCount: rows.length,
+            columnCount: 13,
+            cells: rows.flatMap((r, rowIndex) => r.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: 0.97 }))),
+          },
+        ],
+      }),
+      stubFetchBytes,
+    );
+
+    const { db, client } = makeJobDb();
+    const [updated] = await db.select().from(edtr).where(eq(edtr.id, row.id));
+    const [line] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
+    const incidents = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${row.id}`));
+    await db.delete(events).where(inArray(events.id, incidents.map((e) => e.id)));
+    await client.end();
+
+    expect(updated!.status).toBe('review');
+    expect(updated!.lastError).toContain('worked_in_reported_weather_am');
+    expect(line!.reviewFlags).toContain('worked_in_reported_weather_am');
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]!.properties).toMatchObject({ source: 'sheet', half: 'am', reported: { am: 'HR', pm: 'C' }, rental_id: rentalId });
 
     await cleanup([row.id]);
   });

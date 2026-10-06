@@ -23,8 +23,7 @@ import {
   invoices,
   notifications,
   rateCards,
-  flagUsedDespiteWarning,
-  logWeatherDiscrepancies,
+  flagEdtrWeather,
   reconcileEdtr,
   rentals,
   resolveDepositLedger,
@@ -61,7 +60,7 @@ import {
   type HourDeltas,
   type OcrPayload,
   type ReconciliationReason,
-  type ReportedWeatherDay,
+  reportedWeatherDay,
   type WeatherCode,
   type RequestContext,
 } from '@arkilaunch/shared';
@@ -112,6 +111,9 @@ async function lastApprovedMeterEnd(tx: Tx, equipmentId: string, beforeDate: str
 }
 
 const opt = (v: number | null | undefined) => (v == null ? null : String(v));
+// An unknown code is dropped, never stored: the column only holds the printed tick boxes.
+const weatherCode = (v: string | null | undefined): WeatherCode | null =>
+  v && (WEATHER_CODES as readonly string[]).includes(v) ? (v as WeatherCode) : null;
 
 async function insertLineItem(
   tx: Tx,
@@ -135,20 +137,9 @@ async function insertLineItem(
     hourMeterEnd: opt(li.hourMeterEnd),
     reviewFlags,
     notes,
+    weatherAm: weatherCode(li.weatherAm),
+    weatherPm: weatherCode(li.weatherPm),
   });
-}
-
-function reportedWeatherDay(li: EdtrLineItemsInput): ReportedWeatherDay {
-  const code = (v: string | null | undefined): WeatherCode | null =>
-    v && (WEATHER_CODES as readonly string[]).includes(v) ? (v as WeatherCode) : null;
-  const weatherHours = li.hoursWeather ?? 0;
-  return {
-    weatherAm: code(li.weatherAm),
-    weatherPm: code(li.weatherPm),
-    idleHours: weatherHours > 0 ? weatherHours : (li.hoursIdle ?? null),
-    idleReason: weatherHours > 0 ? 'weather' : null,
-    hoursActive: li.hoursActive,
-  };
 }
 
 // Typed hours (digital entry, paper without OCR, or an admin reading a failed sheet): one path, so they pair and flag alike.
@@ -170,19 +161,21 @@ async function recordHours(
   });
   await insertLineItem(tx, ctx.tenantId, edtrId, lineItems, flags);
   await reconcileEdtr(tx, ctx.tenantId, edtrId);
-  const usedHalves = await flagUsedDespiteWarning(tx, ctx.tenantId, edtrId);
-  // Weather discrepancies only flag for review; never status, approval or money.
-  const weatherFlags = await logWeatherDiscrepancies(tx, ctx.tenantId, edtrId, rentalId, reportDate, reportedWeatherDay(lineItems));
-  if (weatherFlags.length > 0 || usedHalves.length > 0) {
-    const added = [
-      ...new Set(weatherFlags.map((f) => `weather_${f.rule}`)),
-      ...usedHalves.map((half) => `used_despite_stop_work_${half}`),
-    ];
-    await tx
-      .update(edtrLineItems)
-      .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(added)}::jsonb` })
-      .where(eq(edtrLineItems.edtrId, edtrId));
-  }
+  // Weather checks only flag for review and log incidents; never status, approval or money.
+  await flagEdtrWeather(
+    tx,
+    ctx.tenantId,
+    edtrId,
+    rentalId,
+    reportDate,
+    reportedWeatherDay({
+      weatherAm: lineItems.weatherAm,
+      weatherPm: lineItems.weatherPm,
+      hoursActive: lineItems.hoursActive,
+      weatherHours: lineItems.hoursWeather,
+      idleHours: lineItems.hoursIdle,
+    }),
+  );
 }
 
 // Same rule as list(): a timekeeper reads only field logs on an assigned site; others see it as not found.
@@ -529,7 +522,17 @@ export class EdtrService {
           reviewFlags: item.reviewFlags,
         })),
         fields,
-        weather: payload?.weather ?? null,
+        // A typed entry has no OCR payload; its ticks live on the line item.
+        weather:
+          payload?.weather ??
+          (lineItems[0]?.weatherAm || lineItems[0]?.weatherPm
+            ? {
+                am: weatherCode(lineItems[0].weatherAm),
+                pm: weatherCode(lineItems[0].weatherPm),
+                amWindow: null,
+                pmWindow: null,
+              }
+            : null),
         // Why the worker gave up on the sheet; only meaningful while it is hard_failed.
         failureReason: row.status === 'hard_failed' ? row.lastError : null,
         scanRotation: row.scanRotation as 0 | 90 | 180 | 270,
