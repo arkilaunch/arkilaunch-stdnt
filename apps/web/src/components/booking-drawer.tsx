@@ -14,7 +14,7 @@ import { Modal } from './modal.js';
 import { Tabs } from './tabs.js';
 import { StatusBadge } from './status-badge.js';
 import { RouteMap } from './route-map.js';
-import { NegotiationThread } from './negotiation-thread.js';
+import { NegotiationThread, inAppNegotiation } from './negotiation-thread.js';
 import { CapReview } from './tier-cap.js';
 import { BookingSide, SiteRepContact } from './booking-actions.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
@@ -289,8 +289,11 @@ export function BookingDrawer({
   initialTab?: DrawerTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<DrawerTab>(initialTab);
-  useEffect(() => setTab(initialTab), [target?.id, initialTab]);
+  // With in-app chat off there is no Negotiation tab, so a link to it lands on the overview.
+  const tabs = inAppNegotiation() ? TABS : TABS.filter((t) => t.id !== 'negotiation');
+  const startTab = tabs.some((t) => t.id === initialTab) ? initialTab : 'overview';
+  const [tab, setTab] = useState<DrawerTab>(startTab);
+  useEffect(() => setTab(startTab), [target?.id, startTab]);
   const rentalId = target?.service === 'rental' ? target.id : null;
   const booking = useQuery({ ...bookingsQueries.detail(rentalId ?? ''), enabled: !!rentalId });
   const shownTruck = target?.service === 'truck' && truck?.id === target.id ? truck : undefined;
@@ -317,8 +320,8 @@ export function BookingDrawer({
             <StatusBadge status={status} />
           </div>
         )}
-        <Tabs label="Booking sections" items={TABS} value={tab} onChange={setTab} />
-        <div role="tabpanel" aria-label={TABS.find((t) => t.id === tab)?.label}>
+        <Tabs label="Booking sections" items={tabs} value={tab} onChange={setTab} />
+        <div role="tabpanel" aria-label={tabs.find((t) => t.id === tab)?.label}>
           {rentalId && booking.isError && <Alert type="error">{apiErrorText(booking.error)}</Alert>}
           {rentalId && booking.isPending && <p className="text-sm text-text-muted">Loading booking...</p>}
           {booking.data && rentalId && (

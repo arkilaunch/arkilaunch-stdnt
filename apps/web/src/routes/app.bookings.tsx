@@ -12,7 +12,7 @@ import { SegmentedControl } from '../components/segmented-control.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { WeeklyBillingCard } from './statement.js';
-import { NegotiationThread } from '../components/negotiation-thread.js';
+import { NegotiationThread, inAppNegotiation } from '../components/negotiation-thread.js';
 import { BookingCode } from '../components/booking-code.js';
 import { BookingDrawer, type BookingDrawerTarget } from '../components/booking-drawer.js';
 import { BookingSide } from '../components/booking-actions.js';
@@ -284,8 +284,8 @@ function BookingPage() {
       />
       {booking.isError && <Alert type="error">{apiErrorText(booking.error)}</Alert>}
       {booking.data && (
-        <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
-          <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} />
+        <div className={inAppNegotiation() ? 'grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]' : 'max-w-xl'}>
+          {inAppNegotiation() && <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} />}
           <BookingSide booking={booking.data} />
         </div>
       )}
