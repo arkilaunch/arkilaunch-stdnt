@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { EdtrDetailResponse } from '@arkilaunch/shared';
 import { apiGet } from '../lib/api-client.js';
 import { rotateImage, toScannedPage } from '../lib/document-scanner.js';
 import { formatHours } from '../lib/format.js';
+import { useMediaQuery } from '../lib/use-media-query.js';
 import { ConfidenceChip } from './confidence-chip.js';
 import { Surface } from './surface.js';
 import { Modal } from './modal.js';
@@ -70,18 +71,18 @@ const FLAG_TEXT: Record<string, string> = {
 export function ParsedColumns({ item }: { item: LineItem }) {
   return (
     <div className="flex flex-col gap-2">
-      <table className="w-full text-sm">
+      <table className="w-full border-collapse text-sm">
         <caption className="sr-only">What the sheet says for this day</caption>
         <tbody>
           {COLUMNS.map((column) => {
             const value = column.value(item);
             return (
               <tr key={column.label} className={column.billed ? 'bg-recon-match/10 font-semibold' : ''}>
-                <th scope="row" className="py-1 pr-3 text-left font-normal text-text-muted">
+                <th scope="row" className="h-8 px-2 text-left font-normal text-text-muted">
                   {column.label}
                   {column.billed && <span className="ml-1 text-xs text-text">(billed)</span>}
                 </th>
-                <td className="py-1 text-right font-mono tabular-nums text-text">
+                <td className="h-8 px-2 text-right font-mono tabular-nums text-text">
                   {/* Blank is not zero: null means nothing was read or written. */}
                   {value == null ? '--' : column.meter ? value.toFixed(1) : formatHours(value)}
                 </td>
@@ -189,10 +190,32 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
     .map((box) => rotateBox(box, boxRotation));
   const needsReview = detail.fields.filter((field) => field.belowGate);
 
+  // Beside the photo, the readings start level with the sheet's hours row (where RUNNING was read).
+  const wide = useMediaQuery('(min-width: 1024px)');
+  const hoursTop = boxes.find((box) => box.name === 'hours_active')?.top ?? null;
+  const leftColumn = useRef<HTMLDivElement>(null);
+  const [photoFrame, setPhotoFrame] = useState<HTMLDivElement | null>(null);
+  const [readingsOffset, setReadingsOffset] = useState(0);
+  useEffect(() => {
+    if (!photoFrame || hoursTop === null) {
+      setReadingsOffset(0);
+      return;
+    }
+    const measure = () => {
+      const column = leftColumn.current?.getBoundingClientRect();
+      const frame = photoFrame.getBoundingClientRect();
+      setReadingsOffset(column ? Math.max(0, frame.top - column.top + hoursTop * frame.height) : 0);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(photoFrame);
+    return () => observer.disconnect();
+  }, [photoFrame, hoursTop]);
+
   // The page with its boxes; the frame is exactly the picture's size, so box percentages land on the page.
-  const page = (imageClass: string, frameClass: string) =>
+  const page = (imageClass: string, frameClass: string, frameRef?: (el: HTMLDivElement | null) => void) =>
     shown && (
-      <div className={`relative overflow-hidden rounded-sm border border-border bg-surface ${frameClass}`}>
+      <div ref={frameRef} className={`relative overflow-hidden rounded-sm border border-border bg-surface ${frameClass}`}>
         <img src={shown} alt="The scanned sheet, with the readings the model took marked on it" className={`block ${imageClass}`} />
         {boxes.map((box) => (
           <span
@@ -225,7 +248,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
 
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
-      <div className="flex-1">
+      <div ref={leftColumn} className="flex-1">
         {imageUrl && (
           <div className="mb-2 flex items-center gap-2" role="group" aria-label="How to show the sheet">
             {/* The photo first: it is what the reader saw. B/W is an optional aid, and can speckle on shadowed shots. */}
@@ -263,7 +286,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
         {shown ? (
           // Click the page to open it full screen.
           <button type="button" onClick={() => setZoomOpen(true)} className="mx-auto block w-fit max-w-full cursor-zoom-in" aria-label="Enlarge the sheet">
-            {page('h-auto max-h-[80vh] w-auto max-w-full', 'w-fit max-w-full')}
+            {page('h-auto max-h-[80vh] w-auto max-w-full', 'w-fit max-w-full', setPhotoFrame)}
           </button>
         ) : imageUnavailable ? (
           <p className="text-sm text-text-muted">
@@ -324,7 +347,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
         )}
       </div>
 
-      <div className="flex flex-col gap-3 lg:w-80">
+      <div className="flex flex-col gap-3 lg:w-80" style={wide && readingsOffset > 0 ? { marginTop: readingsOffset } : undefined}>
         {detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />}
         <div className="flex flex-wrap gap-2">
           {detail.fields.map((field) => (

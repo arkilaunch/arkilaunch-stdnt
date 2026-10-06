@@ -1,11 +1,10 @@
-import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { customers, depositAccruals, invoiceLineItems, invoices, notifications, publicPhotoUrl, rentals, sendEmail, tenants, users } from '@arkilaunch/db';
-import { round2HalfUp, notificationEmail, renderEmailHtml, tenantWebOrigin } from '@arkilaunch/shared';
+import { isNull } from 'drizzle-orm';
+import { depositAccruals, issueWeeklyInvoice, sendEmail, type WeeklyInvoiceMail } from '@arkilaunch/db';
 import { makeJobDb } from './db-client.js';
 import { runJobIfMain } from './telemetry.js';
 
-// RFC-2: bills only accruals a reconciled or human-approved pair created.
-// RLS is bypassed on this connection, so every write names its tenant_id.
+// Safety net: bills whatever the office has not billed by hand with "Approve & bill".
+// RLS is bypassed on this connection, so every write names its tenant_id (issueWeeklyInvoice does).
 export async function runWeeklyBilling(): Promise<number> {
   const { db, client } = makeJobDb();
   let issued = 0;
@@ -17,85 +16,15 @@ export async function runWeeklyBilling(): Promise<number> {
 
     for (const { tenantId, rentalId } of open) {
       // Sent after the commit, so a rolled-back run mails nobody.
-      let mail = null as { to: string; subject: string; text: string; html: string } | null;
+      let mail: WeeklyInvoiceMail | null = null;
       await db.transaction(async (tx) => {
-        // Locked so a concurrent run cannot bill the same rows twice.
-        const rows = await tx
-          .select()
-          .from(depositAccruals)
-          .where(and(eq(depositAccruals.rentalId, rentalId), isNull(depositAccruals.invoiceId)))
-          .for('update');
-        if (rows.length === 0) return;
-        const amount = round2HalfUp(rows.reduce((sum, row) => sum + Number(row.amount), 0));
-
-        const [invoice] = await tx
-          .insert(invoices)
-          .values({
-            tenantId,
-            rentalId,
-            invoiceType: 'weekly',
-            amount: String(amount),
-            status: 'issued',
-            dueDate: new Date(Date.now() + 7 * 86_400_000),
-          })
-          .returning();
-        if (!invoice) throw new Error('weekly invoice insert returned no row');
-
-        await tx.insert(invoiceLineItems).values(
-          rows.map((row) => ({
-            tenantId,
-            invoiceId: invoice.id,
-            reconciliationId: row.reconciliationId,
-            description: `Hours past the deposit (EDTR reconciliation ${row.reconciliationId})`,
-            quantity: row.hours,
-            unitPrice: row.unitPrice,
-            amount: row.amount,
-          })),
-        );
-        await tx
-          .update(depositAccruals)
-          .set({ invoiceId: invoice.id })
-          .where(inArray(depositAccruals.id, rows.map((row) => row.id)));
-        const [owner] = await tx
-          .select({ userId: customers.userId, code: rentals.code, email: users.email, prefs: users.notificationPrefs })
-          .from(rentals)
-          .innerJoin(customers, eq(customers.id, rentals.customerId))
-          .leftJoin(users, eq(users.id, customers.userId))
-          .where(eq(rentals.id, rentalId))
-          .limit(1);
-        if (owner?.userId) {
-          await tx.insert(notifications).values({
-            tenantId,
-            userId: owner.userId,
-            notificationType: 'weekly_invoice',
-            payload: { rental_id: rentalId, invoice_id: invoice.id, amount_php: amount },
-          });
-          const [tenant] = await tx
-            .select({ name: tenants.legalName, slug: tenants.slug, logoKey: tenants.logoKey, color: tenants.primaryColor })
-            .from(tenants)
-            .where(eq(tenants.id, tenantId))
-            .limit(1);
-          const email =
-            owner.email && owner.prefs?.email && tenant
-              ? notificationEmail(
-                  'weekly_invoice',
-                  { invoiceId: invoice.id, invoiceType: 'weekly', code: owner.code, amountPhp: amount, dueDate: invoice.dueDate, rentalId, truckRequestId: null },
-                  'customer',
-                  tenantWebOrigin(tenant.slug, process.env.WEB_ORIGIN ?? 'http://localhost:5173', process.env.PLATFORM_DOMAIN),
-                )
-              : null;
-          if (email && owner.email && tenant) {
-            const html = renderEmailHtml(
-              { name: tenant.name, logoUrl: publicPhotoUrl(tenant.logoKey), color: tenant.color },
-              email.text,
-            );
-            mail = { to: owner.email, ...email, html };
-          }
-        }
+        const result = await issueWeeklyInvoice(tx, { tenantId, rentalId });
+        if (!result) return;
+        mail = result.mail;
         issued += 1;
       });
       if (mail) {
-        const { to, subject, text, html } = mail;
+        const { to, subject, text, html } = mail as WeeklyInvoiceMail;
         await sendEmail(to, subject, text, html).catch((err) => console.error('weekly-billing: invoice email failed', err));
       }
     }

@@ -5,6 +5,7 @@ import {
   CouponPreviewRequestSchema,
   CouponUpdateSchema,
   InvoiceAmountUpdateSchema,
+  InvoiceVoidSchema,
   OfficePaymentSchema,
   PaginationQuerySchema,
   RefundRequestSchema,
@@ -18,3 +19,4 @@ export class CouponPreviewRequestDto extends createZodDto(CouponPreviewRequestSc
 export class CouponListQueryDto extends createZodDto(PaginationQuerySchema) {}
 export class InvoiceAmountUpdateDto extends createZodDto(InvoiceAmountUpdateSchema) {}
 export class OfficePaymentDto extends createZodDto(OfficePaymentSchema) {}
+export class InvoiceVoidDto extends createZodDto(InvoiceVoidSchema) {}

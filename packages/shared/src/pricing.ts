@@ -115,5 +115,7 @@ export const BillingSettingsSchema = z.object({
   demobilizationPhp: z.number().finite().min(0).max(99_999_999.99).default(0),
   minHours: z.number().finite().min(0).max(999_999).default(0),
   holdHours: z.number().int().min(1).max(720).default(48),
+  skipDepositForEdtr: z.boolean().default(false),
+  skipOcrAccuracyGate: z.boolean().default(false),
 });
 export type BillingSettingsInput = z.infer<typeof BillingSettingsSchema>;

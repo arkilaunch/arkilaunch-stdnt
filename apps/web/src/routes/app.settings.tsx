@@ -387,6 +387,8 @@ interface BillingSettings {
   demobilizationPhp: number;
   minHours: number;
   holdHours: number;
+  skipDepositForEdtr: boolean;
+  skipOcrAccuracyGate: boolean;
 }
 
 function useBillingSettingsEditor(saved: { title: string; detail?: string }, failed: string) {
@@ -434,6 +436,8 @@ function BillingSettingsForm() {
           { label: 'Low-balance warning', value: `${saved.lowBalancePct}%` },
           { label: 'Minimum rental hours', value: saved.minHours },
           { label: 'Unpaid requests hold dates for', value: `${saved.holdHours} hours` },
+          { label: 'EDTR hours past the deposit', value: saved.skipDepositForEdtr ? 'On: every hour goes on the weekly invoice' : 'Off: hours use the deposit first' },
+          { label: 'Approve scanned days without OCR accuracy', value: saved.skipOcrAccuracyGate ? 'On (demo)' : 'Off' },
         ]}
         action={<EditButton what="deposit and billing" onClick={form.open} />}
       />
@@ -460,6 +464,36 @@ function BillingSettingsForm() {
           <Input label="Low-balance warning (%)" type="number" min="0" max="100" step="1" numeric hint="Warns you and the customer when this much deposit is left." value={String(current.lowBalancePct)} onChange={(e) => form.edit({ lowBalancePct: Number(e.target.value) })} />
           <Input label="Minimum rental hours" type="number" min="0" step="1" numeric hint={current.minHours > 0 ? `Customers book at least ${minRentalDays(current.dailyHours || 8, current.minHours)} days (this many hours at ${current.dailyHours} hours a day). 0 means any length.` : '0 means any length; each day booked still counts a full working day.'} value={String(current.minHours)} onChange={(e) => form.edit({ minHours: Number(e.target.value) })} />
           <Input label="Hold unpaid requests for (hours)" type="number" min="1" max="720" step="1" numeric hint="A request keeps its dates this long, restarting when you send the quote. Unpaid after that, the dates free up for other customers." value={String(current.holdHours)} onChange={(e) => form.edit({ holdHours: Number(e.target.value) })} />
+          <label className="flex min-h-11 items-start gap-2 text-sm text-text sm:col-span-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={current.skipDepositForEdtr}
+              onChange={(e) => form.edit({ skipDepositForEdtr: e.target.checked })}
+            />
+            <span>
+              <span className="font-medium">Bill EDTR hours past the deposit</span>
+              <span className="block text-text-muted">
+                On: approved field-log hours skip the deposit and go on the weekly invoice the customer pays (Approve &amp; bill).
+                Off (normal): hours use up the deposit first. Use On for demos.
+              </span>
+            </span>
+          </label>
+          <label className="flex min-h-11 items-start gap-2 text-sm text-text sm:col-span-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={current.skipOcrAccuracyGate}
+              onChange={(e) => form.edit({ skipOcrAccuracyGate: e.target.checked })}
+            />
+            <span>
+              <span className="font-medium">Approve scanned days without a measured OCR accuracy (demo)</span>
+              <span className="block text-text-muted">
+                On: an admin can approve days read from a scanned sheet before the scanner&apos;s accuracy has been measured;
+                each such approval is recorded in the audit log. Off (normal): scanned days need the measured accuracy first.
+              </span>
+            </span>
+          </label>
         </div>
       </Modal>
     </>

@@ -50,3 +50,11 @@
 ## 5. Deliberately not claimed
 
 - The round trip through the real Azure DI layout model on a printed v3 sheet has not been run: there is no DI fixture for v3 yet. Until one is captured, v3 sheets go through manual transcription, which is how every sheet is read while `ENABLE_OCR_PIPELINE` is off.
+
+## v3.1 addendum (2026-10-06): STD SHIFT tick
+
+A real scan (EQR-2026-0013) read handwritten IN/OUT times badly (`13:99`, `42:,92`) and checkboxes cleanly.
+
+- **Sheet:** one `STD SHIFT` tick column after `DAY` (width taken from `METER START`/`METER END`). HOW TO FILL step 1: tick it for the standard shift 07:30–12:00, 13:00–16:00 and leave IN/OUT blank. Step 2 adds writing tips: big decimal dot, no bar on 7.
+- **Parser:** a ticked `STD SHIFT` (gated by `CONFIDENCE_GATE`) with blank AM/PM cells stands in for those times. Written times always win. The tick feeds only the TOTAL cross-check (`computedHours`, `totalMismatch`) and the v2 windows. It never sets RUNNING, the billed figure (RFC-2). A ticked row counts as filled.
+- Sheets without the column parse unchanged.

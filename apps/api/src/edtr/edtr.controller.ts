@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -17,7 +18,8 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { validateUpload } from '../storage/upload-validation.js';
 import { StorageService, edtrBucket } from '../storage/storage.service.js';
 import { EdtrService } from './edtr.service.js';
-import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrRotationDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
+import { EdtrWeekService } from './edtr-week.service.js';
+import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrRotationDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto, EdtrWeekBillDto } from './dto.js';
 import type { CtxRequest, MulterFile } from '../common/request.js';
 
 @Controller('edtr')
@@ -25,7 +27,36 @@ export class EdtrController {
   constructor(
     private readonly edtr: EdtrService,
     private readonly storage: StorageService,
+    private readonly weeks: EdtrWeekService,
   ) {}
+
+  // One unit's Mon-Sun week: each day's reading and decision, totals, the sheet's WEEK SUMMARY, bill state.
+  // Four segments, so it never collides with ':id'.
+  @Get('weeks/:rentalId/:equipmentId/:weekStart')
+  @RequirePermission('edtr:approve')
+  week(
+    @Param('rentalId', ParseUUIDPipe) rentalId: string,
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Param('weekStart') weekStart: string,
+    @Req() req: CtxRequest,
+  ) {
+    return this.weeks.week(req.ctx, rentalId, equipmentId, weekStart);
+  }
+
+  // "Approve & bill": once every logged day is decided, invoices the week's hours past the deposit and
+  // sends the invoice and the SOA. A person clicks it; nothing bills on a schedule before Monday's cron (RFC-2).
+  @Post('weeks/:rentalId/:equipmentId/:weekStart/bill')
+  @RequirePermission('edtr:approve')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  billWeek(
+    @Param('rentalId', ParseUUIDPipe) rentalId: string,
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Param('weekStart') weekStart: string,
+    @Body() body: EdtrWeekBillDto,
+    @Req() req: CtxRequest,
+  ) {
+    return this.weeks.bill(req.ctx, rentalId, equipmentId, weekStart, body);
+  }
 
   // Tighter cap: each capture queues an Azure DI extraction. FileInterceptor only engages on multipart,
   // so digital_entry JSON passes through untouched.

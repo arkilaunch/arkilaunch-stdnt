@@ -235,7 +235,9 @@ async function depositSplit(tx: Tx, ctx: RequestContext, rentalId: string, amoun
     .limit(1);
   if (!depositPaid) throw new ConflictException({ error: 'deposit_not_paid' });
   const ledger = await resolveDepositLedger(tx, rentalId, ctx.tenantId);
-  const balanceBefore = round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted));
+  // The office's switch (Settings > Deposit and billing): every approved hour waits for the weekly invoice.
+  const { skipDepositForEdtr } = await getBillingSettings(tx, ctx.tenantId);
+  const balanceBefore = skipDepositForEdtr ? 0 : round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted));
   return { ledger, balanceBefore, split: splitDeduction(balanceBefore, amount) };
 }
 
@@ -415,6 +417,17 @@ export class EdtrService {
       if (query.equipmentId) conditions.push(eq(edtr.equipmentId, query.equipmentId));
       if (query.from) conditions.push(gte(edtr.reportDate, query.from));
       if (query.to) conditions.push(lte(edtr.reportDate, query.to));
+      // One Field Log per machine-day. The office's approval log and the digital half of a paper + digital
+      // pair stay as the double-entry record (RFC-2) but are not listed; the paper side (with the photo) is.
+      conditions.push(
+        sql`not exists (select 1 from ${edtrLineItems} li where li.edtr_id = ${edtr.id} and li.notes = ${OFFICE_LOG_NOTE})`,
+        sql`not (${edtr.source} = 'digital_entry' and exists (
+          select 1 from ${edtrReconciliations} rc
+          join ${edtr} other on other.id = rc.counterpart_edtr_id
+          where rc.edtr_id = ${edtr.id} and other.source = 'paper_ocr'
+            and not exists (select 1 from ${edtrLineItems} oli where oli.edtr_id = other.id and oli.notes = ${OFFICE_LOG_NOTE})
+        ))`,
+      );
 
       if (ctx.role === 'timekeeper') {
         const assignments = await tx
@@ -778,7 +791,18 @@ export class EdtrService {
     if (modelSourced) {
       const failure = attestedOcrAccuracyFailure();
       if (failure) {
-        throw new ConflictException({ error: 'ocr_accuracy_gate_unmet', reason: failure });
+        // Demo switch (Settings > Deposit and billing): the admin's own approval stands in; every use is audit-logged.
+        if (!(await getBillingSettings(tx, ctx.tenantId)).skipOcrAccuracyGate) {
+          throw new ConflictException({ error: 'ocr_accuracy_gate_unmet', reason: failure });
+        }
+        await tx.insert(auditLogs).values({
+          tenantId: ctx.tenantId,
+          actorId: ctx.userId,
+          action: 'APPROVE',
+          entity: 'ocr_accuracy_gate_skipped',
+          entityId: edtrId,
+          reason: failure,
+        });
       }
     }
 

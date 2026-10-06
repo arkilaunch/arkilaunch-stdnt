@@ -83,6 +83,8 @@ interface AzurePage {
   width?: number;
   height?: number;
   words?: AzureWord[];
+  // Tick boxes: a cell holding only ticks has no words, so its confidence comes from these.
+  selectionMarks?: AzureWord[];
   lines?: AzureLine[];
   barcodes?: { kind?: string; value?: string; confidence?: number }[];
 }
@@ -300,7 +302,7 @@ function mapTables(
   tables: AzureAnalyzeTable[] | undefined,
   pages: AzurePage[] | undefined,
 ): ExtractedTable[] {
-  const words = (pages ?? []).flatMap((p) => p.words ?? []);
+  const words = (pages ?? []).flatMap((p) => [...(p.words ?? []), ...(p.selectionMarks ?? [])]);
   const pagesByNumber = new Map(
     (pages ?? []).map((page, index) => [page.pageNumber ?? index + 1, page] as const),
   );

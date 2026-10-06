@@ -20,6 +20,16 @@ describe('notificationEmail', () => {
     expect(mail?.text).toContain('View receipt: https://almara.arkilaunch.app/account/invoices/inv-1');
   });
 
+  it('sends a weekly statement even when the deposit paid for the whole week', () => {
+    const payload = { hours: 32, from_deposit_php: 38400, deposit_left_php: 163200, due_php: 0, week_start: '2026-10-05' };
+    const mail = notificationEmail('weekly_statement', inv, 'customer', origin, payload);
+    expect(mail?.subject).toBe('Weekly statement for EQR-2026-0001: 32.0 h, nothing to pay');
+    expect(mail?.text).toContain('Paid from your deposit: PHP 38,400.00');
+    expect(mail?.text).toContain('Deposit left: PHP 163,200.00');
+    expect(mail?.text).toContain('https://almara.arkilaunch.app/account/bookings/r-1/statement');
+    expect(notificationEmail('weekly_statement', inv, 'customer', origin, { ...payload, due_php: 8400 })?.subject).toContain('PHP 8,400.00 to pay');
+  });
+
   it('covers the invoice, failure, refund and staff events', () => {
     expect(notificationEmail('weekly_invoice', inv, 'customer', origin)?.text).toContain('/account/invoices/inv-1');
     expect(notificationEmail('payment_failed', inv, 'customer', origin)?.text).toContain('Nothing was charged');

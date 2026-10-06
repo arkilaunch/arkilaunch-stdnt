@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { billingSettings, depositAccruals, invoiceLineItems, invoices } from './schema/billing.js';
 import { quotationItems, quotations, rentalContracts } from './schema/rentals.js';
 import type { Tx } from './with-tenant-tx.js';
@@ -20,6 +20,8 @@ export interface BillingSettings {
   demobilizationPhp: number;
   minHours: number;
   holdHours: number;
+  skipDepositForEdtr: boolean;
+  skipOcrAccuracyGate: boolean;
 }
 
 export async function getBillingSettings(tx: Tx, tenantId: string): Promise<BillingSettings> {
@@ -33,6 +35,8 @@ export async function getBillingSettings(tx: Tx, tenantId: string): Promise<Bill
     demobilizationPhp: row ? Number(row.demobilizationPhp) : 0,
     minHours: row ? Number(row.minHours) : 0,
     holdHours: row ? row.holdHours : DEFAULT_HOLD_HOURS,
+    skipDepositForEdtr: row?.skipDepositForEdtr ?? false,
+    skipOcrAccuracyGate: row?.skipOcrAccuracyGate ?? false,
   };
 }
 
@@ -56,6 +60,23 @@ export interface DepositLedger {
   unbilledAccrued: number;
   hoursUsed: number;
   hoursOrdered: number | null;
+}
+
+// Before a weekly invoice: the deposit left pays the oldest waiting hours first; only the rest is invoiced.
+// Hours split in the same ratio as the money, as splitDeduction's callers do.
+export function coverAccruals<T extends { id: string; amount: number; hours: number }>(balance: number, rows: T[]) {
+  let left = Math.max(0, round2HalfUp(balance));
+  const covered: { row: T; amount: number; hours: number }[] = [];
+  const remaining: { row: T; amount: number; hours: number }[] = [];
+  for (const row of rows) {
+    const take = Math.min(left, round2HalfUp(row.amount));
+    left = round2HalfUp(left - take);
+    const takeHours = row.amount > 0 ? round2HalfUp((row.hours * take) / row.amount) : 0;
+    if (take > 0) covered.push({ row, amount: take, hours: takeHours });
+    const rest = round2HalfUp(row.amount - take);
+    if (rest > 0) remaining.push({ row, amount: rest, hours: round2HalfUp(row.hours - takeHours) });
+  }
+  return { covered, remaining, balanceAfter: left };
 }
 
 // Never throws: the RFC-2 gate (reconciled or human-approved) ran before.
@@ -102,7 +123,8 @@ export async function resolveDepositLedger(tx: Tx, rentalId: string, tenantId: s
   const deductionRows = await tx
     .select()
     .from(invoices)
-    .where(and(eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction')))
+    // A voided deduction gives its hours and money back to the deposit.
+    .where(and(eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void')))
     .orderBy(desc(invoices.createdAt));
 
   const deductions = deductionRows.map((row) => ({

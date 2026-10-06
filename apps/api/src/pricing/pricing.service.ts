@@ -364,6 +364,8 @@ export class PricingService {
         demobilizationPhp: String(input.demobilizationPhp),
         minHours: String(input.minHours),
         holdHours: input.holdHours,
+        skipDepositForEdtr: input.skipDepositForEdtr,
+        skipOcrAccuracyGate: input.skipOcrAccuracyGate,
         updatedAt: new Date(),
       };
       await tx

@@ -187,8 +187,14 @@ export async function buildLeakageReport(
     };
 
     // 1. Approved hours that never reached an invoice or a deposit deduction.
+    // A double-entry pair bills on one side only; the other side is not a leak.
+    const reconByEdtr = new Map(reconRows.map((r) => [r.edtrId, r]));
+    const pairBilled = (r: (typeof reconRows)[number]) => {
+      const other = r.counterpartEdtrId ? reconByEdtr.get(r.counterpartEdtrId) : undefined;
+      return !!other && billedRecon.has(other.id);
+    };
     const unbilled = reconRows
-      .filter((r) => r.status === 'approved' && !billedRecon.has(r.id))
+      .filter((r) => r.status === 'approved' && !billedRecon.has(r.id) && !pairBilled(r))
       .flatMap((r) => {
         const e = edtrById.get(r.edtrId);
         if (!e) return [];
@@ -241,9 +247,14 @@ export async function buildLeakageReport(
       ...edtrRows.filter((e) => e.status === 'review').map((e) => e.id),
       ...reconRows.filter((r) => r.status === 'discrepancy').map((r) => r.edtrId),
     ]);
+    // Both logs of a disputed machine-day are in review; the day counts once.
+    const disputedDays = new Set<string>();
     const disputed = [...disputedIds].flatMap((id) => {
       const e = edtrById.get(id);
       if (!e) return [];
+      const day = `${e.equipmentId}|${e.reportDate}`;
+      if (disputedDays.has(day)) return [];
+      disputedDays.add(day);
       const hours = hoursOf(id);
       return [{ label: `${bookingOf(e.rentalId)} · ${unitName(e.equipmentId)}`, detail: `${e.reportDate}: ${hours} h waiting for a decision`, amountPhp: round2HalfUp(hours * rateFor(e.equipmentId, e.reportDate)) }];
     });

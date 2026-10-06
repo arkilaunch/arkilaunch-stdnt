@@ -19,12 +19,14 @@ import {
   truckRequests,
   withTenantTx,
   recomputeCustomerTier,
+  voidEdtrInvoice,
 } from '@arkilaunch/db';
 import {
   round2HalfUp,
   PaymongoEventEnvelopeSchema,
   type CheckoutRequest,
   type InvoiceAmountUpdate,
+  type InvoiceVoid,
   type PaymentsPort,
   type RefundRequest,
   type RequestContext,
@@ -391,6 +393,27 @@ export class PaymentsService {
       });
       await this.events.emit(ctx, 'invoice_amount_adjusted', { invoice_id: invoiceId });
       return { invoiceId, amountPhp: target };
+    });
+  }
+
+  async voidBill(ctx: RequestContext, invoiceId: string, body: InvoiceVoid) {
+    return withTenantTx(ctx, async (tx) => {
+      // An open online checkout for this bill must not be paid after the void.
+      await this.closePendingPayments(tx, invoiceId);
+      const result = await voidEdtrInvoice(tx, { tenantId: ctx.tenantId, invoiceId });
+      if (!result.ok) {
+        if (result.error === 'invoice_not_found') throw new NotFoundException({ error: result.error });
+        throw new ConflictException({ error: result.error });
+      }
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'invoice_voided',
+        entityId: invoiceId,
+        reason: `${body.reason} (${result.released} field-log day(s) back to waiting)`,
+      });
+      return { invoiceId, status: 'void' as const, released: result.released };
     });
   }
 

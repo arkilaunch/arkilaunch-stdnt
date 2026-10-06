@@ -74,3 +74,25 @@ One pure function, `classifyHours()` in `packages/shared/src/edtr.ts`, is the on
 - **Re-opening an approved day is not built.** Reversing a deduction needs a credit-note model (`invoice_line_items_nonneg_chk` forbids a negative line, correctly) and would have to re-open a terminal reconciliation, which audit-ocr-money-path.md #6 deliberately closed. An approved day is final; a mistake is corrected by a manual credit until a CR designs reversal.
 - The extend prompt opens the existing extension flow; it does not extend on its own.
 - Bulk approve runs the single-day path once per day; each day can still fail its own gate (for example `deposit_not_paid`).
+
+## Addendum (2026-10-06): week view, billed hours per day, "Approve & bill"
+
+- **Where:** the Field logs page (`/app/ocr`) groups logs by site, then by deployed machine (booking + unit). Expanding a machine shows its days by Mon-Sun week, in the same table as before (day, status, match, Review and bill). Each day is still decided on its own through Review and bill, where the office sets the day's billed hours. A billing bar closes each week.
+- **Week total cross-check:** the bar shows the week's billable hours (approved days summed) against the sheet's handwritten WEEK SUMMARY (read by the OCR into `ocr_payload.week_summary`, or typed in). A difference over 0.1 h needs a written reason before billing.
+- **Approve & bill** (`POST /edtr/weeks/:rentalId/:equipmentId/:weekStart/bill`, `edtr:approve`) does the following:
+  - refuses while any logged day is pending or awaits a correction (`week_not_reviewed`), when the screen's total is stale (`week_total_changed`), or on an unexplained sheet mismatch (`week_summary_mismatch`). The gate is `weekBillBlock`, a pure function in `packages/shared`;
+  - invoices that week's `deposit_accruals` through `issueWeeklyInvoice` (`packages/db/src/weekly-invoice.ts`, shared with the Monday cron);
+  - writes `audit_logs` `edtr_week_billed` (totals, sheet figure, reason);
+  - sends the invoice notification and email, then the SOA PDF, after the commit.
+  - A second click bills nothing. A person always clicks (RFC-2).
+- **Monday 07:00 cron** stays as the safety net for hours past the deposit that nobody billed by hand.
+- **Tick confidence:** Azure gives tick-only cells no words, so they scored 0 and every weather tick was dropped. Cell confidence now includes `selectionMarks`. Ticks (weather, STD SHIFT) use `TICK_CONFIDENCE_GATE` 0.60, because they feed review flags and the TOTAL cross-check only. Digits keep 0.90.
+
+## Addendum (2026-10-06): one Field Log per machine-day; voiding a field-log bill
+
+- **One Field Log per machine-day.** Approving a single-log day still writes the office log as the second record (§3, double entry, RFC-2), and a paper + digital pair keeps both records. `GET /edtr` lists neither the office log nor the digital half of a paper pair, so the Field logs page, its counts and the review badge show one Field Log per machine-day. The site hub already did this. The leakage report counts an approved pair's unbilled side, and a disputed pair, once.
+- **Void bill** (`POST /invoices/:id/void`, `quote:approve`, reason required, audit `invoice_voided`). Only an unpaid weekly bill or a deposit deduction can be voided; a paid bill is refunded instead.
+  - The bill stays in history as `void`.
+  - Weekly bill: its accruals go back to waiting.
+  - Deposit deduction: its lines become waiting accruals (merged per reconciliation), and the deposit balance stops counting it. This is refused while part of the same day sits on an unpaid weekly bill.
+  - Field logs and their approvals are untouched. **Approve & bill** makes a new bill (deposit first) with a new reference.
