@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, isNotNull, like, notInArray } from 'drizzle-orm';
-import { type Tx, auditLogs, customers, negotiationMessages, notifications, projectSites, tollRates, truckBanRules, truckRequests, truckSettings, users, withTenantTx } from '@arkilaunch/db';
+import { type Tx, auditLogs, customerTier, customers,negotiationMessages, notifications, projectSites, tollRates, truckBanRules, truckRequests, truckSettings, users, withTenantTx } from '@arkilaunch/db';
 import {
   round2HalfUp,
   bookingCodeSearchPrefix,
@@ -9,6 +9,7 @@ import {
   estimateTruckCost,
   costItemQuoteLines,
   customerTruckLines,
+  discountPct,
   negotiationFloor,
   TruckCostPolicySchema,
   truckProfit,
@@ -568,6 +569,20 @@ export class TrucksService {
       }
       const was = num(request.agreedPricePhp);
       if (request.status === 'agreed' && was === pricePhp) return toResponse(request, NO_CONTACT, ctx);
+      // Tier cap (UC 005), as on quotes: a discount off the route price above the
+      // customer's cap is the Owner's call alone.
+      const base = request.price.totalPhp;
+      const pct = pricePhp < base ? discountPct({ type: 'fixed', value: base - pricePhp }, base) : 0;
+      let capNote = '';
+      if (pct > 0 && request.customerId) {
+        const tier = await customerTier(tx, ctx.tenantId, request.customerId);
+        const within = pct <= tier.capPct + 1e-9;
+        // ponytail: role check mirrors quote:approve_cap (owner only in the permission catalog); look the permission up if roles become configurable.
+        if (!within && ctx.role !== 'owner') {
+          throw new ConflictException({ error: 'truck_cap_needs_owner', tier: tier.tier, capPct: tier.capPct, discountPct: round2HalfUp(pct) });
+        }
+        capNote = `; tier cap ${within ? 'ok' : 'exceeded (owner)'}: ${tier.tier}${tier.hasOverdue ? ' (overdue)' : ''} discount ${pct.toFixed(2)}% / cap ${tier.capPct}%`;
+      }
       await this.payments.voidUnpaid(tx, { truckRequestId: id });
       const [updated] = await tx
         .update(truckRequests)
@@ -596,7 +611,7 @@ export class TrucksService {
         // and the audit trail says so.
         reason: `agreed price ${was === null ? 'none' : php(was)} -> ${php(pricePhp)}${
           request.internal?.floorPhp != null && pricePhp < request.internal.floorPhp ? `; below the ${request.internal.floorBasis === 'cost' ? 'break-even cost' : 'negotiation floor'} of ${php(request.internal.floorPhp)}` : ''
-        }`,
+        }${capNote}`,
       });
       await notifyUser(tx, ctx.tenantId, request.requestedBy, 'truck_price_updated', {
         truck_request_id: id,

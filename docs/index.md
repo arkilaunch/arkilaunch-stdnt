@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-07
 **Built on FMD:** v1.28.1
 
 ---
@@ -90,6 +90,7 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-truck-tier-cap | 2026-10-07 | Customer tier discount caps now gate the truck agreed price: a discount off the route price above the cap is Owner-only (`409 truck_cap_needs_owner` for others), audited; drawer shows the tier note. No migration | Owner request 2026-10-07 | index | [cr-arkilaunch-truck-tier-cap.md](cr-arkilaunch-truck-tier-cap.md) |
 | cr-arkilaunch-almara-data-cleanup | 2026-10-06 | Operational cleanup: eight fixture categories and four rates removed, equipment preserved, three Almara customer email keys freed; other fixtures pending review | Owner cleanup request | index | [cr-arkilaunch-almara-data-cleanup.md](cr-arkilaunch-almara-data-cleanup.md) |
 | cr-arkilaunch-negotiation-messenger-handoff | 2026-10-06 | In-app negotiation chat behind web flag `VITE_ENABLE_IN_APP_NEGOTIATION` (off by default): Negotiate copies the booking or truck request's billing details as a ready-to-paste message, shows them in a popup and opens the tenant's Messenger (`tenants.messenger_url`) in a new tab after 5 s or on a button; no Messenger link falls back to the phone page (bookings) or `/contact` (trucks); staff Negotiation tab hidden. Prices still bind only through the in-app quote | Owner request 2026-10-06 | DSD Trip Card; index | [cr-arkilaunch-negotiation-messenger-handoff.md](cr-arkilaunch-negotiation-messenger-handoff.md) |
 | cr-arkilaunch-edtr-weather-incidents | 2026-10-06 | Field logs run through the sheet's own HR/W/T tick or a system stop-work warning log `equipment_used_despite_warning` (with source) in the incident log, naming the company; per-company tally, admin notice, review status + note; D1/D2 leave the log but still flag the field log; typed entries keep AM/PM weather (migration 0089). Evidence only, never money | Owner request 2026-10-06 | SDD §5; PRD S14 (amended in CR); index | [cr-arkilaunch-edtr-weather-incidents.md](cr-arkilaunch-edtr-weather-incidents.md) |

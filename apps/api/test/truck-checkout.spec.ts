@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import postgres from 'postgres';
-import { eq } from 'drizzle-orm';
-import { invoices, notifications, payments as paymentRows, truckRequests, withTenantTx } from '@arkilaunch/db';
+import { and, desc, eq } from 'drizzle-orm';
+import { auditLogs, customerTier, invoices, notifications, payments as paymentRows, truckRequests, withTenantTx } from '@arkilaunch/db';
 import { PH_CLASS3_TOLLS, PH_TOLLS_AS_OF, StubPaymentsAdapter, type RequestContext } from '@arkilaunch/shared';
 import { PaymentsService } from '../src/payments/payments.service.js';
 import { TrucksService } from '../src/trucks/trucks.service.js';
@@ -14,6 +14,7 @@ describe('Truck checkout gates', () => {
   const trucks = new TrucksService(new PricingEngineService(), payments);
   let customerCtx: RequestContext;
   let adminCtx: RequestContext;
+  let customerId: string;
 
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
@@ -23,12 +24,14 @@ describe('Truck checkout gates', () => {
     const tenantId = (tenant as { id: string }).id;
     const [customer] = await sql`select id from users where tenant_id = ${tenantId} and email = 'customer@test-tenant-a.test'`;
     const [admin] = await sql`select u.id from users u join roles r on r.id = u.role_id where u.tenant_id = ${tenantId} and r.name = 'admin' and u.status = 'active' limit 1`;
+    const [company] = await sql`select id from customers where tenant_id = ${tenantId} and user_id = ${(customer as { id: string }).id} limit 1`;
+    customerId = (company as { id: string }).id;
     await sql.end();
     customerCtx = { tenantId, userId: (customer as { id: string }).id, role: 'customer' };
     adminCtx = { tenantId, userId: (admin as { id: string }).id, role: 'admin' };
   });
 
-  const newRequest = async () => {
+  const newRequest = async (forCompany = false) => {
     const [row] = await withTenantTx(customerCtx, (tx) =>
       tx
         .insert(truckRequests)
@@ -41,6 +44,7 @@ describe('Truck checkout gates', () => {
           estimatedKm: '12',
           price: { km: 12, lines: [], totalPhp: 1000 },
           capPhp: '1100',
+          ...(forCompany ? { customerId } : {}),
         })
         .returning(),
     );
@@ -97,6 +101,24 @@ describe('Truck checkout gates', () => {
     const thread = await trucks.listMessages(customerCtx, id);
     expect(thread.map((m) => m.offerPhp)).toEqual([1500, 1500, 1450, 1450]);
     expect(thread[2]!.body).toContain('from PHP 1,500.00 to PHP 1,450.00');
+  });
+
+  it('holds a discount above the customer tier cap for the Owner', async () => {
+    // The tier is recomputed on every settled invoice, so read the cap rather than assume it.
+    const tier = await withTenantTx(adminCtx, (tx) => customerTier(tx, adminCtx.tenantId, customerId));
+    const id = await newRequest(true);
+    const overPct = tier.capPct + 5;
+    await expect(trucks.agree(adminCtx, id, 1000 - overPct * 10)).rejects.toMatchObject({
+      response: { error: 'truck_cap_needs_owner', tier: tier.tier, capPct: tier.capPct, discountPct: overPct },
+    });
+    expect((await trucks.agree(adminCtx, id, 1000 - tier.capPct * 10)).agreedPricePhp).toBe(1000 - tier.capPct * 10);
+
+    const ownerCtx: RequestContext = { ...adminCtx, role: 'owner' };
+    expect((await trucks.agree(ownerCtx, id, 1000 - overPct * 10)).agreedPricePhp).toBe(1000 - overPct * 10);
+    const [audit] = await withTenantTx(adminCtx, (tx) =>
+      tx.select().from(auditLogs).where(and(eq(auditLogs.entity, 'truck_requests'), eq(auditLogs.entityId, id))).orderBy(desc(auditLogs.timestamp)).limit(1),
+    );
+    expect(audit!.reason).toContain(`tier cap exceeded (owner): ${tier.tier}`);
   });
 
   it('lets the customer cancel an unpaid trip (voiding its invoice), never a paid one', async () => {

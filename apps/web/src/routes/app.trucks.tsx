@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DEFAULT_TRUCK_COST_POLICY, DEFAULT_TRUCK_FORMULA, PH_TOLLS_AS_OF, type TruckCostPolicy, suggestTolls, TruckBanRuleSchema, type TruckBanRule, type TruckBanRuleInput, type TollRateResponse, type TruckExtra, type TruckRequestResponse, type TruckSettings } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
 import { apiDelete, apiErrorText, apiGet, apiPatch, apiPost, apiPut } from '../lib/api-client.js';
-import { formatDate, formatDateTime, formatPeso, WEEKDAYS } from '../lib/format.js';
+import { formatDate, formatDateTime, formatPeso, formatStatus, WEEKDAYS } from '../lib/format.js';
 import { PriceBreakdown } from '../components/truck-trip.js';
 import { Input } from '../components/input.js';
 import { Button } from '../components/button.js';
@@ -13,7 +13,8 @@ import { Modal } from '../components/modal.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
-import { pricingQueries, truckBanRulesQuery, trucksQueries } from '../lib/queries.js';
+import { pricingQueries, tierQueries, truckBanRulesQuery, trucksQueries, usersQueries } from '../lib/queries.js';
+import { TierNote } from '../components/tier-cap.js';
 import { FormulaBuilder, type SampleInputs } from '../components/formula-builder.js';
 import { EditButton, SummaryCard } from '../components/summary-card.js';
 import { Select } from '../components/select.js';
@@ -779,6 +780,12 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
   const floorNote = r.internal?.floorBasis === 'cost' ? 'break-even: the estimated trip cost' : `${r.internal?.maxDiscountPct}% max discount`;
   // Typo guard: a price far from the route's own figure is called out.
   const offBy = r.price.totalPhp > 0 ? Math.abs(Number(price) - r.price.totalPhp) / r.price.totalPhp : 0;
+  // Tier cap (UC 005): a discount off the route price above it is the Owner's alone; the API enforces it.
+  const tier = useQuery({ ...tierQueries.customer(r.customerId ?? ''), enabled: Boolean(r.customerId) && open });
+  const me = useQuery(usersQueries.me());
+  const discountPct = r.price.totalPhp > 0 && Number(price) < r.price.totalPhp ? ((r.price.totalPhp - Number(price)) / r.price.totalPhp) * 100 : 0;
+  const overTier = tier.data !== undefined && discountPct > tier.data.capPct + 1e-9;
+  const isOwner = me.data?.role === 'owner';
   const section = 'flex flex-col gap-3 border-t border-border pt-4 first:border-t-0 first:pt-0';
   const heading = 'text-heading-md text-text';
 
@@ -919,6 +926,7 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
       {open && (
         <section className={section}>
           <h3 className={heading}>Agreed price</h3>
+          {r.customerId && <TierNote customerId={r.customerId} audience="staff" />}
           <div className="flex flex-wrap items-end gap-2">
             <div className="w-40">
               <Input label="Agreed price (PHP)" type="number" min={1} numeric value={price} onChange={(e) => setPrice(e.target.value)} />
@@ -968,6 +976,12 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
               <Alert type="warning" header="Double-check the figure">
                 That is {Math.round(offBy * 100)}% away from the route price of {formatPeso(r.price.totalPhp)}
                 {overCap ? `, and above the ${formatPeso(r.capPhp!)} top of the customer's estimate` : ''}.
+              </Alert>
+            )}
+            {overTier && (
+              <Alert type={isOwner ? 'warning' : 'error'} header="Above the tier cap">
+                {discountPct.toFixed(1)}% off the route price is over the {formatStatus(tier.data!.tier)} tier cap of {tier.data!.capPct}%.{' '}
+                {isOwner ? 'You can still set it as the Owner; the audit log will note it.' : 'Only the Owner can set this price.'}
               </Alert>
             )}
             {belowFloor && (
