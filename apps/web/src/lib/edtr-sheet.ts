@@ -55,18 +55,24 @@ const COLUMNS: { key: string; w: number; label?: string }[] = [
 ];
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-// ponytail: truncates by character count, not measured width; measure text if names start clipping.
-const fit = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+// Estimated width in mm: 0.72 em per char covers bold Arial capitals; Courier is exactly 0.6 em.
+const textW = (s: string, size: number, mono?: boolean) => s.length * size * (mono ? 0.6 : 0.72);
 
+// maxW keeps the text inside its box: shrink the font to 70 %, then squeeze the glyphs with textLength. Never cuts.
 function text(
   x: number,
   y: number,
   s: string,
   size: number,
-  opts: { bold?: boolean; anchor?: 'start' | 'middle' | 'end'; fill?: string; mono?: boolean } = {},
+  opts: { bold?: boolean; anchor?: 'start' | 'middle' | 'end'; fill?: string; mono?: boolean; maxW?: number } = {},
 ) {
   const family = opts.mono ? "'Courier New', monospace" : FONT;
-  return `<text x="${x}" y="${y}" font-family="${family}" font-size="${size}" ${opts.bold ? 'font-weight="700"' : ''} text-anchor="${opts.anchor ?? 'start'}" fill="${opts.fill ?? INK}">${esc(s)}</text>`;
+  let squeeze = '';
+  if (opts.maxW !== undefined && textW(s, size, opts.mono) > opts.maxW) {
+    size = +Math.max(size * 0.7, (size * opts.maxW) / textW(s, size, opts.mono)).toFixed(2);
+    if (textW(s, size, opts.mono) > opts.maxW) squeeze = ` textLength="${+opts.maxW.toFixed(2)}" lengthAdjust="spacingAndGlyphs"`;
+  }
+  return `<text x="${x}" y="${y}" font-family="${family}" font-size="${size}" ${opts.bold ? 'font-weight="700"' : ''} text-anchor="${opts.anchor ?? 'start'}" fill="${opts.fill ?? INK}"${squeeze}>${esc(s)}</text>`;
 }
 const line = (x1: number, y1: number, x2: number, y2: number, w = 0.25, color = INK) =>
   `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${w}"/>`;
@@ -149,15 +155,20 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
     out.push(`<image x="${M}" y="6" width="24" height="24" preserveAspectRatio="xMidYMid meet" href="${esc(input.logoDataUri)}"/>`);
     lx = M + 27;
   }
-  out.push(text(lx, 12, fit(tenantName.toUpperCase(), 44), 5, { bold: true }));
-  if (context?.tenant?.address) out.push(text(lx, 17.5, fit(context.tenant.address, 70), 2.5, { fill: MUTED }));
-  if (context?.tenant?.contact) out.push(text(lx, 21.5, fit(context.tenant.contact, 70), 2.5, { fill: MUTED }));
-  if (input.tin) out.push(text(lx, 25.5, `TIN ${fit(input.tin, 30)}`, 2.5, { fill: MUTED }));
-  out.push(text(W / 2, 17, 'EQUIPMENT DAILY TIME REPORT', 5.2, { bold: true, anchor: 'middle' }));
+  const heading = 'EQUIPMENT DAILY TIME REPORT';
+  const titleHalf = textW(heading, 5.2) / 2;
+  // The tenant block ends 3 mm short of the centred title, so a long name never runs into it.
+  const tenantW = W / 2 - titleHalf - 3 - lx;
+  out.push(text(lx, 12, tenantName.toUpperCase(), 5, { bold: true, maxW: tenantW }));
+  if (context?.tenant?.address) out.push(text(lx, 17.5, context.tenant.address, 2.5, { fill: MUTED, maxW: tenantW }));
+  if (context?.tenant?.contact) out.push(text(lx, 21.5, context.tenant.contact, 2.5, { fill: MUTED, maxW: tenantW }));
+  if (input.tin) out.push(text(lx, 25.5, `TIN ${input.tin}`, 2.5, { fill: MUTED, maxW: tenantW }));
+  out.push(text(W / 2, 17, heading, 5.2, { bold: true, anchor: 'middle' }));
   const qx = W - M - 24;
   if (context && machine && weekStart) {
     out.push(qrPath(edtrSheetQrPayload(context.rentalId, machine.id, weekStart), qx, 5, 24));
-    out.push(text(qx - 3, 14, context.bookingCode ?? '', 6, { bold: true, anchor: 'end', mono: true }));
+    const codeW = qx - 3 - (W / 2 + titleHalf + 3);
+    out.push(text(qx - 3, 14, context.bookingCode ?? '', 6, { bold: true, anchor: 'end', mono: true, maxW: codeW }));
     out.push(text(qx - 3, 19, 'BOOKING CODE', 2.2, { anchor: 'end', fill: MUTED }));
   } else {
     out.push(`<rect x="${qx}" y="5" width="24" height="24" fill="none" stroke="${MUTED}" stroke-width="0.3" stroke-dasharray="1 1"/>`);
@@ -171,8 +182,8 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
   const fw = (W - 2 * M) / 4;
   const field = (i: number, y: number, label: string, value: string) =>
     rect(M + i * fw, y, fw, 10) +
-    text(M + i * fw + 1.2, y + 2.9, label, 2.1, { bold: true, fill: MUTED }) +
-    text(M + i * fw + 1.2, y + 8, fit(value, Math.floor(fw / 1.7)), 3.1, { bold: true });
+    text(M + i * fw + 1.2, y + 2.9, label, 2.1, { bold: true, fill: MUTED, maxW: fw - 2.4 }) +
+    text(M + i * fw + 1.2, y + 8, value, 3.1, { bold: true, maxW: fw - 2.4 });
   const covered = dates.length ? `${fmt(dates[0]!)} - ${fmt(dates[6]!)}/${dates[6]!.slice(0, 4)}` : '';
   const eqpt = machine ? `${machine.type} · ${machine.model} · SN ${machine.serialNo}` : '';
   const period = spanFrom ? `${shortDate(spanFrom)} – ${spanTo ? shortDate(spanTo) : 'open'}` : '';
@@ -341,7 +352,7 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
   blocks.forEach(([title, sub, hint], i) => {
     const x = M + i * (sw + 3);
     out.push(rect(x, sy, sw, H - sy - 8, 0.3));
-    out.push(text(x + 1.5, sy + 3.6, fit(title!, Math.floor(sw / 1.45)), 2.2, { bold: true }));
+    out.push(text(x + 1.5, sy + 3.6, title!, 2.2, { bold: true, maxW: sw - 3 }));
     if (sub) out.push(text(x + 1.5, sy + 6.6, sub, 1.9, { fill: MUTED }));
     out.push(line(x + 1.5, H - 13.5, x + sw - 1.5, H - 13.5, 0.25, MUTED));
     out.push(text(x + 1.5, H - 11, hint!, 1.9, { fill: MUTED }));

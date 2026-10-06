@@ -58,6 +58,28 @@ describe('buildEdtrSheetSvg (EDTR v3)', () => {
     expect(svg).toContain('REMARKS / DOWNTIME NOTES');
   });
 
+  it('squeezes a long tenant name and field value into their boxes instead of cutting them', () => {
+    const long = 'Northern Luzon Heavy Equipment Rental and General Construction Services Corporation';
+    const location = 'Lot 7 Block 12, Barangay San Isidro, Kilometer 42 Marcos Highway, Antipolo City, Rizal';
+    for (const page of ['letter', 'legal'] as const) {
+      const s = buildEdtrSheetSvg({
+        context: { ...context, projectLocation: location, tenant: { ...context.tenant, name: long } },
+        equipmentId: context.equipment[0]!.id,
+        weekStart: '2026-09-21',
+        page,
+        logoDataUri: 'data:image/png;base64,AA==',
+      });
+      const W = PAGE[page].w;
+      const name = s.match(new RegExp(`<text x="([\\d.]+)"[^>]*textLength="([\\d.]+)"[^>]*>${long.toUpperCase()}<`));
+      // Ends before the centred title begins (27 bold capitals at 5.2 mm).
+      expect(Number(name![1]) + Number(name![2])).toBeLessThan(W / 2 - (27 * 5.2 * 0.72) / 2);
+      const loc = s.match(new RegExp(`textLength="([\\d.]+)"[^>]*>${location}<`));
+      expect(Number(loc![1])).toBeLessThan((W - 16) / 4);
+    }
+    expect(svg).not.toMatch(/textLength="[\d.]+"[^>]*>ALMARA CONSTRUCTION</);
+    expect(svg).not.toContain('…');
+  });
+
   it('sizes the page from one constant, Legal by default and Letter on request', () => {
     expect(svg).toContain(`viewBox="0 0 ${PAGE.legal.w} ${PAGE.legal.h}"`);
     const letter = buildEdtrSheetSvg({ context, equipmentId: context.equipment[0]!.id, weekStart: '2026-09-21', page: 'letter' });
