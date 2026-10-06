@@ -48,7 +48,8 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
         widgetId = window.turnstile.render(container.current, {
           sitekey: TURNSTILE_SITE_KEY,
           theme: 'auto',
-          size: 'flexible',
+          // flexible has a 300px floor; narrower containers (phones) get the 150px compact widget.
+          size: container.current.offsetWidth < 300 ? 'compact' : 'flexible',
           callback: (token: string) => callback.current(token),
           'expired-callback': () => callback.current(null),
           'error-callback': () => callback.current(null),
@@ -66,7 +67,7 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
   if (!TURNSTILE_SITE_KEY) return null;
   return (
     <div>
-      <div ref={container} className="min-h-[65px]" />
+      <div ref={container} className="flex min-h-[65px] justify-center" />
       {loadFailed && (
         <p role="alert" className="text-sm text-error">
           The security check could not load. Turn off any content blocker for this site and reload.
