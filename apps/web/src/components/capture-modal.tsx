@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { parseEdtrSheetQr, type EdtrCaptureResponse, type EdtrDetailResponse, type ScanTarget } from '@arkilaunch/shared';
-import { apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
+import { parseEdtrSheetQr, type EdtrCaptureResponse, type FieldSheetDownloadResponse, type EdtrDetailResponse, type ScanTarget } from '@arkilaunch/shared';
+import { ApiError, apiErrorText, apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
+import { useTenant } from '../lib/tenant.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
 import { announceQueueChange, isRetryable, uploadQueue } from '../lib/upload-queue.js';
-import { formatDate, formatStatus, shortCode } from '../lib/format.js';
+import { addDaysIso, formatDate, formatStatus, shortCode, weekStart } from '../lib/format.js';
 import { manilaDate } from '@arkilaunch/shared';
 import { EMPTY_HOURS, HourFields, toLineItems, type HourFieldValues } from './hour-fields.js';
 import { Button } from './button.js';
@@ -14,7 +15,8 @@ import { Select } from './select.js';
 import { Surface } from './surface.js';
 import { Modal } from './modal.js';
 import { ParsedColumns, ScanReview } from './scan-review.js';
-import { edtrQueries, referenceQueries } from '../lib/queries.js';
+import { edtrQueries, referenceQueries, usersQueries } from '../lib/queries.js';
+import { LIMIT_REACHED } from './field-sheets-panel.js';
 import { readSheetQr } from '../lib/sheet-qr.js';
 import { PAGE_MM } from '../lib/sheet-marks.js';
 import { useToast } from './toast.js';
@@ -53,6 +55,14 @@ export interface CaptureModalProps {
   submitOnly?: boolean;
 }
 
+// Mondays of every printed week in the rental, up to this week: a sheet covers Mon to Sun.
+export function sheetWeeks(start: string, end: string, today = manilaDate(new Date())): string[] {
+  const last = end < today ? end : today;
+  const weeks: string[] = [];
+  for (let d = weekStart(start); d <= last; d = addDaysIso(d, 7)) weeks.push(d);
+  return weeks;
+}
+
 export function CaptureModal({
   open,
   onClose,
@@ -80,6 +90,35 @@ export function CaptureModal({
   const [qrOverride, setQrOverride] = useState(false);
   // One id per attempt: a retry after a lost response (or from the offline queue) returns the same log.
   const [captureId, setCaptureId] = useState(() => crypto.randomUUID());
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const me = useQuery({ ...usersQueries.me(), enabled: open && submitOnly });
+  const tenant = useTenant();
+
+  // The timekeeper prints the chosen week's sheet right here; same limit as the sheets panel.
+  async function downloadSheet() {
+    setSheetBusy(true);
+    try {
+      const res = await apiPost<FieldSheetDownloadResponse>('/field/edtr-sheets', { rentalId, equipmentId, weekStart: reportDate });
+      const sheet = await import('../lib/edtr-sheet.js');
+      const input = {
+        context: res.context,
+        equipmentId,
+        weekStart: res.weekStart,
+        page: res.page,
+        companyName: me.data?.tenantName ?? '',
+        logoDataUri: await sheet.logoDataUri(res.context.tenant?.logoUrl),
+        accent: tenant?.primaryColor ?? null,
+        tin: me.data?.tenantTin ?? null,
+      };
+      const png = await sheet.svgToPng(sheet.buildEdtrSheetSvg(input), res.page);
+      sheet.downloadBlob(await sheet.pngToPdf(png, res.page), sheet.edtrSheetFilename(input, 'pdf'));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 429) toast.error('Download limit', LIMIT_REACHED);
+      else toast.error('Could not download the sheet', apiErrorText(e));
+    } finally {
+      setSheetBusy(false);
+    }
+  }
 
   // QA 32: only bookings and machines the server will accept: on site now (and, for staff, just returned).
   const scanTargets = useQuery({ ...edtrQueries.scanTargets(), enabled: open });
@@ -100,6 +139,9 @@ export function CaptureModal({
   useEffect(() => {
     setSource(initialSource);
   }, [initialSource]);
+
+  // A day picked for one source or booking is not valid for another.
+  useEffect(() => setReportDate(''), [source, rentalId]);
 
   // One booking or one machine to choose from: choose it.
   const onlyRental = targets.length === 1 ? targets[0]!.rentalId : null;
@@ -351,6 +393,37 @@ export function CaptureModal({
           ))}
         </Select>
 
+        {source === 'paper_ocr' ? (
+          <>
+          <Select
+            id="reportDate"
+            label="Week of the sheet"
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+            disabled={!target?.startDate}
+            required
+          >
+            <option value="">{target ? 'Choose the week' : 'Choose the site first'}</option>
+            {target?.startDate &&
+              sheetWeeks(manilaDate(target.startDate), manilaDate(target.endDate ?? new Date())).map((d) => (
+                <option key={d} value={d}>
+                  {formatDate(d)} to {formatDate(addDaysIso(d, 6))}
+                </option>
+              ))}
+          </Select>
+          {submitOnly && (
+            <Button
+              variant="secondary"
+              className="self-start"
+              loading={sheetBusy}
+              disabled={!reportDate || !equipmentId}
+              onClick={() => void downloadSheet()}
+            >
+              Download this week&apos;s sheet (PDF)
+            </Button>
+          )}
+          </>
+        ) : (
         <Input
           id="reportDate"
           label="Day worked"
@@ -366,6 +439,7 @@ export function CaptureModal({
               : undefined
           }
         />
+        )}
 
         {source === 'paper_ocr' && (
           <CaptureField
