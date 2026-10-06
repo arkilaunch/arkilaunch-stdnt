@@ -217,6 +217,7 @@ export const equipmentAssignments = pgTable(
     end: timestamp('end', { withTimezone: true }),
     status: text('status').notNull().default('scheduled'), // double-book guard enforced at the app layer
     operatorUserId: uuid('operator_user_id').references(() => users.id),
+    operatorName: text('operator_name'),
     selectedOptions: jsonb('selected_options').$type<Record<string, string>>().notNull().default({}),
     bookedHours: numeric('booked_hours', { precision: 10, scale: 2 }),
   },

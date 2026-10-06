@@ -44,6 +44,7 @@ export async function buildEdtrSheetContext(tx: Tx, tenantId: string, rental: Re
       start: equipmentAssignments.start,
       end: equipmentAssignments.end,
       operatorUserId: equipmentAssignments.operatorUserId,
+      operatorName: equipmentAssignments.operatorName,
     })
     .from(equipmentAssignments)
     .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
@@ -87,7 +88,7 @@ export async function buildEdtrSheetContext(tx: Tx, tenantId: string, rental: Re
       serialNo: m.serialNo,
       start: m.start.toISOString(),
       end: m.end?.toISOString() ?? null,
-      operatorName: m.operatorUserId ? (operatorById.get(m.operatorUserId) ?? null) : null,
+      operatorName: (m.operatorUserId ? operatorById.get(m.operatorUserId) : undefined) ?? m.operatorName,
       lastHourMeter: lastMeter.get(m.id) ?? null,
     })),
     bookingCode: rental.code,

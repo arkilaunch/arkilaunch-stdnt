@@ -115,6 +115,7 @@ export async function loadFieldLogs(tx: Tx, rentalIds: string[], today = manilaD
       start: equipmentAssignments.start,
       end: equipmentAssignments.end,
       operatorUserId: equipmentAssignments.operatorUserId,
+      operatorName: equipmentAssignments.operatorName,
       status: equipmentAssignments.status,
       availabilityStatus: equipment.availabilityStatus,
       code: rentals.code,
@@ -236,7 +237,7 @@ export async function loadFieldLogs(tx: Tx, rentalIds: string[], today = manilaD
       rentalId: first.rentalId,
       bookingCode: first.code,
       span,
-      operatorName: personName(operator ? personById.get(operator) : undefined),
+      operatorName: personName(operator ? personById.get(operator) : undefined) ?? rows.find((r) => r.operatorName)?.operatorName ?? null,
       runtimeHours: Number(first.runtimeHours),
       lastMeterReading: lastMeter,
       // The legacy site-deployment path leaves the assignment 'scheduled' but marks the unit deployed.

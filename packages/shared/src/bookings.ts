@@ -32,6 +32,13 @@ export function maxBookingHours(days: number): number {
 }
 export type BookingItemRequest = z.infer<typeof BookingItemRequestSchema>;
 
+// Deploy: the operator is a typed name; the timekeeper is a timekeeper user, assigned to the booking's site.
+export const BookingDeliverRequestSchema = z.object({
+  operatorName: z.string().trim().min(1).max(120).optional(),
+  timekeeperUserId: z.string().uuid().optional(),
+});
+export type BookingDeliverRequest = z.infer<typeof BookingDeliverRequestSchema>;
+
 // For a customer caller this picks which of their own companies books; the server verifies it, never trusts it.
 export const BookingCreateRequestSchema = z.object({
   customerId: z.string().uuid().optional(),
