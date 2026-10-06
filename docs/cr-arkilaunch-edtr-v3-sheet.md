@@ -58,3 +58,8 @@ A real scan (EQR-2026-0013) read handwritten IN/OUT times badly (`13:99`, `42:,9
 - **Sheet:** one `STD SHIFT` tick column after `DAY` (width taken from `METER START`/`METER END`). HOW TO FILL step 1: tick it for the standard shift 07:30–12:00, 13:00–16:00 and leave IN/OUT blank. Step 2 adds writing tips: big decimal dot, no bar on 7.
 - **Parser:** a ticked `STD SHIFT` (gated by `CONFIDENCE_GATE`) with blank AM/PM cells stands in for those times. Written times always win. The tick feeds only the TOTAL cross-check (`computedHours`, `totalMismatch`) and the v2 windows. It never sets RUNNING, the billed figure (RFC-2). A ticked row counts as filled.
 - Sheets without the column parse unchanged.
+
+## v3.2 addendum (2026-10-06): STD SHIFT removed
+
+- **Sheet:** the `STD SHIFT` tick column is gone; its width goes back to `METER START`/`METER END`. HOW TO FILL step 1 is now "Write IN/OUT in 24-hour time."
+- **Parser:** no STD SHIFT handling. A v3.1 sheet still parses (columns are found by label); its tick is ignored, so AM/PM times must be written.
