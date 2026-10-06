@@ -66,10 +66,11 @@ describe('tenant storefront', () => {
     expect(screen.getByText('TA')).toHaveAttribute('aria-hidden', 'true');
     view.unmount();
   });
-  it('keeps hourly prices on /equipment', async () => {
+  it('asks a guest to log in for prices on /equipment', async () => {
     stub([]);
     const view = await renderRoute('/equipment');
-    expect(await screen.findByText(/\/ hour/)).toBeInTheDocument();
+    expect(await screen.findByText('Log in to see prices')).toBeInTheDocument();
+    expect(screen.queryByText(/\/ hour/)).not.toBeInTheDocument();
     view.unmount();
   });
   it('handles a null headline', async () => {

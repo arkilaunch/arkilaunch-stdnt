@@ -21,6 +21,7 @@ import { useToast } from '../components/toast.js';
 import { addToCart, defaultRentalWindow } from '../lib/cart-client.js';
 import { WeatherInsights, WeatherInsightsButton } from '../components/weather-insights.js';
 import { getAccessToken } from '../lib/auth-client.js';
+import { useCatalogRates } from '../lib/catalog-rates.js';
 import { RangeCalendar, availabilityProblem, rentalLengthProblem, useAvailability } from '../components/availability-days.js';
 
 // datetime-local speaks local "YYYY-MM-DDTHH:mm"; the cart stores ISO.
@@ -146,6 +147,7 @@ function EquipmentPage() {
   const signedIn = Boolean(getAccessToken());
   const { data: companies } = useQuery({ ...companiesQueries.mine(), enabled: signedIn });
   const rentLocked = Boolean(companies && !companies.some(isSelectableCompany));
+  const { rateById, priceNote } = useCatalogRates();
 
   const equipment = useMemo(
     () =>
@@ -213,7 +215,8 @@ function EquipmentPage() {
             return (
               <EquipmentCard
                 key={eq.id}
-                rateValue={eq.rateValue ?? null}
+                rateValue={rateById.get(eq.id) ?? null}
+                priceNote={priceNote}
                 imageAlt={`${eq.equipmentTypeName} ${eq.model}`}
                 {...(imageUrl ? { imageUrl } : {})}
                 model={eq.model}

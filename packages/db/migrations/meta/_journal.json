@@ -589,6 +589,13 @@
       "when": 1791244800000,
       "tag": "0084_payment_receipt_no",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791331200000,
+      "tag": "0085_assignment_operator_name",
+      "breakpoints": true
     }
   ]
 }

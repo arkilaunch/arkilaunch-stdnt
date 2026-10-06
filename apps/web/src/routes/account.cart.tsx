@@ -38,6 +38,7 @@ import {
 } from '../lib/cart-validation.js';
 import { RangeCalendar, availabilityProblem, localDate, rentalLengthProblem, useAvailability } from '../components/availability-days.js';
 import { SiteProofStatus } from '../components/site-proof.js';
+import { useCatalogRates } from '../lib/catalog-rates.js';
 import {
   removeFromCart,
   useCart,
@@ -256,7 +257,7 @@ function CartPage() {
       Object.is(prev[index]?.rent, estimate.rent) && Object.is(prev[index]?.hours, estimate.hours) ? prev : { ...prev, [index]: estimate },
     );
   const rates = useQuery(catalogQueries.equipment());
-  const rateById = new Map(rates.data?.items.map((eq) => [eq.id, eq.rateValue ?? null]));
+  const { rateById } = useCatalogRates();
   const optionGroupsById = new Map(rates.data?.items.map((eq) => [eq.id, eq.optionGroups ?? []]));
   // Only a full total is shown: a sum missing an unpriced machine would mislead.
   const lineEstimates = items.map((_, index) => estimates[index]?.rent ?? null);

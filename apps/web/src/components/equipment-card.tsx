@@ -8,7 +8,7 @@ export interface EquipmentCardProps {
   model: string;
   make: string;
   rateValue?: number | null;
-  showPrice?: boolean;
+  priceNote?: string;
   unavailable?: boolean;
   rentLabel?: string;
   onRent?: () => void;
@@ -21,7 +21,7 @@ export function EquipmentCard({
   model,
   make,
   rateValue = null,
-  showPrice = true,
+  priceNote = 'Price on request',
   unavailable = false,
   rentLabel = 'Rent',
   onRent,
@@ -29,10 +29,7 @@ export function EquipmentCard({
 }: EquipmentCardProps) {
   return (
     <div
-      className={[
-'flex flex-col overflow-hidden rounded-md border border-border bg-surface transition-shadow hover:shadow-md',
-        unavailable ? 'opacity-50 grayscale' : '',
-      ].join(' ')}
+      className="flex flex-col overflow-hidden rounded-md border border-border bg-surface transition-shadow hover:shadow-md"
     >
       <div
         aria-label={imageAlt}
@@ -59,11 +56,11 @@ export function EquipmentCard({
             )}
           </h3>
           <p className="text-sm text-text-muted">{make}</p>
-          {showPrice && <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
+          <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
             {rateValue != null
               ? `${formatPeso(rateValue)} / hour`
-              : 'Price on request'}
-          </p>}
+              : priceNote}
+          </p>
         </div>
         <Button size="default" variant="primary" className="mt-auto self-start" disabled={unavailable} onClick={onRent}>
           {rentLabel}

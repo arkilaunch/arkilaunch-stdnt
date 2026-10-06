@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import {
   addresses,
@@ -18,6 +18,7 @@ import {
 import { manilaDate, type RequestContext, type SiteHubResponse } from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
 import { loadFieldLogs, personName } from '../common/field-logs.js';
+import { assignTimekeeperToSite, requireTimekeeper } from '../common/timekeeper-site.js';
 
 // Every query runs under the tenant's RLS transaction.
 @Injectable()
@@ -150,21 +151,10 @@ export class SiteHubService {
     return withTenantTx(ctx, async (tx) => {
       const [site] = await tx.select({ id: projectSites.id }).from(projectSites).where(eq(projectSites.id, siteId)).limit(1);
       if (!site) throw new NotFoundException({ error: 'project_site_not_found' });
-      const [user] = await tx
-        .select({ id: users.id, role: roles.name })
-        .from(users)
-        .innerJoin(roles, eq(roles.id, users.roleId))
-        .where(eq(users.id, userId))
-        .limit(1);
-      if (!user) throw new NotFoundException({ error: 'user_not_found' });
-      if (user.role !== 'timekeeper') throw new UnprocessableEntityException({ error: 'role_has_no_site_assignments' });
-
       if (assigned) {
-        await tx
-          .insert(timekeeperSiteAssignments)
-          .values({ tenantId: ctx.tenantId, userId, projectSiteId: siteId })
-          .onConflictDoNothing();
+        await assignTimekeeperToSite(tx, ctx.tenantId, userId, siteId);
       } else {
+        await requireTimekeeper(tx, ctx.tenantId, userId);
         await tx
           .delete(timekeeperSiteAssignments)
           .where(and(eq(timekeeperSiteAssignments.userId, userId), eq(timekeeperSiteAssignments.projectSiteId, siteId)));

@@ -1,12 +1,13 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { ConflictException } from '@nestjs/common';
 import postgres from 'postgres';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   equipment,
   equipmentAssignments,
   notifications,
   rentals,
+  timekeeperSiteAssignments,
   withTenantTx,
 } from '@arkilaunch/db';
 import { StubPaymentsAdapter, type RequestContext } from '@arkilaunch/shared';
@@ -38,6 +39,7 @@ describe('Delivery, return and staff alerts', () => {
   let equipmentId: string;
   let rateCardId: string;
   let equipmentTypeId: string;
+  let timekeeperId: string;
 
   let fixtureCustomerId: string;
 
@@ -50,6 +52,8 @@ describe('Delivery, return and staff alerts', () => {
     const tenantId = (tenantA as { id: string }).id;
     const [customerUser] = await sql`select id from users where tenant_id = ${tenantId} and email = 'customer@test-tenant-a.test'`;
     const [adminUser] = await sql`select id from users where tenant_id = ${tenantId} and id <> ${(customerUser as { id: string }).id} limit 1`;
+    const [timekeeper] = await sql`select id from users where tenant_id = ${tenantId} and email = 'timekeeper@test-tenant-a.test'`;
+    timekeeperId = (timekeeper as { id: string }).id;
     const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} and customer_id is null order by created_at limit 1`;
     const [unit] = await sql`select id from equipment where tenant_id = ${tenantId} and serial_no = 'test-tenant-a-serial-booking-001'`;
     const [rateCard] = await sql`select id, equipment_type_id from rate_cards where tenant_id = ${tenantId} and equipment_id is null and rate_type = 'hourly' and (effective_to is null or effective_to > now()) order by effective_from limit 1`;
@@ -155,13 +159,25 @@ describe('Delivery, return and staff alerts', () => {
     await payments.handleWebhook(rawBody, header, webhookSecret);
 
     try {
-      await bookings.deliver(adminCtx, booking.id);
+      // Only a timekeeper can be put on the site; the refusal rolls the whole deploy back.
+      await expect(
+        bookings.deliver(adminCtx, booking.id, { timekeeperUserId: customerCtx.userId }),
+      ).rejects.toMatchObject({ response: { error: 'role_has_no_site_assignments' } });
+      await bookings.deliver(adminCtx, booking.id, { operatorName: 'Juan Dela Cruz', timekeeperUserId: timekeeperId });
       const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
       expect(unit?.availabilityStatus).toBe('deployed');
       const assignments = await withTenantTx(adminCtx, (tx) =>
         tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.rentalId, booking.id)),
       );
       expect(assignments.map((a) => a.status)).toEqual(['active']);
+      expect(assignments.map((a) => a.operatorName)).toEqual(['Juan Dela Cruz']);
+      const onSite = await withTenantTx(adminCtx, (tx) =>
+        tx
+          .select()
+          .from(timekeeperSiteAssignments)
+          .where(and(eq(timekeeperSiteAssignments.userId, timekeeperId), eq(timekeeperSiteAssignments.projectSiteId, siteId))),
+      );
+      expect(onSite).toHaveLength(1);
       expect(await notificationTypes(booking.id)).toContain('equipment_delivered');
 
       // On site: no cancelling, and delivering twice is refused.

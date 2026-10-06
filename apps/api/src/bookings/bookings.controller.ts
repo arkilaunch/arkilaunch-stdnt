@@ -4,6 +4,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { BookingsService } from './bookings.service.js';
 import {
   BookingCreateDto,
+  BookingDeliverDto,
   BookingListQueryDto,
   ChangeRequestCreateDto,
   ChangeRequestResolveDto,
@@ -53,8 +54,8 @@ export class BookingsController {
 
   @Post(':id/deliver')
   @RequirePermission('site:manage')
-  deliver(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.bookings.deliver(req.ctx, id);
+  deliver(@Param('id') id: string, @Body() body: BookingDeliverDto, @Req() req: CtxRequest) {
+    return this.bookings.deliver(req.ctx, id, body);
   }
 
   @Post(':id/return')

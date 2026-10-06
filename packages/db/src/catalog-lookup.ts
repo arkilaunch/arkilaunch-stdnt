@@ -64,6 +64,14 @@ export async function getCatalogEquipmentForSlug(slug: string, id: string): Prom
   return rows[0] ? toCatalogEquipment(rows[0]) : null;
 }
 
+// Rates for one tenant's whole catalog; the caller has already checked the customer is verified.
+export async function listCatalogRatesForSlug(slug: string): Promise<{ equipmentId: string; rateValue: number | null }[]> {
+  const rows = await db.execute<{ id: string; rate_value: string | null }>(
+    sql`select id, rate_value from catalog_list_equipment(${slug})`,
+  );
+  return rows.map((row) => ({ equipmentId: row.id, rateValue: row.rate_value !== null ? Number(row.rate_value) : null }));
+}
+
 // Anchor-tenant only; same SECURITY DEFINER rationale.
 export interface CatalogTestimonialRow {
   id: string;

@@ -1,5 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import type {
+  CatalogRateListResponse,
   BookingDetailResponse,
   RentPart,
   RateBreakdown,
@@ -120,6 +121,13 @@ export const catalogQueries = {
     queryOptions({
       queryKey: ['catalog', 'equipment', id] as const,
       queryFn: () => apiGet<CatalogEquipment>(`/catalog/equipment/${id}`),
+    }),
+  // 403 kyc_required for anyone but a verified customer: callers gate it on useCatalogRates().
+  rates: () =>
+    queryOptions({
+      queryKey: ['catalog', 'rates'] as const,
+      queryFn: () => apiGet<CatalogRateListResponse>('/catalog/rates'),
+      retry: false,
     }),
   testimonials: () =>
     queryOptions({

@@ -16,6 +16,7 @@ import { addToCart, defaultRentalWindow } from '../lib/cart-client.js';
 import { getAccessToken } from '../lib/auth-client.js';
 import { pageTitle } from '../lib/brand.js';
 import { useTenantName } from '../lib/tenant.js';
+import { useCatalogRates } from '../lib/catalog-rates.js';
 
 function EquipmentDetailPage() {
   const { equipmentId } = equipmentDetailRoute.useParams();
@@ -24,6 +25,7 @@ function EquipmentDetailPage() {
   // Renting is for verified companies; the API refuses the booking regardless.
   const { data: companies } = useQuery({ ...companiesQueries.mine(), enabled: signedIn });
   const rentLocked = Boolean(companies && !companies.some(isSelectableCompany));
+  const { rateById, priceNote } = useCatalogRates();
   const {
     data: equipment,
     isPending,
@@ -100,11 +102,13 @@ function EquipmentDetailPage() {
       <div>
         <h1 className="text-display-md text-text">{equipment.model}</h1>
         <p className="text-sm text-text-muted">{equipment.equipmentTypeName}</p>
-        {equipment.rateValue != null && (
+        {rateById.get(equipment.id) != null ? (
           <p className="mt-2 text-heading-md text-text" data-testid="equipment-price">
-            {formatPeso(equipment.rateValue)}
+            {formatPeso(rateById.get(equipment.id)!)}
             <span className="text-sm font-normal text-text-muted"> / hour</span>
           </p>
+        ) : (
+          <p className="mt-2 text-sm text-text-muted" data-testid="equipment-price">{priceNote}</p>
         )}
       </div>
       {(equipment.optionGroups ?? []).length > 0 && (

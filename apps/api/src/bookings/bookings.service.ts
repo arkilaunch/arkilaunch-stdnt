@@ -26,6 +26,7 @@ import type {
   NegotiationMessageCreate,
   NegotiationMessageResponse,
   BookingCreateRequest,
+  BookingDeliverRequest,
   BookingListQuery,
   BookingCreateResponse,
   BookingDetailResponse,
@@ -47,6 +48,7 @@ import { EventsService } from '../events/events.service.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { QuotesService, inNegotiation } from '../quotes/quotes.service.js';
 import { requireSiteProof } from '../common/site-proof.js';
+import { assignTimekeeperToSite } from '../common/timekeeper-site.js';
 import { holdDeadline, renewLapsedHold } from '../common/booking-hold.js';
 import {
   availabilityBlockers,
@@ -637,7 +639,7 @@ export class BookingsService {
   }
 
   // Reuses the booking's own reservation rather than creating a second assignment (which would collide with its hold).
-  async deliver(ctx: RequestContext, id: string) {
+  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       if (rental.status !== 'confirmed') throw new ConflictException({ error: 'booking_not_ready', status: rental.status });
@@ -659,8 +661,12 @@ export class BookingsService {
 
       await tx
         .update(equipmentAssignments)
-        .set({ status: 'active' })
+        .set({ status: 'active', ...(body.operatorName ? { operatorName: body.operatorName } : {}) })
         .where(inArray(equipmentAssignments.id, assignments.map((a) => a.id)));
+      if (body.timekeeperUserId) {
+        if (!rental.projectSiteId) throw new ConflictException({ error: 'booking_has_no_site' });
+        await assignTimekeeperToSite(tx, ctx.tenantId, body.timekeeperUserId, rental.projectSiteId);
+      }
       await tx
         .update(equipment)
         .set({ availabilityStatus: 'deployed' })

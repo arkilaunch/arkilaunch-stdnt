@@ -22,7 +22,9 @@ function stubFetch() {
           ? [{ id: 'c1', companyName: 'Acme', kycStatus: 'approved' }]
           : href.includes('sites')
             ? []
-            : { items: [PRICED, UNPRICED] };
+            : href.includes('/catalog/rates')
+              ? { items: [PRICED, UNPRICED].map((eq) => ({ equipmentId: eq.id, rateValue: eq.rateValue })) }
+              : { items: [PRICED, UNPRICED] };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     }),
   );

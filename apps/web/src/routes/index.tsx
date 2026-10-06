@@ -7,6 +7,7 @@ import { PlatformLanding } from './platform.index.js';
 import { currentHost } from '../lib/host.js';
 import { Button } from '../components/button.js';
 import { EquipmentCard } from '../components/equipment-card.js';
+import { useCatalogRates } from '../lib/catalog-rates.js';
 import { SegmentedControl } from '../components/segmented-control.js';
 import { SearchFilterBar } from '../components/search-filter-bar.js';
 import { TestimonialCard } from '../components/testimonial-card.js';
@@ -16,6 +17,7 @@ import { useTenant } from '../lib/tenant.js';
 
 function LandingPage() {
   const navigate = useNavigate();
+  const { rateById, priceNote } = useCatalogRates();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
   const { data } = useQuery(catalogQueries.equipment());
@@ -87,12 +89,12 @@ function LandingPage() {
             return (
               <EquipmentCard
                 key={eq.id}
-                showPrice={false}
+                rateValue={rateById.get(eq.id) ?? null}
+                priceNote={priceNote}
                 imageAlt={`${eq.equipmentTypeName} ${eq.model}`}
                 {...(imageUrl ? { imageUrl } : {})}
                 model={eq.model}
                 make={eq.equipmentTypeName}
-                unavailable={eq.availabilityStatus !== 'available'}
                 onRent={() => navigate({ to: '/equipment/$equipmentId', params: { equipmentId: eq.id } })}
               />
             );

@@ -1,15 +1,17 @@
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BookingDetailResponse, RescheduleSuggestion } from '@arkilaunch/shared';
 import { localPhMobile } from '@arkilaunch/shared';
-import { bookingsQueries } from '../lib/queries.js';
+import { bookingsQueries, sitesQueries } from '../lib/queries.js';
 import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatPeso, formatStatus } from '../lib/format.js';
 import { Container } from './container.js';
 import { Alert } from './alert.js';
 import { Button, buttonClass } from './button.js';
 import { ConfirmDialog } from './confirm-dialog.js';
+import { Input } from './input.js';
+import { Select } from './select.js';
 import { SiteProofAdmin } from './site-proof.js';
 import { SiteEquipmentWeather } from './equipment-weather.js';
 import { EdtrSheetCard } from './edtr-sheet-card.js';
@@ -226,8 +228,19 @@ function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
 function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const [operatorName, setOperatorName] = useState('');
+  const [timekeeperUserId, setTimekeeperUserId] = useState('');
   const move = useMutation({
-    mutationFn: (step: 'deliver' | 'return') => apiPost(`/bookings/${booking.id}/${step}`, {}),
+    mutationFn: (step: 'deliver' | 'return') =>
+      apiPost(
+        `/bookings/${booking.id}/${step}`,
+        step === 'deliver'
+          ? {
+              ...(operatorName.trim() ? { operatorName: operatorName.trim() } : {}),
+              ...(timekeeperUserId ? { timekeeperUserId } : {}),
+            }
+          : {},
+      ),
     onSuccess: (_data, step) => {
       setAsking(false);
       void queryClient.invalidateQueries({ queryKey: bookingsQueries.detail(booking.id).queryKey });
@@ -240,6 +253,9 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
     },
   });
   const [asking, setAsking] = useState(false);
+  const deliverable = booking.status === 'confirmed';
+  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking });
+  const timekeepers = [...(hub.data?.personnel.timekeepers ?? []), ...(hub.data?.personnel.availableTimekeepers ?? [])];
   if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
   const deliver = booking.status === 'confirmed';
   return (
@@ -255,9 +271,33 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
         open={asking}
         title={deliver ? 'Deploy this booking?' : 'Mark this booking returned?'}
         body={
-          deliver
-            ? 'Only once every machine is on site: this starts the rental on site and opens the field sheet.'
-            : 'Only once every machine is back: this closes the booking.'
+          deliver ? (
+            <div className="flex flex-col gap-4">
+              <p>Only once every machine is on site: this starts the rental on site and opens the field sheet.</p>
+              <Input
+                label="Operator name"
+                hint="Optional. Who operates the machines on site."
+                maxLength={120}
+                value={operatorName}
+                onChange={(e) => setOperatorName(e.target.value)}
+              />
+              <Select
+                label="Timekeeper"
+                hint="Optional. Assigned to this site so they can submit the field sheets."
+                value={timekeeperUserId}
+                onChange={(e) => setTimekeeperUserId(e.target.value)}
+              >
+                <option value="">None</option>
+                {timekeepers.map((t) => (
+                  <option key={t.userId} value={t.userId}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          ) : (
+            'Only once every machine is back: this closes the booking.'
+          )
         }
         confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
