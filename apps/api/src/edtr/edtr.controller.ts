@@ -16,7 +16,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { validateUpload } from '../storage/upload-validation.js';
 import { StorageService, edtrBucket } from '../storage/storage.service.js';
 import { EdtrService } from './edtr.service.js';
-import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
+import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
 import type { CtxRequest, MulterFile } from '../common/request.js';
 
 @Controller('edtr')
@@ -57,6 +57,13 @@ export class EdtrController {
   @RequirePermission('edtr:create', 'edtr:read')
   get(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.edtr.get(req.ctx, id);
+  }
+
+  // Approvers only: hours typed from the photo of a sheet the worker could not read.
+  @Post(':id/transcribe')
+  @RequirePermission('edtr:approve')
+  transcribe(@Param('id') id: string, @Body() body: EdtrTranscribeDto, @Req() req: CtxRequest) {
+    return this.edtr.transcribe(req.ctx, id, body);
   }
 
   // Approvers only: it prices hours exactly as approve() would, without writing anything.

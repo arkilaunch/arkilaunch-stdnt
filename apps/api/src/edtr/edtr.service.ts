@@ -16,6 +16,7 @@ import {
   edtr,
   edtrLineItems,
   edtrReconciliations,
+  events,
   equipment,
   equipmentAssignments,
   invoiceLineItems,
@@ -150,6 +151,40 @@ function reportedWeatherDay(li: EdtrLineItemsInput): ReportedWeatherDay {
   };
 }
 
+// Typed hours (digital entry, paper without OCR, or an admin reading a failed sheet): one path, so they pair and flag alike.
+async function recordHours(
+  tx: Tx,
+  ctx: RequestContext,
+  edtrId: string,
+  rentalId: string,
+  equipmentId: string,
+  reportDate: string,
+  lineItems: EdtrLineItemsInput,
+) {
+  const flags = validateDayEntry({
+    ...lineItemsToDayHours(lineItems),
+    downtimeNote: lineItems.downtimeNote ?? null,
+    weatherAm: lineItems.weatherAm ?? null,
+    weatherPm: lineItems.weatherPm ?? null,
+    previousMeterEnd: await lastApprovedMeterEnd(tx, equipmentId, reportDate),
+  });
+  await insertLineItem(tx, ctx.tenantId, edtrId, lineItems, flags);
+  await reconcileEdtr(tx, ctx.tenantId, edtrId);
+  const usedHalves = await flagUsedDespiteWarning(tx, ctx.tenantId, edtrId);
+  // Weather discrepancies only flag for review; never status, approval or money.
+  const weatherFlags = await logWeatherDiscrepancies(tx, ctx.tenantId, edtrId, rentalId, reportDate, reportedWeatherDay(lineItems));
+  if (weatherFlags.length > 0 || usedHalves.length > 0) {
+    const added = [
+      ...new Set(weatherFlags.map((f) => `weather_${f.rule}`)),
+      ...usedHalves.map((half) => `used_despite_stop_work_${half}`),
+    ];
+    await tx
+      .update(edtrLineItems)
+      .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(added)}::jsonb` })
+      .where(eq(edtrLineItems.edtrId, edtrId));
+  }
+}
+
 // Same rule as list(): a timekeeper reads only field logs on an assigned site; others see it as not found.
 async function timekeeperMaySee(tx: Tx, ctx: RequestContext, rentalId: string): Promise<boolean> {
   if (ctx.role !== 'timekeeper') return true;
@@ -210,6 +245,30 @@ export class EdtrService {
 
   async capture(ctx: RequestContext, body: EdtrCaptureRequest): Promise<EdtrCaptureResponse> {
     return withTenantTx(ctx, async (tx) => {
+      if (body.captureId) {
+        const [seen] = await tx
+          .select({ edtrId: sql<string>`${events.properties} ->> 'edtr_id'` })
+          .from(events)
+          .where(
+            and(
+              eq(events.tenantId, ctx.tenantId),
+              eq(events.name, 'edtr_capture_received'),
+              sql`${events.properties} ->> 'capture_id' = ${body.captureId}`,
+            ),
+          )
+          .limit(1);
+        const [earlier] = seen ? await tx.select().from(edtr).where(eq(edtr.id, seen.edtrId)).limit(1) : [];
+        // A retry is the same person sending the same day again; anything else is not theirs to read back.
+        if (
+          earlier &&
+          earlier.submittedBy === ctx.userId &&
+          earlier.rentalId === body.rentalId &&
+          earlier.equipmentId === body.equipmentId &&
+          String(earlier.reportDate) === body.reportDate
+        ) {
+          return { id: earlier.id, status: earlier.status, source: earlier.source as 'paper_ocr' | 'digital_entry', pollUrl: `/api/v1/edtr/${earlier.id}` };
+        }
+      }
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, body.rentalId)).limit(1);
       if (!rental) throw new NotFoundException({ error: 'rental_not_found' });
 
@@ -316,38 +375,18 @@ export class EdtrService {
         })
         .returning();
       if (!created) throw new Error('edtr insert returned no row');
+      if (body.captureId) {
+        // Same transaction as the row: the marker exists exactly when the capture does.
+        await tx.insert(events).values({
+          tenantId: ctx.tenantId,
+          name: 'edtr_capture_received',
+          properties: { capture_id: body.captureId, edtr_id: created.id },
+        });
+      }
 
       let finalStatus: string = created.status;
       if (body.lineItems) {
-        const flags = validateDayEntry({
-          ...lineItemsToDayHours(body.lineItems),
-          downtimeNote: body.lineItems.downtimeNote ?? null,
-          weatherAm: body.lineItems.weatherAm ?? null,
-          weatherPm: body.lineItems.weatherPm ?? null,
-          previousMeterEnd: await lastApprovedMeterEnd(tx, body.equipmentId, body.reportDate),
-        });
-        await insertLineItem(tx, ctx.tenantId, created.id, body.lineItems, flags);
-        await reconcileEdtr(tx, ctx.tenantId, created.id);
-        const usedHalves = await flagUsedDespiteWarning(tx, ctx.tenantId, created.id);
-        // Weather discrepancies only flag for review; never status, approval or money.
-        const weatherFlags = await logWeatherDiscrepancies(
-          tx,
-          ctx.tenantId,
-          created.id,
-          body.rentalId,
-          body.reportDate,
-          reportedWeatherDay(body.lineItems),
-        );
-        if (weatherFlags.length > 0 || usedHalves.length > 0) {
-          const added = [
-            ...new Set(weatherFlags.map((f) => `weather_${f.rule}`)),
-            ...usedHalves.map((half) => `used_despite_stop_work_${half}`),
-          ];
-          await tx
-            .update(edtrLineItems)
-            .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(added)}::jsonb` })
-            .where(eq(edtrLineItems.edtrId, created.id));
-        }
+        await recordHours(tx, ctx, created.id, body.rentalId, body.equipmentId, body.reportDate, body.lineItems);
         // reconcileEdtr owns the status; re-read it rather than re-derive.
         const [refetched] = await tx.select().from(edtr).where(eq(edtr.id, created.id)).limit(1);
         finalStatus = refetched?.status ?? created.status;
@@ -478,6 +517,8 @@ export class EdtrService {
         })),
         fields,
         weather: payload?.weather ?? null,
+        // Why the worker gave up on the sheet; only meaningful while it is hard_failed.
+        failureReason: row.status === 'hard_failed' ? row.lastError : null,
         reportDate: row.reportDate === null ? null : String(row.reportDate),
         // Provenance: a human transcription's 1.00 confidence must not read as model certainty.
         extraction: payload
@@ -535,6 +576,35 @@ export class EdtrService {
 
   // RFC-2: the ONLY path that deducts, with no override edge. Runs in the caller's tx so a
   // refused gate also rolls back the site hub's office log.
+  // A sheet the worker could not read: an approver types its hours from the photo. Bills nothing (RFC-2):
+  // the day still has to reconcile with its second record, or be approved by a person.
+  async transcribe(ctx: RequestContext, edtrId: string, lineItems: EdtrLineItemsInput) {
+    await withTenantTx(ctx, async (tx) => {
+      const [record] = await tx.select().from(edtr).where(eq(edtr.id, edtrId)).limit(1).for('update');
+      if (!record) throw new NotFoundException({ error: 'edtr_not_found' });
+      if (record.status !== 'hard_failed' || !record.reportDate) {
+        throw new ConflictException({ error: 'not_failed', status: record.status });
+      }
+      await tx
+        .update(edtr)
+        .set({
+          status: 'extracted',
+          lastError: null,
+          ocrPayload: buildManualTranscriptionPayload({
+            hoursActive: lineItems.hoursActive,
+            hoursIdle: lineItems.hoursIdle,
+            analyzedAt: new Date().toISOString(),
+          }),
+        })
+        .where(eq(edtr.id, edtrId));
+      const reportDate = String(record.reportDate);
+      await recordHours(tx, ctx, edtrId, record.rentalId, record.equipmentId, reportDate, lineItems);
+      await this.events.emit(ctx, 'edtr_transcribed', { edtr_id: edtrId, failure_reason: record.lastError });
+    });
+    // Read after commit: get() opens its own transaction.
+    return this.get(ctx, edtrId);
+  }
+
   // Read-only twin of approve()'s pricing: same hours rule, rate card and deposit split, no lock, no writes.
   async billPreview(ctx: RequestContext, edtrId: string, query: EdtrBillPreviewQuery): Promise<EdtrBillPreviewResponse> {
     return withTenantTx(ctx, async (tx) => {

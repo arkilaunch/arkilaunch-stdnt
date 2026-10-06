@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, beforeAll } from 'vitest';
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import postgres from 'postgres';
@@ -472,6 +473,48 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
 
     const adminView = await edtr.list(adminCtx, { rentalId: unassignedRentalId, limit: 10, offset: 0 });
     expect(adminView.total).toBeGreaterThan(0);
+  });
+
+  it('a retried capture with the same captureId returns the first log instead of a twin', async () => {
+    const captureId = randomUUID();
+    const body = {
+      source: 'digital_entry' as const,
+      rentalId,
+      equipmentId,
+      reportDate: '2021-03-05',
+      lineItems: { hoursActive: 5, hoursIdle: 0 },
+      captureId,
+    };
+    const first = await edtr.capture(adminCtx, body);
+    const retry = await edtr.capture(adminCtx, body);
+    expect(retry.id).toBe(first.id);
+  });
+
+  it('a sheet the worker could not read shows why, and an approver can type its hours once', async () => {
+    const [failed] = await withTenantTx(adminCtx, (tx) =>
+      tx
+        .insert(edtrTable)
+        .values({
+          tenantId: adminCtx.tenantId,
+          rentalId,
+          equipmentId,
+          source: 'paper_ocr',
+          reportDate: '2021-03-06',
+          rawFileUri: 'storage://fixtures/blurry.jpg',
+          status: 'hard_failed',
+          lastError: 'unreadable_total_hours:3',
+        })
+        .returning({ id: edtrTable.id }),
+    );
+    expect((await edtr.get(adminCtx, failed!.id)).failureReason).toBe('unreadable_total_hours:3');
+
+    const after = await edtr.transcribe(adminCtx, failed!.id, { hoursActive: 6, hoursIdle: 1 });
+    expect(after.status).not.toBe('hard_failed');
+    expect(after.failureReason).toBeNull();
+    expect(after.extraction?.isManualTranscription).toBe(true);
+    expect(after.lineItems[0]?.hoursActive).toBe(6);
+    // Never twice: the row is no longer a failed sheet.
+    await expect(edtr.transcribe(adminCtx, failed!.id, { hoursActive: 7, hoursIdle: 0 })).rejects.toThrow();
   });
 
   // PRD §5.3 "Review -> Rejected -> Capture" (cr-arkilaunch-f9-read-surface.md).

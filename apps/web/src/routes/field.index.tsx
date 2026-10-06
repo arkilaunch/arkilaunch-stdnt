@@ -1,5 +1,5 @@
 import { createRoute, Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fieldLayoutRoute } from './_field.js';
 import { edtrQueries, sitesQueries } from '../lib/queries.js';
@@ -7,7 +7,9 @@ import { Button } from '../components/button.js';
 import { CaptureModal } from '../components/capture-modal.js';
 import { EmptyState } from '../components/empty-state.js';
 import { BlankEdtrDownload } from '../components/blank-edtr-download.js';
-import { pluralize } from '../lib/format.js';
+import { formatDate, pluralize } from '../lib/format.js';
+import { usePendingUploads, type QueuedCapture } from '../lib/upload-queue.js';
+import { useToast } from '../components/toast.js';
 
 function OperatorDashboardPage() {
   const queryClient = useQueryClient();
@@ -20,7 +22,18 @@ function OperatorDashboardPage() {
   const targets = useQuery({ ...edtrQueries.scanTargets(), enabled: hasSites });
   const nothingOnSite = (targets.data?.items.length ?? 0) === 0;
 
-  // No pending count: the field-log queue is staff-only.
+  // Photos saved on this phone while offline; they send themselves when the signal is back.
+  const toast = useToast();
+  const onRefused = useCallback(
+    (items: QueuedCapture[]) => {
+      for (const item of items) {
+        toast.error('A saved field log was not accepted', `${formatDate(item.fields.reportDate)}: record it again.`);
+      }
+      void queryClient.invalidateQueries({ queryKey: ['edtr'] });
+    },
+    [toast, queryClient],
+  );
+  const pendingUploads = usePendingUploads(onRefused);
 
   return (
     <div className="flex flex-col gap-4">
@@ -41,6 +54,11 @@ function OperatorDashboardPage() {
           {nothingOnSite && !targets.isPending && (
             <p className="text-sm text-text-muted">
               No machine is on site at your sites yet, so there are no hours to record.
+            </p>
+          )}
+          {pendingUploads > 0 && (
+            <p role="status" className="text-sm text-text">
+              Waiting to upload ({pendingUploads}): {pluralize(pendingUploads, 'field log')} saved on this phone will send when the signal is back.
             </p>
           )}
           <p className="text-sm text-text-muted">

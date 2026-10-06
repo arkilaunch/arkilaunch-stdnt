@@ -4,7 +4,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
 import { apiGet, apiPost } from '../lib/api-client.js';
 import { useScanDeployments } from '../lib/use-scan-deployments.js';
-import { explainEdtrError } from '../lib/edtr-error.js';
+import { explainEdtrError, failureText } from '../lib/edtr-error.js';
+import { EMPTY_HOURS, HourFields, toLineItems } from '../components/hour-fields.js';
 import { addDaysIso, formatDate, formatHours, formatLogSource, formatPeso, formatStatus, isUuid, shortCode, siteName } from '../lib/format.js';
 import { Button, buttonClass } from '../components/button.js';
 import { Input } from '../components/input.js';
@@ -25,7 +26,7 @@ import { Table, type TableColumn } from '../components/table.js';
 import { useToast } from '../components/toast.js';
 import { ParsedColumns, ScanReview } from '../components/scan-review.js';
 import { WeatherCheck } from '../components/weather-check.js';
-import { edtrQueries } from '../lib/queries.js';
+import { edtrQueries, usersQueries } from '../lib/queries.js';
 import type { EdtrBillPreviewQuery, EdtrBillPreviewResponse, EdtrDetailResponse } from '@arkilaunch/shared';
 
 const APPROVABLE = new Set(['matched', 'discrepancy']);
@@ -490,6 +491,8 @@ function FieldLogDrawer({
   const canBill = !!item.reconciliation && APPROVABLE.has(item.reconciliation.status);
   // The log itself, whatever its status: a lone timekeeper sheet has no Approve button yet.
   const detail = useQuery(edtrQueries.detail(item.id));
+  const me = useQuery(usersQueries.me());
+  const canApprove = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
   const rows: [string, ReactNode][] = [
     ['Machine', serialNo ? `${machine} · SN ${serialNo}` : machine],
     ['Day worked', formatDate(item.reportDate)],
@@ -553,7 +556,11 @@ function FieldLogDrawer({
         ) : detail.isError ? (
           <p className="text-sm text-text-muted">The sheet could not be loaded.</p>
         ) : (
-          <FieldLogEvidence detail={detail.data} />
+          <>
+            <FieldLogEvidence detail={detail.data} />
+            {/* Approvers only (edtr:approve); the owner reads without editing. */}
+            {detail.data.status === 'hard_failed' && canApprove && <TranscribeForm edtrId={item.id} />}
+          </>
         )}
       </div>
     </Modal>
@@ -576,7 +583,14 @@ interface ApproveResult {
 function FieldLogEvidence({ detail }: { detail: EdtrDetailResponse }) {
   return (
     <div className="flex flex-col gap-4">
-      {detail.fields.length > 0 && detail.source === 'paper_ocr' ? (
+      {detail.status === 'hard_failed' && (
+        <Surface radius="md" elevation="sm" className="border-error p-3">
+          <p className="text-sm font-semibold text-error">This sheet could not be read</p>
+          <p className="mt-1 text-sm text-text">{failureText(detail.failureReason)}</p>
+        </Surface>
+      )}
+      {/* The photo whenever there is one: a failed sheet has no fields, and is exactly when a person must look. */}
+      {detail.source === 'paper_ocr' ? (
         <ScanReview detail={detail} />
       ) : (
         detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />
@@ -605,6 +619,42 @@ export function FieldLogModal({ id, onClose }: { id: string; onClose: () => void
         <FieldLogEvidence detail={detail.data} />
       )}
     </Modal>
+  );
+}
+
+// Hours typed from the photo of a sheet the worker gave up on. Bills nothing: the day still reconciles first.
+function TranscribeForm({ edtrId }: { edtrId: string }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [hours, setHours] = useState(EMPTY_HOURS);
+  const [saving, setSaving] = useState(false);
+  const lineItems = toLineItems(hours);
+
+  async function save() {
+    if (!lineItems) return;
+    setSaving(true);
+    try {
+      await apiPost(`/edtr/${edtrId}/transcribe`, lineItems);
+      toast.success('Hours saved', 'They will be matched against the second record of this day before anything is billed.');
+      await queryClient.invalidateQueries({ queryKey: ['edtr'] });
+    } catch (err) {
+      const { title, detail } = explainEdtrError(err);
+      toast.error(title, detail);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Surface radius="md" elevation="sm" className="mt-4 flex flex-col gap-3 p-3">
+      <p className="text-sm font-semibold text-text">Type the hours from the photo</p>
+      <HourFields value={hours} onChange={setHours} idPrefix="transcribe" />
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={() => void save()} disabled={!lineItems || saving}>
+          {saving ? 'Saving...' : 'Save hours'}
+        </Button>
+      </div>
+    </Surface>
   );
 }
 

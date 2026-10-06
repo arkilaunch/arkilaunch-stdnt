@@ -205,7 +205,8 @@ describe('CaptureField', () => {
     expect(scanner.analyze).not.toHaveBeenCalled();
   });
 
-  it('keeps a blank picked image in manual review', async () => {
+  // A photo with no sheet found is never sent silently: the timekeeper is told, then may still use it.
+  it('keeps a blank picked image in manual review, warns, and offers it only as "Use anyway"', async () => {
     scanner.load.mockResolvedValue({}); scanner.picked.mockReturnValue(null);
     vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
@@ -213,7 +214,8 @@ describe('CaptureField', () => {
     renderField({ scanner: true, onAccepted });
     await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
     await screen.findByText(/No clear document edges/);
-    expect(screen.getByRole('button', { name: 'Use original photo' })).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/edges of the sheet were not found/);
+    expect(screen.getByRole('button', { name: 'Use anyway' })).toBeEnabled();
     expect(onAccepted).not.toHaveBeenCalled();
   });
 

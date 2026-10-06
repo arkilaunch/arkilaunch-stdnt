@@ -137,6 +137,8 @@ export const EdtrCaptureRequestSchema = z
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     rawFileUri: z.string().min(1).optional(),
+    // Client-made per capture: a retry after a lost response returns the first row, never a twin that could pair with it.
+    captureId: z.string().uuid().optional(),
     lineItems: EdtrLineItemsInputSchema.optional(),
   })
   .superRefine((data, ctx) => {
@@ -156,6 +158,7 @@ export const EdtrCaptureFieldsSchema = z
     rentalId: z.string().uuid(),
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    captureId: z.string().uuid().optional(),
     // Multipart carries every field as a string, so accept the JSON encoding.
     lineItems: z
       .preprocess((value) => {
@@ -289,6 +292,7 @@ export const EdtrDetailResponseSchema = z.object({
   // null: pre-weather rows, digital entries, or a sheet without the weather block.
   weather: OcrPayloadSchema.shape.weather.unwrap().nullable(),
   reportDate: z.string().nullable(),
+  failureReason: z.string().nullable(),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
 

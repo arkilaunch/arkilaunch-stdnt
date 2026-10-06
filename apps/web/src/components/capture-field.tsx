@@ -26,7 +26,15 @@ export interface CaptureFieldProps {
 
 // TypeScript's DOM lib does not model torch.
 type TorchCapableTrack = Omit<MediaStreamTrack, 'getCapabilities'> & {
-  getCapabilities?: () => { torch?: boolean };
+  getCapabilities?: () => { torch?: boolean; focusMode?: string[] };
+};
+
+type PhotoIssue = 'dark' | 'glare' | 'blurry' | 'no_document';
+const ISSUE_TEXT: Record<PhotoIssue, string> = {
+  dark: 'The photo is too dark to read the handwriting reliably.',
+  glare: 'There is glare on the sheet that may hide numbers.',
+  blurry: 'The photo looks blurry; small numbers may not be read.',
+  no_document: 'The edges of the sheet were not found; part of it may be cut off.',
 };
 
 function formatBytes(bytes: number): string {
@@ -81,6 +89,8 @@ export function CaptureField({
   const [adjusting, setAdjusting] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewPreview, setReviewPreview] = useState<string | null>(null);
+  // Same checks auto-capture waits for, applied to shutter taps and gallery picks too.
+  const [photoIssue, setPhotoIssue] = useState<PhotoIssue | null>(null);
 
   useEffect(() => {
     if (!scanner || value || pending) return;
@@ -258,6 +268,7 @@ export function CaptureField({
           context.drawImage(bitmap, 0, 0, source.width, source.height);
           let detected: ScanCorners | undefined;
           let clear = false;
+          let issue: PhotoIssue | null = null;
           try {
             const cv = await loadDocumentScanner();
             const sample = document.createElement('canvas');
@@ -270,8 +281,12 @@ export function CaptureField({
             if (found) {
               detected = found.corners.map(({ x, y }) => ({ x: x / sampleScale, y: y / sampleScale })) as ScanCorners;
               clear = found.quality === 'ready';
+              issue = found.quality === 'ready' ? null : found.quality;
+            } else {
+              issue = 'no_document';
             }
           } catch { /* Manual correction stays available when vision fails. */ }
+          setPhotoIssue(issue);
           await beginReview(picked, source, detected, clear);
         } finally { bitmap.close?.(); }
       } catch (error) {
@@ -298,6 +313,17 @@ export function CaptureField({
     if (fileRef.current) fileRef.current.value = '';
     if (!picked) return;
     await hand(picked, event.target === fileRef.current);
+  }
+
+  // Tap to refocus where the phone supports it; elsewhere a tap does nothing.
+  function focusAt(event: React.MouseEvent<HTMLVideoElement>) {
+    const track = streamRef.current?.getVideoTracks()[0] as unknown as (TorchCapableTrack & MediaStreamTrack) | undefined;
+    if (!track?.getCapabilities?.().focusMode?.includes('single-shot')) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const point = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+    void track
+      .applyConstraints({ advanced: [{ focusMode: 'single-shot', pointsOfInterest: [point] } as MediaTrackConstraintSet] })
+      .catch(() => {});
   }
 
   // Full sensor resolution; prepareUpload downscales afterwards.
@@ -361,7 +387,7 @@ export function CaptureField({
 
   function cancelReview() {
     reviewIdRef.current++;
-    setPending(null); setCorrected(null); setCorners(null); sourceRef.current = null;
+    setPending(null); setCorrected(null); setCorners(null); setPhotoIssue(null); sourceRef.current = null;
     takingRef.current = false; setAdjusting(false); holdStartRef.current = null;
   }
 
@@ -470,12 +496,17 @@ export function CaptureField({
                   ))}
                 </div>
               )}
+              {photoIssue && !reviewing && (
+                <p role="alert" className="border-l-4 border-recon-review pl-2 text-sm text-text">
+                  {ISSUE_TEXT[photoIssue]} Retake for the best result, or use it anyway.
+                </p>
+              )}
               <p role="status" className="text-sm text-text-muted">{reviewing ? 'Preparing the scan automatically…' : adjusting ? 'Drag the four corners to the edges of the document, then apply them.' : corrected ? 'Check that the whole document is visible and the text is clear.' : 'No clear document edges were found. Adjust the corners or use the original photo.'}</p>
               <div className="flex flex-wrap gap-2">
                 {adjusting ? (
                   <Button variant="primary" disabled={busy} onClick={() => void applyCorners()}>Apply corners</Button>
                 ) : (
-                  <Button variant="primary" disabled={busy} onClick={() => void acceptReview(corrected ?? pending)}>{pending.type === 'application/pdf' ? 'Use file' : corrected ? 'Use scan' : 'Use original photo'}</Button>
+                  <Button variant="primary" disabled={busy} onClick={() => void acceptReview(corrected ?? pending)}>{pending.type === 'application/pdf' ? 'Use file' : photoIssue ? 'Use anyway' : corrected ? 'Use scan' : 'Use original photo'}</Button>
                 )}
                 {sourceRef.current && <Button variant="secondary" disabled={busy} onClick={() => setAdjusting(!adjusting)}>{adjusting ? 'Cancel adjustment' : 'Adjust corners'}</Button>}
                 {corrected && !adjusting && <Button variant="ghost" disabled={busy} onClick={() => void acceptReview(pending)}>Use original</Button>}
@@ -544,6 +575,7 @@ export function CaptureField({
                 autoPlay
                 playsInline
                 muted
+                onClick={focusAt}
                 className={scanner ? 'aspect-[4/3] w-full object-contain' : 'aspect-[3/4] w-full object-contain sm:aspect-[4/3]'}
               />
               {scanner && (
