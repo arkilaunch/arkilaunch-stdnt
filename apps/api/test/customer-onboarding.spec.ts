@@ -545,7 +545,7 @@ describe('Customer onboarding', () => {
         idNumber: '1234-5678-9012-3456',
         birthDate: '1990-01-02',
         sex: 'M',
-        address: '1 Rizal St, Quezon City',
+        address: '1 Rizal St Quezon City',
         // An ID never suggests a company number, whatever the model said.
         tin: null,
       });
