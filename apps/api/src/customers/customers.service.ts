@@ -40,6 +40,8 @@ import {
   parseCertificateDate,
   parseRegistrationCertificate,
   parseIdText,
+  noComma,
+  ID_TEXT_FIELDS,
   REGISTRY_DOCUMENT_TYPES,
   SEC_REGEX,
   TIN_REGEX,
@@ -195,8 +197,14 @@ function readCertificate(
   result: DocumentExtractionResult,
   idType: PhIdTypeCode,
 ): { fields: DocumentExtractionResult['fields']; layout: CertificateLayout | null } {
-  if (documentType === 'government_id' && result.text) {
-    return { fields: { ...result.fields, ...parseIdText(idType, result.text) }, layout: null };
+  if (documentType === 'government_id') {
+    const fields = { ...result.fields, ...(result.text ? parseIdText(idType, result.text) : {}) };
+    // Query-field names and addresses lose their commas too, as the parsed ones do (the birth date keeps its).
+    for (const key of ID_TEXT_FIELDS) {
+      const field = fields[key];
+      if (field) fields[key] = { ...field, value: noComma(field.value) };
+    }
+    return { fields, layout: null };
   }
   if (!result.text || (documentType !== 'sec_certificate' && documentType !== 'bir_cor')) {
     return { fields: result.fields, layout: null };

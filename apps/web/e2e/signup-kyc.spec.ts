@@ -79,7 +79,7 @@ for (const width of [360, 375, 390, 430, 1440]) {
     await expect(page.getByLabel('First name', { exact: false })).toHaveValue('ANA MARIA', { timeout: 60_000 });
     await expect(page.getByLabel('Middle name', { exact: false })).toHaveValue('REYES');
     await expect(page.getByLabel('Last name', { exact: false })).toHaveValue('SAN JUAN');
-    await expect(page.getByLabel('Address on the ID')).toHaveValue('12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY');
+    await expect(page.getByLabel('Address on the ID')).toHaveValue('12 SAMPLE STREET BARANGAY UNO QUEZON CITY');
     await expect(page.getByRole('button', { name: 'Use original photo' })).toHaveCount(0);
     await noOverflow(page);
     await page.screenshot({ path: info.outputPath(`licence-${width}.png`), fullPage: true });
