@@ -124,9 +124,6 @@ export function CaptureModal({
   const [fromQr, setFromQr] = useState(false);
   // The QR names a machine outside this user's scope: the photo is of the wrong sheet, so it is not sent.
   const [qrBlocked, setQrBlocked] = useState(false);
-  // No QR found in the photo: usually the sheet is cut off. Old sheets without a QR can still go through.
-  const [qrMissing, setQrMissing] = useState(false);
-  const [qrOverride, setQrOverride] = useState(false);
   // One id per attempt: a retry after a lost response (or from the offline queue) returns the same log.
   const [captureId, setCaptureId] = useState(() => crypto.randomUUID());
   const [sheetBusy, setSheetBusy] = useState(false);
@@ -200,15 +197,12 @@ export function CaptureModal({
     setScanFile(file);
     setFromQr(false);
     setQrBlocked(false);
-    setQrMissing(false);
-    setQrOverride(false);
     if (!file) return;
+    // No QR read (older sheet, or a browser without a reader): the booking and machine are picked by hand,
+    // and the worker flags an unidentified sheet for the office.
     const raw = await readSheetQr(file);
     const qr = raw ? parseEdtrSheetQr(raw) : null;
-    if (!qr) {
-      setQrMissing(true);
-      return;
-    }
+    if (!qr) return;
     const match = targets.find((t) => t.rentalId === qr.rentalId && t.units.some((u) => u.equipmentId === qr.equipmentId));
     if (!match) {
       setError({ payload: { error: 'sheet_unit_out_of_scope' } });
@@ -259,8 +253,6 @@ export function CaptureModal({
     setScanFile(null);
     setFromQr(false);
     setQrBlocked(false);
-    setQrMissing(false);
-    setQrOverride(false);
     setCaptureId(crypto.randomUUID());
     setSubmitting(false);
   }
@@ -311,17 +303,15 @@ export function CaptureModal({
         }
       }
       // A timekeeper only submits: reading, matching and approval happen in the office, out of their view.
-      if (submitOnly && source === 'digital_entry') {
-        toast.success('Sent to the office', `${formatDate(reportDate)} is pending approval.`);
+      if (submitOnly) {
+        toast.success(
+          'Sent to the office',
+          source === 'digital_entry'
+            ? `${formatDate(reportDate)} is pending approval.`
+            : `The sheet for the week of ${formatDate(reportDate)} is with the office.`,
+        );
         onCaptured();
         handleClose();
-        return;
-      }
-      if (submitOnly) {
-        // Still watched quietly: an unreadable photo is cheapest to retake while on site. Nothing else is shown.
-        setPollUrl(`/edtr/${res.id}`);
-        toast.success('Sent to the office', `The sheet for the week of ${formatDate(reportDate)} is with the office.`);
-        onCaptured();
         return;
       }
       // res.pollUrl carries the /api/v1 prefix apiGet adds itself.
@@ -366,8 +356,7 @@ export function CaptureModal({
               !reportDate ||
               !equipmentId ||
               pollUrl !== null ||
-              qrBlocked ||
-              (source === 'paper_ocr' && qrMissing && !qrOverride)
+              qrBlocked
             }
           >
             Record log
@@ -513,18 +502,6 @@ export function CaptureModal({
           />
         )}
 
-        {source === 'paper_ocr' && qrMissing && (
-          <Surface radius="md" elevation="sm" className="flex flex-col gap-2 border-recon-review p-3">
-            <p className="text-sm text-text">
-              The sheet's QR code is not in the photo. Fit the whole sheet in the frame, including the QR corner, and retake.
-            </p>
-            <label className="flex items-center gap-2 text-sm text-text-muted">
-              <input type="checkbox" checked={qrOverride} onChange={(e) => setQrOverride(e.target.checked)} />
-              This is an older sheet without a QR code
-            </label>
-          </Surface>
-        )}
-
         {!(source === 'paper_ocr' && ocrPipeline) && <HourFields value={hours} onChange={setHours} idPrefix="capture" />}
         {source === 'paper_ocr' && !ocrPipeline && (
           <p className="-mt-2 text-sm text-text-muted">
@@ -543,24 +520,6 @@ export function CaptureModal({
           <Surface radius="md" elevation="sm" className="border-error p-3">
             <p className="text-sm font-semibold text-error">{explained.title}</p>
             <p className="mt-1 text-sm text-text">{explained.detail}</p>
-          </Surface>
-        )}
-
-        {submitOnly && pollUrl && (
-          <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-3">
-            {detail?.status === 'hard_failed' ? (
-              <>
-                <p className="text-sm text-text">{failureText(detail.failureReason)}</p>
-                <div>
-                  {/* reset() keeps booking, machine and week: only the photo needs redoing. */}
-                  <Button variant="primary" onClick={reset}>
-                    Retake the photo
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-text">Sent to the office. You can close this.</p>
-            )}
           </Surface>
         )}
 
