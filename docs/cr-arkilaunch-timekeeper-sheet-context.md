@@ -28,7 +28,7 @@ Now the timekeeper sees every header field of the sheet before sending it. Once 
   - rental period
   - date covered (Mon–Sun)
   - hour meter at start of week
-- **After submit (timekeeper, paper and typed).** The timekeeper gets a "Sent to the office" toast and the modal closes. There is no polling of `/edtr/:id`, no OCR readout, no confidence chips, no status and no "Retake the photo" prompt. An unreadable sheet is handled by the office: it transcribes the hours from the photo, or requests a correction.
+- **After submit (timekeeper).** A "Sent to the office" toast. A typed log closes the modal. A paper sheet leaves the modal open with "Sent to the office. You can close this." It polls `/edtr/:id` quietly and surfaces only one outcome: if the worker cannot read the photo (`hard_failed`), it shows why and offers "Retake the photo", since a retake is cheapest while on site. No status, OCR readout, confidence chips or reconciliation state is ever shown.
 - **Unchanged.**
   - Notifications to the timekeeper: `edtr_approved`, `edtr_needs_correction`, `edtr_rejected` and `edtr_review` are kept.
   - The offline upload queue.
@@ -51,6 +51,6 @@ There is no migration and no new endpoint. The panel reads the existing `GET /ap
 
 | Suite | Result |
 |---|---|
-| web `capture-modal.test.tsx`, `app.ocr.deployments.test.tsx` | 5 passed. The new case checks that the header panel renders, that the modal closes on submit, and that no `/edtr/:id` read happens. |
+| web `capture-modal.test.tsx`, `app.ocr.deployments.test.tsx` | 8 passed (with `field.index.test.tsx`). The new case checks that the header panel renders, that only "sent" shows after submit (no status or readout), and that the retake prompt appears when the photo is unreadable. |
 
 Typecheck is clean for web. Lint is clean on the changed files.

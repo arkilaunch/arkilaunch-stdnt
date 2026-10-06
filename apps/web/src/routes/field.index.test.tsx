@@ -30,6 +30,7 @@ function stubFetch({ rentals = [RENTAL], sites = [SITE] }: { rentals?: unknown[]
       if (u.includes('/reference/customers')) return json([CUSTOMER]);
       if (u.includes('/reference/project-sites')) return json(sites);
       if (u.includes('/sites')) return json({ items: sites, total: sites.length });
+      if (u.includes('/edtr-sheet')) return json({ rentalId: 'r', chargeTo: '', projectLocation: '', equipment: [] });
       if (u.includes('/edtr')) return json({ items: [], total: 0 });
       return json([]);
     }),

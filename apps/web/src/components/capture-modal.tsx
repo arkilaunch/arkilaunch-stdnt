@@ -311,15 +311,17 @@ export function CaptureModal({
         }
       }
       // A timekeeper only submits: reading, matching and approval happen in the office, out of their view.
-      if (submitOnly) {
-        toast.success(
-          'Sent to the office',
-          source === 'paper_ocr'
-            ? `The sheet for the week of ${formatDate(reportDate)} is with the office.`
-            : `${formatDate(reportDate)} is pending approval.`,
-        );
+      if (submitOnly && source === 'digital_entry') {
+        toast.success('Sent to the office', `${formatDate(reportDate)} is pending approval.`);
         onCaptured();
         handleClose();
+        return;
+      }
+      if (submitOnly) {
+        // Still watched quietly: an unreadable photo is cheapest to retake while on site. Nothing else is shown.
+        setPollUrl(`/edtr/${res.id}`);
+        toast.success('Sent to the office', `The sheet for the week of ${formatDate(reportDate)} is with the office.`);
+        onCaptured();
         return;
       }
       // res.pollUrl carries the /api/v1 prefix apiGet adds itself.
@@ -544,7 +546,25 @@ export function CaptureModal({
           </Surface>
         )}
 
-        {detail && (
+        {submitOnly && pollUrl && (
+          <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-3">
+            {detail?.status === 'hard_failed' ? (
+              <>
+                <p className="text-sm text-text">{failureText(detail.failureReason)}</p>
+                <div>
+                  {/* reset() keeps booking, machine and week: only the photo needs redoing. */}
+                  <Button variant="primary" onClick={reset}>
+                    Retake the photo
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-text">Sent to the office. You can close this.</p>
+            )}
+          </Surface>
+        )}
+
+        {detail && !submitOnly && (
           <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-3">
             <p className="text-sm text-text">
               Recorded as <span className="font-mono text-xs">{shortCode('log', detail.id)}</span> -{' '}
