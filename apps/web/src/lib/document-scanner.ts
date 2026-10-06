@@ -471,3 +471,26 @@ export async function detectSheetMarks(source: HTMLCanvasElement): Promise<Sheet
   const image = context.getImageData(0, 0, source.width, source.height);
   return pickSheetMarks(findMarkCandidates(cv, image), source.width * source.height);
 }
+
+// The picture turned clockwise by a quarter turn or more, as a new image; boxes follow via rotateBox.
+export async function rotateImage(url: string, degrees: 90 | 180 | 270): Promise<string> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    // A signed storage URL needs CORS to be drawn; a data URL (the B/W view) does not.
+    if (!url.startsWith('data:')) img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('The scan did not load'));
+    img.src = url;
+  });
+  const sideways = degrees !== 180;
+  const canvas = document.createElement('canvas');
+  canvas.width = sideways ? image.naturalHeight : image.naturalWidth;
+  canvas.height = sideways ? image.naturalWidth : image.naturalHeight;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas unavailable');
+  // Canvas y points down, so a positive angle turns clockwise on screen.
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate((degrees * Math.PI) / 180);
+  context.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+  return canvas.toDataURL('image/jpeg', 0.92);
+}

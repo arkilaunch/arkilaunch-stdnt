@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { EdtrDetailResponse } from '@arkilaunch/shared';
 import { apiGet } from '../lib/api-client.js';
-import { toScannedPage } from '../lib/document-scanner.js';
+import { rotateImage, toScannedPage } from '../lib/document-scanner.js';
 import { formatHours } from '../lib/format.js';
 import { ConfidenceChip } from './confidence-chip.js';
 import { Surface } from './surface.js';
@@ -103,7 +103,6 @@ export function ParsedColumns({ item }: { item: LineItem }) {
 
 export function ScanReview({ detail, onRotate }: ScanReviewProps) {
   const [rotation, setRotation] = useState<Rotation>(detail.scanRotation);
-  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => setRotation(detail.scanRotation), [detail.id, detail.scanRotation]);
   function turn() {
     const next = ((rotation + 90) % 360) as Rotation;
@@ -148,15 +147,34 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
     };
   }, [imageUrl, view, scannedUrl, scanFailed]);
 
-  const shown = view === 'scanned' && scannedUrl ? scannedUrl : imageUrl;
+  const base = view === 'scanned' && scannedUrl ? scannedUrl : imageUrl;
+  // The turned picture is drawn, not CSS-transformed: the frame then always wraps it exactly.
+  const [turned, setTurned] = useState<{ from: string; degrees: Rotation; url: string } | null>(null);
+  const [turnFailed, setTurnFailed] = useState(false);
+  useEffect(() => {
+    setTurnFailed(false);
+    if (!base || rotation === 0) return;
+    let cancelled = false;
+    rotateImage(base, rotation)
+      .then((url) => {
+        if (!cancelled) setTurned({ from: base, degrees: rotation, url });
+      })
+      .catch(() => {
+        if (!cancelled) setTurnFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [base, rotation]);
+  const ready = rotation !== 0 && turned?.from === base && turned.degrees === rotation;
+  // Until the turned picture exists (or if it cannot be made), the unturned one stays, boxes matching it.
+  const shown = ready ? turned!.url : base;
+  const boxRotation: Rotation = ready ? rotation : 0;
 
   const boxes = detail.fields
     .map(toBox)
     .filter((box): box is Box => box !== null)
-    .map((box) => rotateBox(box, rotation));
-  const sideways = rotation === 90 || rotation === 270;
-  // Turned a quarter, the frame takes the page's swapped shape and the image is centred and turned inside it.
-  const ratio = natural ? natural.w / natural.h : null;
+    .map((box) => rotateBox(box, boxRotation));
   const needsReview = detail.fields.filter((field) => field.belowGate);
 
   return (
@@ -187,6 +205,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
             >
               Rotate 90°
             </button>
+            {turnFailed && <span className="text-xs text-text-muted">This photo cannot be turned here.</span>}
             {view === 'scanned' && !scannedUrl && (
               <span className="text-xs text-text-muted">
                 {scanFailed ? 'Black-and-white view unavailable; showing the original.' : 'Preparing the scan...'}
@@ -195,25 +214,12 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
           </div>
         )}
         {shown ? (
-          <div
-            className="relative w-full overflow-hidden rounded-sm border border-border"
-            style={ratio ? { aspectRatio: sideways ? 1 / ratio : ratio } : undefined}
-          >
+          // The frame is exactly the picture's size, so box percentages land on the page.
+          <div className="relative mx-auto w-fit max-w-full overflow-hidden rounded-sm border border-border bg-surface">
             <img
               src={shown}
               alt="The scanned sheet, with the readings the model took marked on it"
-              onLoad={(event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })}
-              className={ratio ? 'absolute left-1/2 top-1/2 max-w-none' : 'w-full'}
-              style={
-                ratio
-                  ? {
-                      // Sized to the unturned page, so after the turn it fills the frame exactly.
-                      width: sideways ? `${ratio * 100}%` : '100%',
-                      height: sideways ? `${100 / ratio}%` : '100%',
-                      transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
-                    }
-                  : undefined
-              }
+              className="block h-auto max-h-[75vh] w-auto max-w-full"
             />
             {boxes.map((box) => (
               <span
