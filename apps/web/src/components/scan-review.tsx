@@ -112,7 +112,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
   }
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageUnavailable, setImageUnavailable] = useState(false);
-  const [view, setView] = useState<'scanned' | 'original'>('scanned');
+  const [view, setView] = useState<'scanned' | 'original'>('original');
   const [scannedUrl, setScannedUrl] = useState<string | null>(null);
   const [scanFailed, setScanFailed] = useState(false);
 
@@ -164,7 +164,8 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
       <div className="flex-1">
         {imageUrl && (
           <div className="mb-2 flex items-center gap-2" role="group" aria-label="How to show the sheet">
-            {(['scanned', 'original'] as const).map((option) => (
+            {/* The photo first: it is what the reader saw. B/W is an optional aid, and can speckle on shadowed shots. */}
+            {(['original', 'scanned'] as const).map((option) => (
               <button
                 key={option}
                 type="button"
@@ -175,7 +176,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
                   view === option ? 'border-primary bg-primary text-on-primary' : 'border-border text-text',
                 ].join(' ')}
               >
-                {option === 'scanned' ? 'Scanned' : 'Original'}
+                {option === 'scanned' ? 'Black & white' : 'Photo'}
               </button>
             ))}
             <button
