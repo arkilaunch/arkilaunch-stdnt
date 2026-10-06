@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
-import { CaptureModal } from './capture-modal.js';
+import { CaptureModal, sheetWeeks } from './capture-modal.js';
 import { ToastProvider } from './toast.js';
 
 const LOG_ID = '11111111-1111-4111-8111-111111111111';
@@ -94,5 +94,12 @@ describe('CaptureModal', () => {
       </QueryClientProvider>,
     );
     await waitFor(() => expect(screen.getByRole('combobox', { name: /machine on site/i })).toHaveTextContent('SN-9'));
+  });
+});
+
+describe('sheetWeeks', () => {
+  it('lists the Monday of each rental week up to today', () => {
+    expect(sheetWeeks('2026-09-23', '2026-10-30', '2026-10-06')).toEqual(['2026-09-21', '2026-09-28', '2026-10-05']);
+    expect(sheetWeeks('2026-09-23', '2026-09-27', '2026-10-06')).toEqual(['2026-09-21']);
   });
 });

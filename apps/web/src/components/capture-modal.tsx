@@ -4,7 +4,7 @@ import { parseEdtrSheetQr, type EdtrCaptureResponse, type EdtrDetailResponse, ty
 import { apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
 import { announceQueueChange, isRetryable, uploadQueue } from '../lib/upload-queue.js';
-import { formatDate, formatStatus, shortCode } from '../lib/format.js';
+import { addDaysIso, formatDate, formatStatus, shortCode, weekStart } from '../lib/format.js';
 import { manilaDate } from '@arkilaunch/shared';
 import { EMPTY_HOURS, HourFields, toLineItems, type HourFieldValues } from './hour-fields.js';
 import { Button } from './button.js';
@@ -51,6 +51,14 @@ export interface CaptureModalProps {
   initialRentalId?: string;
   initialSource?: 'digital_entry' | 'paper_ocr';
   submitOnly?: boolean;
+}
+
+// Mondays of every printed week in the rental, up to this week: a sheet covers Mon to Sun.
+export function sheetWeeks(start: string, end: string, today = manilaDate(new Date())): string[] {
+  const last = end < today ? end : today;
+  const weeks: string[] = [];
+  for (let d = weekStart(start); d <= last; d = addDaysIso(d, 7)) weeks.push(d);
+  return weeks;
 }
 
 export function CaptureModal({
@@ -100,6 +108,9 @@ export function CaptureModal({
   useEffect(() => {
     setSource(initialSource);
   }, [initialSource]);
+
+  // A day picked for one source or booking is not valid for another.
+  useEffect(() => setReportDate(''), [source, rentalId]);
 
   // One booking or one machine to choose from: choose it.
   const onlyRental = targets.length === 1 ? targets[0]!.rentalId : null;
@@ -351,6 +362,24 @@ export function CaptureModal({
           ))}
         </Select>
 
+        {source === 'paper_ocr' ? (
+          <Select
+            id="reportDate"
+            label="Week of the sheet"
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+            disabled={!target?.startDate}
+            required
+          >
+            <option value="">{target ? 'Choose the week' : 'Choose the site first'}</option>
+            {target?.startDate &&
+              sheetWeeks(manilaDate(target.startDate), manilaDate(target.endDate ?? new Date())).map((d) => (
+                <option key={d} value={d}>
+                  {formatDate(d)} to {formatDate(addDaysIso(d, 6))}
+                </option>
+              ))}
+          </Select>
+        ) : (
         <Input
           id="reportDate"
           label="Day worked"
@@ -366,6 +395,7 @@ export function CaptureModal({
               : undefined
           }
         />
+        )}
 
         {source === 'paper_ocr' && (
           <CaptureField
