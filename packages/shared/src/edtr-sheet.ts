@@ -109,7 +109,6 @@ interface Columns {
   other: number;
   meterStart: number;
   meterEnd: number;
-  stdShift: number;
   headerRows: number;
 }
 
@@ -162,7 +161,6 @@ function findColumns(grid: Grid): Columns | null {
     other: at('OTHER HRS'),
     meterStart: at('METER START'),
     meterEnd: at('METER END'),
-    stdShift: at('STD SHIFT'),
     headerRows: 2,
   };
 }
@@ -283,23 +281,6 @@ function v3FillColumns(columns: Columns): number[] {
   ].filter((c) => c >= 0);
 }
 
-// v3.1: one tick stands for the printed standard shift, so the commonest day needs no handwritten times.
-const STD_SHIFT = { am: ['07:30', '12:00'], pm: ['13:00', '16:00'] } as const;
-
-// The tick only fills blank AM/PM times; written times always win. It feeds the TOTAL cross-check,
-// never the billed RUNNING figure (RFC-2).
-function withStdShift(row: string[], confidences: number[], columns: Columns): { row: string[]; ticked: boolean } {
-  const c = columns.stdShift;
-  const ticked = c >= 0 && readTickGroup(row[c] ?? '', ['STD'], confidences[c] ?? 0, TICK_CONFIDENCE_GATE) === 'STD';
-  if (!ticked || !columns.am || !columns.pm) return { row, ticked };
-  const cols = [...columns.am, ...columns.pm];
-  if (cols.some((i) => /\d/.test(row[i] ?? ''))) return { row, ticked };
-  const out = [...row];
-  [out[columns.am[0]], out[columns.am[1]]] = STD_SHIFT.am;
-  [out[columns.pm[0]], out[columns.pm[1]]] = STD_SHIFT.pm;
-  return { row: out, ticked };
-}
-
 function computeHours(row: string[], pairs: Array<[number, number]>): number | null {
   let minutes = 0;
   let sawPair = false;
@@ -345,7 +326,7 @@ export function parseEdtrSheet(
   const duplicates: string[] = [];
 
   for (let r = columns.headerRows; r < grid.rowCount; r++) {
-    const { row, ticked } = withStdShift(grid.rows[r]!, grid.confidences[r]!, columns);
+    const row = grid.rows[r]!;
     const rawDate = row[columns.date] ?? '';
     if (norm(rawDate) === '') continue;
 
@@ -355,7 +336,7 @@ export function parseEdtrSheet(
       const dayCell = columns.day >= 0 ? norm(row[columns.day] ?? '') : '';
       if (dayCell.includes('OUTSIDE')) continue;
       // Written means a digit somewhere: empty comb boxes alone are a blank day, not an unreadable one.
-      if (!ticked && v3FillColumns(columns).every((c) => !/\d/.test(row[c] ?? ''))) continue;
+      if (v3FillColumns(columns).every((c) => !/\d/.test(row[c] ?? ''))) continue;
     }
 
     const reportDate = resolveSheetDate(rawDate, captureDate);

@@ -40,7 +40,7 @@ export type OcrPayload = z.infer<typeof OcrPayloadSchema>;
 
 // Seed default only; the live tolerance is per-row on edtr_reconciliations.tolerance.
 export const CONFIDENCE_GATE = 0.9;
-// Tick boxes (weather, STD SHIFT) feed review flags and the TOTAL cross-check only, never the billed figure, and
+// Weather tick boxes feed review flags and the TOTAL cross-check only, never the billed figure, and
 // Azure scores scanned selection marks lower than text (0.68-0.69 on EQR-2026-0013). Digits keep CONFIDENCE_GATE.
 export const TICK_CONFIDENCE_GATE = 0.6;
 export const DEFAULT_TOLERANCE_HOURS = 0.25;
