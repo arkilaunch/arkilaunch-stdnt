@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseEdtrSheet } from './edtr-sheet.js';
 import type { ExtractedTable } from './document-intelligence-port.js';
 import { compareReportedWeather, readTickGroup, WEATHER_CODES, type TimedReading } from './weather-attestation.js';
+import { TICK_CONFIDENCE_GATE } from './edtr.js';
 
 const S = ':selected:';
 const U = ':unselected:';
@@ -16,6 +17,10 @@ describe('readTickGroup', () => {
     expect(readTickGroup(`${S} ${S} ${U} ${U} ${U} ${U}`, WEATHER_CODES, 0.95, 0.9)).toBeNull();
     expect(readTickGroup(ticks(5, 0), WEATHER_CODES, 0.95, 0.9)).toBeNull();
     expect(readTickGroup(ticks(6, 0), WEATHER_CODES, 0.5, 0.9)).toBeNull();
+  });
+  it('reads a slashed box at the mark confidence DI gives it (EQR-2026-0013 scan)', () => {
+    expect(readTickGroup(ticks(6, 4), WEATHER_CODES, 0.65, TICK_CONFIDENCE_GATE)).toBe('W');
+    expect(readTickGroup(ticks(6, 4), WEATHER_CODES, 0.55, TICK_CONFIDENCE_GATE)).toBeNull();
   });
 });
 
