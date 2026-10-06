@@ -46,7 +46,7 @@ export function Pagination({
         Showing {first.toLocaleString('en-PH')}-{last.toLocaleString('en-PH')} of{' '}
         {total.toLocaleString('en-PH')} {noun}
       </p>
-      <div className="flex items-center">
+      <div className="flex flex-wrap items-center">
         <button type="button" className={arrow} onClick={() => onOffsetChange(Math.max(0, offset - limit))} disabled={!canGoBack || busy}>
           <ChevronLeft aria-hidden className="h-4 w-4" />
           <span className="sr-only">Previous</span>
