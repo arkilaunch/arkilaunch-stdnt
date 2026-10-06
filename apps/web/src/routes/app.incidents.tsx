@@ -1,15 +1,20 @@
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
-import type { IncidentResponse } from '@arkilaunch/shared';
+import type { IncidentResponse, IncidentStatus } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
-import { incidentsQueries } from '../lib/queries.js';
+import { incidentsQueries, usersQueries } from '../lib/queries.js';
+import { apiPatch } from '../lib/api-client.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { Tabs } from '../components/tabs.js';
 import { Modal } from '../components/modal.js';
-import { buttonClass } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
+import { Input } from '../components/input.js';
+import { Select } from '../components/select.js';
+import { useToast } from '../components/toast.js';
 import { formatDateTime, formatSeverity, shortCode } from '../lib/format.js';
 import { CircleCheck, CloudRain, Eye, FileWarning, ShieldAlert, TriangleAlert } from 'lucide-react';
 
@@ -17,6 +22,13 @@ const KIND_META = {
   weather: { label: 'Weather', icon: CloudRain },
   discrepancy: { label: 'Log mismatch', icon: FileWarning },
   used_despite_warning: { label: 'Used during warning', icon: ShieldAlert },
+} as const;
+
+const STATUS_LABEL: Record<IncidentStatus, string> = { open: 'Open', acknowledged: 'Acknowledged', dismissed: 'Dismissed' };
+
+const SOURCE_LABEL = {
+  sheet: 'Field log: the timekeeper marked heavy rain, strong wind or a storm signal',
+  system: 'System: the machine was under a stop-work weather warning',
 } as const;
 
 function IncidentKind({ kind }: { kind: IncidentResponse['kind'] }) {
@@ -32,7 +44,9 @@ function IncidentSeverity({ severity }: { severity: string | null }) {
 
 const COLUMNS: TableColumn<IncidentResponse>[] = [
   { header: 'Incident', kind: 'text', cell: (row) => <IncidentKind kind={row.kind} /> },
+  { header: 'Company', kind: 'text', cell: (row) => row.customerName ?? '—' },
   { header: 'Severity', kind: 'status', cell: (row) => <IncidentSeverity severity={row.severity} /> },
+  { header: 'Status', kind: 'status', cell: (row) => STATUS_LABEL[row.status] },
   { header: 'Occurred', kind: 'date', cell: (row) => formatDateTime(row.occurredAt) },
   {
     header: 'Details', kind: 'text',
@@ -60,14 +74,68 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+// A person's call on the incident; it never changes a bill or a deposit (RFC-2).
+function ReviewForm({ incident }: { incident: IncidentResponse }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [status, setStatus] = useState<IncidentStatus>(incident.status);
+  const [note, setNote] = useState(incident.reviewNote ?? '');
+  const [saving, setSaving] = useState(false);
+  const needsNote = status === 'dismissed' && !note.trim();
+
+  async function save() {
+    setSaving(true);
+    try {
+      await apiPatch(`/incidents/${incident.id}`, { status, ...(note.trim() ? { note: note.trim() } : {}) });
+      toast.success('Incident updated', `Marked ${STATUS_LABEL[status].toLowerCase()}.`);
+      await queryClient.invalidateQueries({ queryKey: ['incidents'] });
+    } catch {
+      toast.error('Could not update the incident', 'Try again in a moment.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-border pt-4">
+      <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value as IncidentStatus)}>
+        {Object.entries(STATUS_LABEL).map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </Select>
+      <Input
+        label="Note"
+        value={note}
+        maxLength={1000}
+        onChange={(e) => setNote(e.target.value)}
+        hint="Required to dismiss: say why it is not a finding."
+        error={needsNote ? 'Add a note to dismiss this incident.' : undefined}
+      />
+      <div>
+        <Button onClick={() => void save()} disabled={saving || needsNote}>
+          {saving ? 'Saving...' : 'Save'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function IncidentDrawer({ incident, onClose }: { incident: IncidentResponse; onClose: () => void }) {
+  const me = useQuery(usersQueries.me());
+  // The same people who decide a field log decide its incident.
+  const canReview = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
   const observed =
     incident.observed && typeof incident.observed === 'object' && !Array.isArray(incident.observed)
       ? Object.entries(incident.observed as Record<string, unknown>).filter(([, v]) => v !== undefined)
       : [];
   const rows: [string, ReactNode][] = [
     ['Incident', <IncidentKind key="k" kind={incident.kind} />],
+    ['Company', incident.customerName ?? '—'],
+    ...(incident.source ? [['Flagged by', SOURCE_LABEL[incident.source]] as [string, ReactNode]] : []),
     ['Severity', <IncidentSeverity key="s" severity={incident.severity} />],
+    ['Status', STATUS_LABEL[incident.status]],
+    ...(incident.reviewNote ? [['Review note', incident.reviewNote] as [string, ReactNode]] : []),
+    ...(incident.reviewedAt ? [['Reviewed', formatDateTime(incident.reviewedAt)] as [string, ReactNode]] : []),
     ['Occurred', formatDateTime(incident.occurredAt)],
     ['Project site', siteLabel(incident)],
     ['Details', detailText(incident)],
@@ -97,15 +165,45 @@ function IncidentDrawer({ incident, onClose }: { incident: IncidentResponse; onC
           </div>
         ))}
       </dl>
+      {canReview && <ReviewForm key={incident.id} incident={incident} />}
     </Modal>
   );
 }
 
-type Kind = 'all' | 'weather' | 'discrepancy' | 'used_despite_warning';
+// Who keeps running machines through bad weather; picking one filters the log to that company.
+function CompanyTally({ selected, onSelect }: { selected: string | undefined; onSelect: (customerId: string | undefined) => void }) {
+  const tally = useQuery(incidentsQueries.companies());
+  const items = tally.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <section aria-labelledby="company-tally" className="flex flex-col gap-2">
+      <h2 id="company-tally" className="text-sm font-medium text-text-muted">Used during warning, by company</h2>
+      <div className="flex flex-wrap gap-2">
+        {selected && (
+          <button type="button" className={buttonClass('ghost')} onClick={() => onSelect(undefined)}>
+            All companies
+          </button>
+        )}
+        {items.map((c) => (
+          <button
+            key={c.customerId}
+            type="button"
+            aria-pressed={selected === c.customerId}
+            className={buttonClass(selected === c.customerId ? 'primary' : 'secondary')}
+            onClick={() => onSelect(selected === c.customerId ? undefined : c.customerId)}
+          >
+            {c.companyName}: {c.total} ({c.open} open)
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+type Kind = 'all' | 'weather' | 'used_despite_warning';
 const KINDS: { id: Kind; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'weather', label: 'Weather' },
-  { id: 'discrepancy', label: 'Report discrepancies' },
   { id: 'used_despite_warning', label: 'Used despite warning' },
 ];
 
@@ -114,12 +212,20 @@ function IncidentsPage() {
   const navigate = useNavigate({ from: '/app/incidents' });
   const [offset, setOffset] = useState(0);
   const [kind, setKind] = useState<Kind>('all');
+  const [customerId, setCustomerId] = useState<string | undefined>();
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Incidents"
         description="Weather and liability events recorded against your sites."
+      />
+      <CompanyTally
+        selected={customerId}
+        onSelect={(next) => {
+          setCustomerId(next);
+          setOffset(0);
+        }}
       />
       <Tabs
         label="Filter incidents"
@@ -132,7 +238,7 @@ function IncidentsPage() {
       />
       <DataPanel
         title="Incidents"
-        options={incidentsQueries.list(PAGE_SIZE, offset, kind === 'all' ? undefined : kind)}
+        options={incidentsQueries.list(PAGE_SIZE, offset, kind === 'all' ? undefined : kind, customerId)}
         emptyTitle="No incidents logged"
         emptyDescription="Weather and liability incidents will appear here as they are auto-logged or recorded."
 
