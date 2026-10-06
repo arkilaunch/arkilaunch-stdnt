@@ -68,9 +68,9 @@ function spanProgress(start: string, end: string | null, today: string): { day: 
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col rounded-md border border-border p-3">
+    <div className="flex min-w-0 flex-col rounded-md border border-border p-3">
       <span className="text-xs text-text-muted">{label}</span>
-      <span className="font-mono text-heading-md text-text">{value}</span>
+      <span className="font-mono text-heading-md text-text [overflow-wrap:anywhere]">{value}</span>
     </div>
   );
 }
@@ -570,7 +570,6 @@ function Equipment({ hub, siteId }: { hub: SiteHubResponse; siteId: string }) {
     {
       header: 'Machine',
       kind: 'text',
-      width: '22%',
       cell: (u) => (
         <span className="flex flex-col">
           <Link
@@ -587,7 +586,6 @@ function Equipment({ hub, siteId }: { hub: SiteHubResponse; siteId: string }) {
     {
       header: 'Booking',
       kind: 'text',
-      width: '14%',
       cell: (u) => (
         <Link to="/app/bookings" search={{ open: u.bookingCode }} className="hover:underline">
           <BookingCode code={u.bookingCode} />
@@ -597,15 +595,13 @@ function Equipment({ hub, siteId }: { hub: SiteHubResponse; siteId: string }) {
     {
       header: 'On site',
       kind: 'date',
-      width: '18%',
       cell: (u) => `${formatDate(u.span.from)} – ${u.span.to ? formatDate(u.span.to) : 'open'}`,
     },
-    { header: 'Operator', kind: 'text', width: '12%', cell: (u) => u.operatorName ?? '--' },
+    { header: 'Operator', kind: 'text', cell: (u) => u.operatorName ?? '--' },
     {
       // Timekeeper sheet downloads today: who and when (the limit is per unit per day).
       header: 'Sheets today',
       kind: 'text',
-      width: '18%',
       cell: (u) => {
         const today = hub.sheetDownloadsToday.filter((d) => d.equipmentId === u.equipmentId);
         if (today.length === 0) return '--';
@@ -623,7 +619,6 @@ function Equipment({ hub, siteId }: { hub: SiteHubResponse; siteId: string }) {
     {
       header: 'Hour meter',
       kind: 'number',
-      width: '16%',
       cell: (u) => (
         <>
           {u.lastMeterReading !== null ? u.lastMeterReading.toFixed(1) : '--'}

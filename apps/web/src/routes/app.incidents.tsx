@@ -157,7 +157,7 @@ function IncidentDrawer({ incident, onClose }: { incident: IncidentResponse; onC
         ) : undefined
       }
     >
-      <dl className="grid grid-cols-[minmax(8rem,auto)_1fr] gap-x-4 gap-y-3 text-sm">
+      <dl className="grid grid-cols-[minmax(8rem,auto)_minmax(0,1fr)] [&_dd]:[overflow-wrap:anywhere] gap-x-4 gap-y-3 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-text-muted">{label}</dt>
