@@ -16,7 +16,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { validateUpload } from '../storage/upload-validation.js';
 import { StorageService, edtrBucket } from '../storage/storage.service.js';
 import { EdtrService } from './edtr.service.js';
-import { EdtrApproveDto, EdtrCaptureDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
+import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
 import type { CtxRequest, MulterFile } from '../common/request.js';
 
 @Controller('edtr')
@@ -52,15 +52,23 @@ export class EdtrController {
     return this.edtr.list(req.ctx, query);
   }
 
+  // edtr:create too: the timekeeper polls their own capture and previews its scan (site-scoped in the service).
   @Get(':id')
-  @RequirePermission('edtr:read')
+  @RequirePermission('edtr:create', 'edtr:read')
   get(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.edtr.get(req.ctx, id);
   }
 
+  // Approvers only: it prices hours exactly as approve() would, without writing anything.
+  @Get(':id/bill-preview')
+  @RequirePermission('edtr:approve')
+  billPreview(@Param('id') id: string, @Query() query: EdtrBillPreviewQueryDto, @Req() req: CtxRequest) {
+    return this.edtr.billPreview(req.ctx, id, query);
+  }
+
   // Never a public URL; the key is re-derived from the owning row under RLS.
   @Get(':id/image')
-  @RequirePermission('edtr:read')
+  @RequirePermission('edtr:create', 'edtr:read')
   async image(@Param('id') id: string, @Req() req: CtxRequest) {
     const key = await this.edtr.rawFileKey(req.ctx, id);
     const url = await this.storage.createSignedDownloadUrl(edtrBucket(), key);

@@ -583,6 +583,9 @@ export class SitesService {
       if (query.projectSiteId) {
         conditions.push(sql`${events.properties} ->> 'project_site_id' = ${query.projectSiteId}`);
       }
+      if (query.edtrId) {
+        conditions.push(sql`${events.properties} ->> 'edtr_id' = ${query.edtrId}`);
+      }
 
       const total = await countRows(tx, events, and(...conditions));
       const rows = await tx
@@ -624,6 +627,7 @@ export class SitesService {
           hours_active?: number;
           warned_at?: string;
           equipment_id?: string;
+          edtr_id?: string;
           readings?: { minute: number; precip_mm: number }[];
         };
         const discrepancy = row.name === 'edtr_weather_discrepancy';
@@ -652,6 +656,8 @@ export class SitesService {
               : (properties.observed ?? null),
           occurredAt: row.occurredAt,
           kind: ignored ? ('used_despite_warning' as const) : discrepancy ? ('discrepancy' as const) : ('weather' as const),
+          edtrId: properties.edtr_id ?? null,
+          half: properties.half === 'am' || properties.half === 'pm' || properties.half === 'day' ? (properties.half as 'am' | 'pm' | 'day') : null,
           detail: ignored
             ? `${properties.hours_active ?? '?'} h logged on ${properties.date ?? 'that day'} on a machine warned to STOP WORK${
                 properties.warned_at ? ` at ${new Date(properties.warned_at).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' })}` : ''

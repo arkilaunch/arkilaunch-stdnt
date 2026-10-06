@@ -1,4 +1,4 @@
-import { createRoute, useNavigate } from '@tanstack/react-router';
+import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import type { IncidentResponse } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
@@ -9,6 +9,7 @@ import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { Tabs } from '../components/tabs.js';
 import { Modal } from '../components/modal.js';
+import { buttonClass } from '../components/button.js';
 import { formatDateTime, formatSeverity, shortCode } from '../lib/format.js';
 import { CircleCheck, CloudRain, Eye, FileWarning, ShieldAlert, TriangleAlert } from 'lucide-react';
 
@@ -73,7 +74,21 @@ function IncidentDrawer({ incident, onClose }: { incident: IncidentResponse; onC
     ...observed.map(([k, v]): [string, ReactNode] => [humanKey(k), formatValue(v)]),
   ];
   return (
-    <Modal open onClose={onClose} placement="right" size="lg" title="Incident details">
+    <Modal
+      open
+      onClose={onClose}
+      placement="right"
+      size="lg"
+      title="Incident details"
+      footer={
+        incident.edtrId ? (
+          // The sheet, its parsed hours and its AM/PM weather check, read-only.
+          <Link to="/app/ocr" search={{ log: incident.edtrId }} className={buttonClass('secondary')}>
+            Open field log
+          </Link>
+        ) : undefined
+      }
+    >
       <dl className="grid grid-cols-[minmax(8rem,auto)_1fr] gap-x-4 gap-y-3 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
@@ -119,7 +134,8 @@ function IncidentsPage() {
         title="Incidents"
         options={incidentsQueries.list(PAGE_SIZE, offset, kind === 'all' ? undefined : kind)}
         emptyTitle="No incidents logged"
-        emptyDescription="Weather and liability incidents will appear here as they are auto-logged or recorded."
+        emptyDescription="Weather and liability incidents will appear here as they are auto-logged or recorded."
+
         isEmpty={(data) => data.total === 0}
         render={(data) => {
           // ponytail: resolves from the loaded page only; a link to an incident on another page shows nothing.

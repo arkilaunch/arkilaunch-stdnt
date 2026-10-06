@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cornersSteady, fullFrameDocument, steadyHold, type ScanCorners } from './document-scanner.js';
+import { cornersSteady, fullFrameDocument, snapPageSize, steadyHold, type ScanCorners } from './document-scanner.js';
 
 function syntheticScan(width: number, height: number, margin = 0, white = false): ImageData {
   const data = new Uint8ClampedArray(width * height * 4).fill(255);
@@ -59,5 +59,19 @@ describe('document hold', () => {
     moved[0] = { x: 70, y: 40 };
     const reset = steadyHold(corners, moved, first.startedAt, 2200, 640, 480);
     expect(reset).toMatchObject({ startedAt: 2200, progress: 0, ready: false });
+  });
+});
+
+describe('snapPageSize', () => {
+  const LETTER = 279.4 / 215.9;
+  const LEGAL = 355.6 / 215.9;
+
+  it('snaps a slightly skewed photo of a Legal sheet to the exact Legal ratio, either orientation', () => {
+    expect(snapPageSize(2200, 1340, [LETTER, LEGAL])).toEqual({ width: 2200, height: Math.round(2200 / LEGAL) });
+    expect(snapPageSize(1340, 2200, [LETTER, LEGAL])).toEqual({ width: Math.round(2200 / LEGAL), height: 2200 });
+  });
+
+  it('leaves a shape that is no known paper size alone', () => {
+    expect(snapPageSize(1000, 1000, [LETTER, LEGAL])).toEqual({ width: 1000, height: 1000 });
   });
 });

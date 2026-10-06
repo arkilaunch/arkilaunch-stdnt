@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
 import { round2HalfUp } from './pricing.js';
+import { WEATHER_CODES } from './weather-attestation.js';
 
 // RFC-2: OCR output is data, never a command; validate before any use (AI-02).
 export const OcrFieldSchema = z.object({
@@ -22,6 +23,15 @@ export const OcrPayloadSchema = z.object({
   fields: z.array(OcrFieldSchema),
   min_field_confidence: z.number().min(0).max(1),
   pages: z.number().int().min(1),
+  // What the sheet said about weather, kept so a reviewer sees every half, not only the flagged ones.
+  weather: z
+    .object({
+      am: z.enum(WEATHER_CODES).nullable(),
+      pm: z.enum(WEATHER_CODES).nullable(),
+      amWindow: z.tuple([z.number(), z.number()]).nullable(),
+      pmWindow: z.tuple([z.number(), z.number()]).nullable(),
+    })
+    .optional(),
 });
 export type OcrPayload = z.infer<typeof OcrPayloadSchema>;
 
@@ -173,6 +183,28 @@ const AdjustmentsSchema = z.object({
   hoursOtherDowntime: hours.nullable().optional(),
 });
 
+// GET /api/v1/edtr/:id/bill-preview: the same hours approve() would price; omitted = the stored reading.
+const queryHours = z.coerce.number().pipe(hours).optional();
+export const EdtrBillPreviewQuerySchema = z.object({
+  hoursActive: queryHours,
+  hoursIdle: queryHours,
+  hoursBreakdown: queryHours,
+  hoursWeather: queryHours,
+  hoursOtherDowntime: queryHours,
+});
+export type EdtrBillPreviewQuery = z.infer<typeof EdtrBillPreviewQuerySchema>;
+
+export const EdtrBillPreviewResponseSchema = z.object({
+  billableHours: z.number(),
+  hourlyRate: z.number(),
+  amount: z.number(),
+  balanceBefore: z.number(),
+  deducted: z.number(),
+  accrued: z.number(),
+  balanceAfter: z.number(),
+});
+export type EdtrBillPreviewResponse = z.infer<typeof EdtrBillPreviewResponseSchema>;
+
 export const EdtrApproveRequestSchema = z.object({
   reconciliationId: z.string().uuid(),
   adjustments: AdjustmentsSchema.nullable().optional(),
@@ -254,6 +286,9 @@ export const EdtrDetailResponseSchema = z.object({
   fields: z.array(EdtrFieldResponseSchema),
   reconciliation: EdtrReconciliationResponseSchema.nullable(),
   extraction: EdtrExtractionResponseSchema.nullable(),
+  // null: pre-weather rows, digital entries, or a sheet without the weather block.
+  weather: OcrPayloadSchema.shape.weather.unwrap().nullable(),
+  reportDate: z.string().nullable(),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
 

@@ -19,6 +19,8 @@ export interface CaptureFieldProps {
   /** Omit for OCR/KYC: Azure DI depends on prepareUpload's defaults. */
   uploadOptions?: PrepareUploadOptions;
   scanner?: boolean;
+  /** Page ratios (long / short) the straightened scan snaps to, e.g. Letter and Legal for field sheets. */
+  snapAspect?: readonly number[] | undefined;
   onAccepted?: ((file: File) => void) | undefined;
 }
 
@@ -45,6 +47,7 @@ export function CaptureField({
   sessionData,
   uploadOptions,
   scanner = false,
+  snapAspect,
   onAccepted,
 }: CaptureFieldProps) {
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -224,7 +227,7 @@ export function CaptureField({
     setReviewing(autoAccept);
     if (source && detected) {
       try {
-        const straightened = await straightenDocument(source, detected);
+        const straightened = await straightenDocument(source, detected, { snapAspect });
         if (reviewId !== reviewIdRef.current) return;
         setCorrected(straightened);
         if (autoAccept) await acceptReview(straightened);
@@ -351,7 +354,7 @@ export function CaptureField({
   async function applyCorners() {
     if (!sourceRef.current || !corners) return;
     setReviewing(true);
-    try { setCorrected(await straightenDocument(sourceRef.current, corners)); setAdjusting(false); }
+    try { setCorrected(await straightenDocument(sourceRef.current, corners, { snapAspect })); setAdjusting(false); }
     catch { setProblem({ title: 'Could not straighten the photo', detail: 'Try again or use the original.' }); }
     finally { setReviewing(false); }
   }

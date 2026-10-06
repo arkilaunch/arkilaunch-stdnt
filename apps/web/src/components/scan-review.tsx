@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { EdtrDetailResponse } from '@arkilaunch/shared';
 import { apiGet } from '../lib/api-client.js';
+import { toScannedPage } from '../lib/document-scanner.js';
+import { formatHours } from '../lib/format.js';
 import { ConfidenceChip } from './confidence-chip.js';
 import { Surface } from './surface.js';
 
@@ -32,9 +34,66 @@ function toBox(field: EdtrDetailResponse['fields'][number]): Box | null {
   return { name: field.name, belowGate: field.belowGate, left, top, width, height };
 }
 
+type LineItem = EdtrDetailResponse['lineItems'][number];
+
+// Every column the sheet carries, in its printed order; `billed` marks the one the deposit is charged on.
+const COLUMNS: { label: string; value: (item: LineItem) => number | null | undefined; billed?: boolean; meter?: boolean }[] = [
+  { label: 'Running', value: (item) => item.hoursActive, billed: true },
+  { label: 'Idle', value: (item) => item.hoursIdle },
+  { label: 'Breakdown', value: (item) => item.hoursBreakdown },
+  { label: 'Weather', value: (item) => item.hoursWeather },
+  { label: 'Other downtime', value: (item) => item.hoursOtherDowntime },
+  { label: 'Total written', value: (item) => item.hoursTotal },
+  { label: 'Hour meter start', value: (item) => item.hourMeterStart, meter: true },
+  { label: 'Hour meter end', value: (item) => item.hourMeterEnd, meter: true },
+];
+
+const FLAG_TEXT: Record<string, string> = {
+  sheet_qr_mismatch: 'The sheet QR names a different booking or machine.',
+  sheet_unidentified: 'No QR code was found on the sheet.',
+};
+
+export function ParsedColumns({ item }: { item: LineItem }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <table className="w-full text-sm">
+        <caption className="sr-only">What the sheet says for this day</caption>
+        <tbody>
+          {COLUMNS.map((column) => {
+            const value = column.value(item);
+            return (
+              <tr key={column.label} className={column.billed ? 'bg-recon-match/10 font-semibold' : ''}>
+                <th scope="row" className="py-1 pr-3 text-left font-normal text-text-muted">
+                  {column.label}
+                  {column.billed && <span className="ml-1 text-xs text-text">(billed)</span>}
+                </th>
+                <td className="py-1 text-right font-mono tabular-nums text-text">
+                  {/* Blank is not zero: null means nothing was read or written. */}
+                  {value == null ? '--' : column.meter ? value.toFixed(1) : formatHours(value)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {item.downtimeNote && <p className="text-sm text-text">Note: {item.downtimeNote}</p>}
+      {item.reviewFlags && item.reviewFlags.length > 0 && (
+        <ul className="list-disc pl-5 text-sm text-text-muted">
+          {item.reviewFlags.map((flag) => (
+            <li key={flag}>{FLAG_TEXT[flag] ?? flag.replaceAll('_', ' ')}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function ScanReview({ detail }: ScanReviewProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageUnavailable, setImageUnavailable] = useState(false);
+  const [view, setView] = useState<'scanned' | 'original'>('scanned');
+  const [scannedUrl, setScannedUrl] = useState<string | null>(null);
+  const [scanFailed, setScanFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,16 +112,56 @@ export function ScanReview({ detail }: ScanReviewProps) {
     };
   }, [detail.id]);
 
+  useEffect(() => {
+    if (!imageUrl || view !== 'scanned' || scannedUrl || scanFailed) return;
+    let cancelled = false;
+    toScannedPage(imageUrl)
+      .then((url) => {
+        if (!cancelled) setScannedUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setScanFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageUrl, view, scannedUrl, scanFailed]);
+
+  const shown = view === 'scanned' && scannedUrl ? scannedUrl : imageUrl;
+
   const boxes = detail.fields.map(toBox).filter((box): box is Box => box !== null);
   const needsReview = detail.fields.filter((field) => field.belowGate);
 
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
       <div className="flex-1">
-        {imageUrl ? (
+        {imageUrl && (
+          <div className="mb-2 flex items-center gap-2" role="group" aria-label="How to show the sheet">
+            {(['scanned', 'original'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={view === option}
+                onClick={() => setView(option)}
+                className={[
+                  'rounded-sm border px-3 py-1 text-sm',
+                  view === option ? 'border-primary bg-primary text-on-primary' : 'border-border text-text',
+                ].join(' ')}
+              >
+                {option === 'scanned' ? 'Scanned' : 'Original'}
+              </button>
+            ))}
+            {view === 'scanned' && !scannedUrl && (
+              <span className="text-xs text-text-muted">
+                {scanFailed ? 'Black-and-white view unavailable; showing the original.' : 'Preparing the scan...'}
+              </span>
+            )}
+          </div>
+        )}
+        {shown ? (
           <div className="relative w-full">
             <img
-              src={imageUrl}
+              src={shown}
               alt="The scanned sheet, with the readings the model took marked on it"
               className="w-full rounded-sm border border-border"
             />
@@ -104,6 +203,7 @@ export function ScanReview({ detail }: ScanReviewProps) {
       </div>
 
       <div className="flex flex-col gap-3 lg:w-80">
+        {detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />}
         <div className="flex flex-wrap gap-2">
           {detail.fields.map((field) => (
             <ConfidenceChip

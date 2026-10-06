@@ -18,6 +18,8 @@ import { readSheetQr } from '../lib/sheet-qr.js';
 import { useToast } from './toast.js';
 
 const TERMINAL_STATUSES = new Set(['review', 'reconciled', 'hard_failed']);
+// Letter and Legal, as PAGE in lib/edtr-sheet.ts prints them (not imported: it drags pdf-lib into capture).
+const SHEET_RATIOS = [279.4 / 215.9, 355.6 / 215.9];
 
 const SCANNING_TIPS = [
   {
@@ -334,6 +336,8 @@ export function CaptureModal({
             label="Photo of the sheet"
             accept="image/*"
             size="field"
+            scanner
+            snapAspect={SHEET_RATIOS}
             value={scanFile}
             onChange={(file) => void onScanFile(file)}
             tips={SCANNING_TIPS}

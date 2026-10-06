@@ -190,10 +190,16 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     expect(polled.status).toBe('reconciled');
     expect(polled.reconciliation?.status).toBe('matched');
 
+    // The preview prices exactly what approve() then deducts.
+    const preview = await edtr.billPreview(adminCtx, digital.id, {});
     const approved = await edtr.approve(adminCtx, digital.id, { reconciliationId: polled.reconciliation!.id });
     expect(approved.reconciliation.status).toBe('approved');
     expect(approved.deposit.deducted).toBeGreaterThanOrEqual(0);
     expect(approved.invoiceLine.sourceLogs).toContain(digital.id);
+    expect(preview.deducted).toBe(approved.deposit.deducted);
+    expect(preview.balanceBefore).toBe(approved.deposit.balanceBefore);
+    expect(preview.accrued).toBe(approved.deposit.accrued ?? 0);
+    expect(preview.amount).toBeCloseTo(preview.billableHours * preview.hourlyRate, 2);
   });
 
   // The second side of an approved pair must 409, so one day's work yields one deduction and one accrual.
@@ -444,7 +450,7 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
   // QAD-T29 extended to reads: a timekeeper's queue excludes EDTRs on sites
   // they are not assigned to, even ones that already exist.
   it('QAD-T29 (read): a timekeeper only sees EDTRs tied to sites they are assigned to', async () => {
-    await withTenantTx(adminCtx, (tx) =>
+    const [hidden] = await withTenantTx(adminCtx, (tx) =>
       tx.insert(edtrTable).values({
         tenantId: adminCtx.tenantId,
         rentalId: unassignedRentalId,
@@ -452,8 +458,13 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
         source: 'digital_entry',
         reportDate: '2021-03-07',
         status: 'review',
-      }),
+      }).returning({ id: edtrTable.id }),
     );
+
+    // Detail and scan read as not found too, not only the list.
+    await expect(edtr.get(timekeeperCtx, hidden!.id)).rejects.toThrow();
+    await expect(edtr.rawFileKey(timekeeperCtx, hidden!.id)).rejects.toThrow();
+    expect((await edtr.get(adminCtx, hidden!.id)).id).toBe(hidden!.id);
 
     const { items } = await edtr.list(timekeeperCtx, { limit: 200, offset: 0 });
     expect(items.every((item) => item.rentalId !== unassignedRentalId)).toBe(true);

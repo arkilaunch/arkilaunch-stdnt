@@ -152,7 +152,22 @@ export function steadyHold(previous: ScanCorners | null, next: ScanCorners, sinc
   return { startedAt, progress: Math.min(1, elapsed / 2000), ready: elapsed >= 2000 };
 }
 
-export async function straightenDocument(source: HTMLCanvasElement, corners: ScanCorners): Promise<File> {
+// Snaps a near-match to the exact paper ratio (long side / short side), keeping orientation and the long side.
+export function snapPageSize(width: number, height: number, ratios: readonly number[], slack = 0.08): { width: number; height: number } {
+  const long = Math.max(width, height);
+  const short = Math.min(width, height);
+  const ratio = long / short;
+  const target = ratios.find((r) => Math.abs(ratio - r) / r <= slack);
+  if (!target) return { width, height };
+  const snappedShort = Math.round(long / target);
+  return width >= height ? { width: long, height: snappedShort } : { width: snappedShort, height: long };
+}
+
+export async function straightenDocument(
+  source: HTMLCanvasElement,
+  corners: ScanCorners,
+  options: { snapAspect?: readonly number[] | undefined } = {},
+): Promise<File> {
   const cv = await loadDocumentScanner();
   const distance = (a: ScanPoint, b: ScanPoint) => Math.hypot(a.x - b.x, a.y - b.y);
   const rawWidth = Math.max(distance(corners[0], corners[1]), distance(corners[3], corners[2]));
@@ -165,8 +180,8 @@ export async function straightenDocument(source: HTMLCanvasElement, corners: Sca
     throw new Error('Document corners need more space');
   }
   const scale = Math.min(1, 2200 / Math.max(rawWidth, rawHeight));
-  const width = Math.max(1, Math.round(rawWidth * scale));
-  const height = Math.max(1, Math.round(rawHeight * scale));
+  const scaled = { width: Math.max(1, Math.round(rawWidth * scale)), height: Math.max(1, Math.round(rawHeight * scale)) };
+  const { width, height } = options.snapAspect ? snapPageSize(scaled.width, scaled.height, options.snapAspect) : scaled;
   const input = cv.imread(source);
   const output = new cv.Mat();
   const from = cv.matFromArray(4, 1, cv.CV_32FC2, corners.flatMap(({ x, y }) => [x, y]));
@@ -181,5 +196,34 @@ export async function straightenDocument(source: HTMLCanvasElement, corners: Sca
     return new File([blob], `document-${Date.now()}.jpg`, { type: 'image/jpeg' });
   } finally {
     input.delete(); output.delete(); from.delete(); to.delete(); transform.delete();
+  }
+}
+
+// Calibration knobs for the reviewer's B/W view: a larger C keeps more paper white; too large drops faint pencil.
+const SCAN_BLOCK_SIZE = 31;
+const SCAN_C = 12;
+
+// The photocopy look for a human reviewer only: the model always reads the colour original.
+export async function toScannedPage(url: string): Promise<string> {
+  const cv = await loadDocumentScanner();
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    // Without CORS the canvas is tainted and toDataURL throws; the caller falls back to the original.
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('The scan did not load'));
+    img.src = url;
+  });
+  const source = cv.imread(image);
+  const gray = new cv.Mat();
+  const output = new cv.Mat();
+  try {
+    cv.cvtColor(source, gray, cv.COLOR_RGBA2GRAY);
+    cv.adaptiveThreshold(gray, output, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, SCAN_BLOCK_SIZE, SCAN_C);
+    const canvas = document.createElement('canvas');
+    cv.imshow(canvas, output);
+    return canvas.toDataURL('image/png');
+  } finally {
+    source.delete(); gray.delete(); output.delete();
   }
 }
