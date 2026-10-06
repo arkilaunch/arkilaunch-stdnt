@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { tenantIsolationPolicy } from '../rls.js';
 import { tenants } from './tenancy.js';
@@ -15,5 +16,8 @@ export const events = pgTable(
   },
   (table) => [tenantIsolationPolicy(),
     index('events_tenant_id_idx').on(table.tenantId),
+    index('events_used_despite_warning_rental_idx')
+      .on(table.tenantId, sql`(${table.properties} ->> 'rental_id')`)
+      .where(sql`${table.name} = 'equipment_used_despite_warning'`),
   ],
 );

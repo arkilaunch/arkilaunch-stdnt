@@ -86,10 +86,17 @@ export const edtrLineItems = pgTable(
     hourMeterStart: numeric('hour_meter_start', { precision: 10, scale: 1 }),
     hourMeterEnd: numeric('hour_meter_end', { precision: 10, scale: 1 }),
     reviewFlags: jsonb('review_flags').$type<string[]>().notNull().default([]),
+    // The AM/PM weather the log reported (WEATHER_CODES); typed entries have no ocr_payload to keep it in.
+    weatherAm: text('weather_am'),
+    weatherPm: text('weather_pm'),
   },
   (t) => [
     tenantIsolationPolicy(),
     check('edtr_hours_nonneg_chk', sql`${t.hoursActive} >= 0 AND ${t.hoursIdle} >= 0`),
+    check(
+      'edtr_line_items_weather_chk',
+      sql`${t.weatherAm} IN ('C', 'O', 'LR', 'HR', 'W', 'T') AND ${t.weatherPm} IN ('C', 'O', 'LR', 'HR', 'W', 'T')`,
+    ),
     check(
       'edtr_hour_categories_nonneg_chk',
       sql`${t.hoursTotal} >= 0 AND ${t.hoursBreakdown} >= 0 AND ${t.hoursWeather} >= 0 AND ${t.hoursOtherDowntime} >= 0 AND ${t.hourMeterStart} >= 0 AND ${t.hourMeterEnd} >= 0 AND ${t.hoursTotal} <= 24 AND ${t.hoursBreakdown} <= 24 AND ${t.hoursWeather} <= 24 AND ${t.hoursOtherDowntime} <= 24`,
