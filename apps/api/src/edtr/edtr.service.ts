@@ -1195,4 +1195,48 @@ export class EdtrService {
       return { id: reconciliation.id, status: 'rejected' };
     });
   }
+
+  // Takes a log out entirely (admin clean-up): its reading, its reconciliation, and the pairing on the
+  // other log's side, which goes back to waiting for a second record. Never once money moved on it.
+  // ponytail: the photo stays in the bucket and weather incident events keep a dangling edtr_id;
+  // delete those too if this outgrows clean-up.
+  async remove(ctx: RequestContext, edtrId: string) {
+    return withTenantTx(ctx, async (tx) => {
+      const [record] = await tx.select({ id: edtr.id }).from(edtr).where(eq(edtr.id, edtrId)).limit(1).for('update');
+      if (!record) throw new NotFoundException({ error: 'edtr_not_found' });
+
+      const reconciliations = await tx
+        .select({ id: edtrReconciliations.id, edtrId: edtrReconciliations.edtrId, status: edtrReconciliations.status })
+        .from(edtrReconciliations)
+        .where(or(eq(edtrReconciliations.edtrId, edtrId), eq(edtrReconciliations.counterpartEdtrId, edtrId)))
+        .for('update');
+      const own = reconciliations.find((r) => r.edtrId === edtrId);
+      const billed =
+        reconciliations.some((r) => r.status === 'approved') ||
+        (own &&
+          ((await tx.select({ id: invoiceLineItems.id }).from(invoiceLineItems).where(eq(invoiceLineItems.reconciliationId, own.id)).limit(1)).length > 0 ||
+            (await tx.select({ id: depositAccruals.id }).from(depositAccruals).where(eq(depositAccruals.reconciliationId, own.id)).limit(1)).length > 0));
+      if (billed) throw new ConflictException({ error: 'already_billed' });
+
+      const counterparts = reconciliations.filter((r) => r.edtrId !== edtrId).map((r) => r.id);
+      if (counterparts.length > 0) {
+        await tx
+          .update(edtrReconciliations)
+          .set({ status: 'pending', counterpartEdtrId: null, deltaHours: null })
+          .where(inArray(edtrReconciliations.id, counterparts));
+      }
+      if (own) await tx.delete(edtrReconciliations).where(eq(edtrReconciliations.id, own.id));
+      await tx.delete(edtrLineItems).where(eq(edtrLineItems.edtrId, edtrId));
+      await tx.delete(edtr).where(eq(edtr.id, edtrId));
+
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'DELETE',
+        entity: 'edtr',
+        entityId: edtrId,
+      });
+      return { id: edtrId, removed: true };
+    });
+  }
 }

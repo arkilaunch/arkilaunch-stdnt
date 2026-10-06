@@ -92,7 +92,7 @@ describe('CaptureModal', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 
-  it('shows a timekeeper the sheet header, then only "sent" or a retake prompt after submit', async () => {
+  it('shows a timekeeper the sheet header, then closes once the sheet is sent', async () => {
     const RENTAL = '22222222-2222-4222-8222-222222222222';
     const UNIT = '33333333-3333-4333-8333-333333333333';
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
@@ -107,13 +107,8 @@ describe('CaptureModal', () => {
         });
       }
       if (init?.method === 'POST') return json({ id: LOG_ID, pollUrl: `/api/v1/edtr/${LOG_ID}` });
-      if (url.includes(`/edtr/${LOG_ID}`)) {
-        return json({ id: LOG_ID, source: 'paper_ocr', status: polls++ ? 'hard_failed' : 'extracted', failureReason: null,
-          lineItems: [{ hoursActive: 8 }], fields: [{ name: 'running', value: 8, confidence: 0.5 }], reconciliation: { status: 'single_source' } });
-      }
       return json({});
     });
-    let polls = 0;
     vi.stubGlobal('fetch', fetchMock);
     const onClose = vi.fn();
     render(
@@ -134,11 +129,11 @@ describe('CaptureModal', () => {
     expect(screen.getByText('1234.5')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Record log' }));
-    expect(await screen.findByText(/sent to the office\. you can close this/i)).toBeInTheDocument();
-    expect(screen.queryByText(/reading the sheet|recorded as|second record/i)).not.toBeInTheDocument();
-    // The worker gives up on the photo: only then does the timekeeper hear back, to retake it.
-    expect(await screen.findByRole('button', { name: 'Retake the photo' }, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.queryByText(/recorded as/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/is with the office/i)).toBeInTheDocument();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // Sent and done: the reading happens in the office, so the log is never polled from the field.
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith(`/edtr/${LOG_ID}`))).toBe(false);
+    expect(screen.queryByText(/reading the sheet|recorded as|retake the photo/i)).not.toBeInTheDocument();
   });
 
   it('picks the only machine on the only site, and offers nothing that is not on site', async () => {
