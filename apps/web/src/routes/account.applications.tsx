@@ -34,9 +34,9 @@ const TABS: { value: StatusFilter; label: string }[] = [
 // dt first as HTML requires; flex-col-reverse keeps the number on top.
 function CounterTile({ value, label }: { value: number; label: string }) {
   return (
-    <Surface radius="md" elevation="sm" className="flex flex-col-reverse gap-1 p-5">
-      <dt className="text-sm text-text-muted">{label}</dt>
-      <dd className="text-3xl font-semibold text-text">{value}</dd>
+    <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col-reverse gap-1 p-3 sm:p-5">
+      <dt className="text-xs text-text-muted sm:text-sm">{label}</dt>
+      <dd className="text-2xl sm:text-3xl font-semibold text-text">{value}</dd>
     </Surface>
   );
 }
@@ -50,7 +50,7 @@ function RegistrationThumbnail({ company }: { company: CompanyResponse }) {
   });
 
   const frame =
-    'h-24 w-32 shrink-0 overflow-hidden rounded-sm border border-border bg-surface';
+    'h-16 w-20 shrink-0 sm:h-24 sm:w-32 overflow-hidden rounded-sm border border-border bg-surface';
   if (!doc || url.isError || !url.data) {
     return (
       <div className={`${frame} flex items-center justify-center p-2`}>
@@ -81,10 +81,10 @@ function ApplicationCard({ company }: { company: CompanyResponse }) {
       elevation="sm"
       role="group"
       aria-label={company.companyName}
-      className="flex flex-wrap items-center gap-5 p-5 transition-shadow hover:shadow-md"
+      className="flex flex-wrap items-start gap-4 p-4 transition-shadow sm:items-center sm:gap-5 sm:p-5 hover:shadow-md"
     >
       <RegistrationThumbnail company={company} />
-      <div className="flex min-w-48 flex-1 flex-col gap-2">
+      <div className="flex min-w-0 flex-1 basis-40 flex-col gap-2">
         <h2 className="text-heading-md text-text">{company.companyName}</h2>
         <span className="self-start">
           <VerificationPill status={company.kycStatus} />
@@ -110,7 +110,7 @@ function ApplicationCard({ company }: { company: CompanyResponse }) {
           )}
         </p>
       </div>
-      <Link to="/account/companies/$companyId" params={{ companyId: company.id }} className={buttonClass('secondary')}>Manage</Link>
+      <Link to="/account/companies/$companyId" params={{ companyId: company.id }} className={`${buttonClass('secondary')} w-full sm:w-auto`}>Manage</Link>
     </Surface>
   );
 }
@@ -149,7 +149,7 @@ export function ApplicationsPage() {
         }
       />
 
-      <dl className="grid gap-4 sm:grid-cols-3">
+      <dl className="grid grid-cols-3 gap-2 sm:gap-4">
         <CounterTile value={counts.total} label="Total applications" />
         <CounterTile value={counts.approved} label="Approved" />
         <CounterTile value={counts.pending} label="Pending approval" />

@@ -1,4 +1,4 @@
-import { useId, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 
 export interface TabItem<T extends string> {
   id: T;
@@ -16,6 +16,20 @@ export interface TabsProps<T extends string> {
 export function Tabs<T extends string>({ label, items, value, onChange }: TabsProps<T>) {
   const base = useId();
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const strip = useRef<HTMLDivElement>(null);
+  // Tabs past the right edge fade out, so a phone user can tell the strip scrolls.
+  const [more, setMore] = useState(false);
+  const measure = () => {
+    const el = strip.current;
+    if (el) setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  };
+
+  useEffect(() => {
+    refs.current[items.findIndex((item) => item.id === value)]?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [items, value]);
 
   function onKeyDown(event: KeyboardEvent, index: number) {
     const last = items.length - 1;
@@ -33,7 +47,13 @@ export function Tabs<T extends string>({ label, items, value, onChange }: TabsPr
 
   // The baseline is an inset shadow, not a border the tabs overlap: nothing spills, so no stray scrollbar.
   return (
-    <div role="tablist" aria-label={label} className="flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div
+      ref={strip}
+      role="tablist"
+      aria-label={label}
+      onScroll={measure}
+      className={`flex gap-1 overflow-x-auto shadow-[inset_0_-1px_0_var(--color-border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${more ? '[mask-image:linear-gradient(to_right,black_80%,transparent)]' : ''}`}
+    >
       {items.map((item, index) => {
         const selected = item.id === value;
         return (

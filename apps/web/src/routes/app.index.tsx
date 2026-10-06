@@ -70,7 +70,7 @@ const SEVERITY_META: Record<
 
 function Kpi({ label, value, tone, pending, action }: { label: string; value: string; tone?: 'success'; pending?: boolean; action?: { label: string; onClick: () => void } }) {
   return (
-    <div className="flex flex-col items-start gap-0.5 border-r border-border px-4 py-3 even:border-r-0 sm:even:border-r sm:last:border-r-0">
+    <div className="flex min-w-0 flex-col items-start gap-0.5 border-r border-border px-4 py-3 even:border-r-0 sm:even:border-r sm:last:border-r-0">
       <span className="text-sm font-medium text-text-muted">
         {label}
       </span>
@@ -79,7 +79,7 @@ function Kpi({ label, value, tone, pending, action }: { label: string; value: st
       ) : (
         <span
           className={[
-            'font-mono text-xl font-medium tabular-nums sm:text-2xl',
+            'max-w-full font-mono text-lg font-medium tabular-nums [overflow-wrap:anywhere] sm:text-xl xl:text-2xl',
             tone === 'success' ? 'text-success' : 'text-text',
           ].join(' ')}
         >

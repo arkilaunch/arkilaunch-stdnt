@@ -106,7 +106,7 @@ function RowCards<T>({
                     <dt className="text-xs text-text-muted">{col.header}</dt>
                     <dd
                       className={[
-'break-words',
+'[overflow-wrap:anywhere]',
                         col.kind === 'number' || col.kind === 'money' ? 'font-mono tabular-nums' : '',
                       ].join(' ')}
                     >

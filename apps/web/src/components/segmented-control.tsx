@@ -13,10 +13,10 @@ export interface SegmentedControlProps<T extends string> {
   className?: string;
 }
 
-// Cloudscape segmented control: joined square segments, the chosen one filled. Wraps on a phone.
+// Cloudscape segmented control: joined square segments, the chosen one filled. On a phone, separate chips that wrap cleanly.
 export function SegmentedControl<T extends string>({ label, items, value, onChange, className = '' }: SegmentedControlProps<T>) {
   return (
-    <div role="group" aria-label={label} className={`flex flex-wrap ${className}`}>
+    <div role="group" aria-label={label} className={`flex flex-wrap gap-1 sm:gap-0 ${className}`}>
       {items.map((item) => {
         const on = item.id === value;
         return (
@@ -26,7 +26,7 @@ export function SegmentedControl<T extends string>({ label, items, value, onChan
             aria-pressed={on}
             onClick={() => onChange(item.id)}
             className={[
-              '-ml-px min-h-9 border px-3 text-sm first:ml-0 first:rounded-l-sm last:rounded-r-sm',
+              'min-h-9 rounded-sm border px-3 text-sm sm:-ml-px sm:rounded-none sm:first:ml-0 sm:first:rounded-l-sm sm:last:rounded-r-sm',
               'focus-visible:relative focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring',
               on
                 ? 'relative z-[1] border-accent bg-accent font-semibold text-white'

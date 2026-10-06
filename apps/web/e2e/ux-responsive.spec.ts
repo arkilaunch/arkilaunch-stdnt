@@ -9,6 +9,8 @@ test('operations screens fit phone, tablet and desktop widths', async ({ page },
     { path: '/app/users', title: 'People', slug: 'people' },
     { path: '/app/inventory', title: 'Equipment', slug: 'equipment' },
     { path: '/app/incidents', title: 'Incidents', slug: 'incidents' },
+    { path: '/app/bookings', title: 'Bookings', slug: 'bookings' },
+    { path: '/app', title: 'Dashboard', slug: 'dashboard' },
   ];
   for (const width of [360, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -34,6 +36,11 @@ test('public and customer surfaces fit a phone viewport', async ({ page }, testI
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   }
   await signInAsCustomer(page);
+  for (const path of ['/account/trucks', '/account/applications']) {
+    await page.goto(path);
+    await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  }
   await page.goto('/account/cart');
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath('customer-cart-360.png'), fullPage: true });

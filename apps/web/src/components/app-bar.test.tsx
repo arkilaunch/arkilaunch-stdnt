@@ -31,3 +31,24 @@ describe('Notification bell', () => {
     expect(await within(panel).findByText('Unread:')).toHaveClass('sr-only');
   });
 });
+
+describe('Phone navigation menu', () => {
+  it('drops under the bar, names the tenant only for screen readers, and closes on Escape', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }))));
+    await renderRoute('/app/payments');
+
+    const toggle = await screen.findByRole('button', { name: 'Toggle navigation' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById('app-mobile-nav')).toBeNull();
+
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const menu = document.getElementById('app-mobile-nav')!;
+    expect(within(menu).getByRole('link', { name: 'Invoices' })).toHaveAttribute('aria-current', 'page');
+
+    await userEvent.keyboard('{Escape}');
+    expect(document.getElementById('app-mobile-nav')).toBeNull();
+    expect(toggle).toHaveFocus();
+  });
+});

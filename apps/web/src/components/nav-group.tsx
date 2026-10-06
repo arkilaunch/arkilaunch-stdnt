@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router';
+import { ChevronRight } from 'lucide-react';
 import type { NavGroup } from '../lib/nav-config.js';
 
 export interface NavGroupListProps {
@@ -6,6 +7,8 @@ export interface NavGroupListProps {
   pathname: string;
   onNavigate?: () => void;
   collapsed?: boolean;
+  /** Phone menu that drops under the app bar, in the bar's own colours (PlatformChrome's mobile nav). */
+  dropdown?: boolean;
 }
 
 export interface NavTarget {
@@ -34,7 +37,7 @@ export function activeNavTarget(targets: (string | NavTarget)[], pathname: strin
   return best;
 }
 
-export function NavGroupList({ groups, pathname, onNavigate, collapsed = false }: NavGroupListProps) {
+export function NavGroupList({ groups, pathname, onNavigate, collapsed = false, dropdown = false }: NavGroupListProps) {
   const active = activeNavTarget(
     groups.flatMap((group) => group.items),
     pathname,
@@ -45,7 +48,7 @@ export function NavGroupList({ groups, pathname, onNavigate, collapsed = false }
   const renderGroup = (group: NavGroup, labelled: boolean) => (
     <div key={group.title} className={collapsed ? 'border-t border-border pt-2 first:border-0 first:pt-0' : ''}>
       {labelled && !collapsed && !group.hideTitle && (
-        <p className="mb-1 px-3 text-sm font-bold text-text">
+        <p className={dropdown ? 'pt-4 text-xs font-semibold uppercase tracking-wide opacity-70' : 'mb-1 px-3 text-sm font-bold text-text'}>
           {group.title}
         </p>
       )}
@@ -62,15 +65,23 @@ export function NavGroupList({ groups, pathname, onNavigate, collapsed = false }
               // Link's own prefix match would set aria-current on ancestors too; activeNavTarget decides.
               activeOptions={{ exact: true }}
               aria-current={isActive ? 'page' : undefined}
-              className={[
-                // Cloudscape side nav: the active page is bold link-colour text, no fill or bar.
-                'flex min-h-11 items-center rounded-sm text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
-                collapsed ? 'justify-center px-0' : 'gap-3 px-3',
-                isActive ? 'font-bold text-accent' : 'text-text hover:text-accent',
-              ].join(' ')}
+              className={
+                dropdown
+                  ? [
+                      'flex min-h-14 items-center gap-3 border-b border-current/10 px-2 text-base focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-current',
+                      isActive ? 'bg-current/10 font-semibold' : 'font-medium hover:bg-current/10',
+                    ].join(' ')
+                  : [
+                      // Cloudscape side nav: the active page is bold link-colour text, no fill or bar.
+                      'flex min-h-11 items-center rounded-sm text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+                      collapsed ? 'justify-center px-0' : 'gap-3 px-3',
+                      isActive ? 'font-bold text-accent' : 'text-text hover:text-accent',
+                    ].join(' ')
+              }
             >
               {item.icon && <item.icon aria-hidden="true" className="h-5 w-5 shrink-0" />}
-              {!collapsed && <span className="min-w-0">{item.label}</span>}
+              {!collapsed && <span className="min-w-0 flex-1">{item.label}</span>}
+              {dropdown && <ChevronRight aria-hidden className="size-5 shrink-0 opacity-50" />}
             </Link>
           );
         })}
@@ -80,9 +91,11 @@ export function NavGroupList({ groups, pathname, onNavigate, collapsed = false }
 
   // One nav landmark: pinned groups sit inside it.
   return (
-    <nav aria-label="Primary navigation" className={`flex flex-1 flex-col ${collapsed ? 'gap-2' : 'gap-5'}`}>
+    <nav aria-label="Primary navigation" className={`flex flex-1 flex-col ${collapsed ? 'gap-2' : dropdown ? '' : 'gap-5'}`}>
       {listed.map((group) => renderGroup(group, true))}
-      {pinned.length > 0 && (
+      {dropdown ? (
+        pinned.map((group) => renderGroup(group, false))
+      ) : pinned.length > 0 && (
         <div className={`mt-auto flex flex-col border-t border-border ${collapsed ? 'gap-2 pt-2' : 'gap-5 pt-4'}`}>
           {pinned.map((group) => renderGroup(group, false))}
         </div>

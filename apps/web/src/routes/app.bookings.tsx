@@ -71,7 +71,7 @@ const TRUCK_COLUMNS: TableColumn<TruckRequestResponse>[] = [
   {
     header: 'Route', kind: 'text',
     cell: (t) => (
-      <span className="line-clamp-2 max-w-md">
+      <span className="max-w-md md:line-clamp-2">
         {t.pickup} → {t.dropoff}
       </span>
     ),
@@ -160,7 +160,7 @@ function BookingsPage() {
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <SearchField
-          className="min-w-60 max-w-md flex-1"
+          className="w-full max-w-md flex-1 sm:min-w-60"
           value={search}
           onChange={(next) => {
             setSearch(next);
