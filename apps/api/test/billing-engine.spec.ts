@@ -1,11 +1,14 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
+import { eq } from 'drizzle-orm';
 import {
   edtr as edtrTable,
   edtrLineItems,
   equipment as equipmentTable,
+  quotationItems,
   quotations,
+  rateCards,
   rentalContracts,
   rentals,
   withTenantTx,
@@ -93,13 +96,13 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
 
   // Simulates the paper_ocr counterpart directly (same technique as
   // edtr-engine.spec.ts) so a digital_entry capture reconciles to 'matched'.
-  async function insertExtractedPaperCounterpart(reportDate: string, hoursActive: number, hoursIdle: number, equipmentId = equipmentIdA) {
+  async function insertExtractedPaperCounterpart(reportDate: string, hoursActive: number, hoursIdle: number, equipmentId = equipmentIdA, rentalId = depositRentalId) {
     return withTenantTx(adminCtxA, async (tx) => {
       const [row] = await tx
         .insert(edtrTable)
         .values({
           tenantId: adminCtxA.tenantId,
-          rentalId: depositRentalId,
+          rentalId,
           equipmentId,
           source: 'paper_ocr',
           reportDate,
@@ -153,6 +156,41 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
     expect(after.totalDeducted).toBe(before.totalDeducted + approved.deposit.deducted);
     expect(after.balanceRemaining).toBe(DEPOSIT_REQUIRED - after.totalDeducted);
     expect(after.balanceRemaining).toBeLessThan(before.balanceRemaining!);
+  });
+
+  it('an accepted quote freezes the deduction rate, not the card in force on the report date', async () => {
+    const rentalId = await withTenantTx(adminCtxA, async (tx) => {
+      const [base] = await tx.select().from(rentals).where(eq(rentals.id, depositRentalId));
+      const [rental] = await tx
+        .insert(rentals)
+        .values({ tenantId: adminCtxA.tenantId, customerId: base!.customerId, projectSiteId: base!.projectSiteId, status: 'active', startDate: base!.startDate })
+        .returning();
+      const [unit] = await tx.select().from(equipmentTable).where(eq(equipmentTable.id, equipmentIdA));
+      const [card] = await tx.select({ id: rateCards.id }).from(rateCards).where(eq(rateCards.equipmentTypeId, unit!.equipmentTypeId)).limit(1);
+      const [quotation] = await tx
+        .insert(quotations)
+        .values({ tenantId: adminCtxA.tenantId, customerId: base!.customerId, rentalId: rental!.id, status: 'accepted' })
+        .returning();
+      await tx.insert(quotationItems).values({
+        tenantId: adminCtxA.tenantId,
+        quotationId: quotation!.id,
+        equipmentTypeId: unit!.equipmentTypeId,
+        rateCardId: card!.id,
+        hourlyRatePhp: '500.00',
+      });
+      await tx.insert(rentalContracts).values({ tenantId: adminCtxA.tenantId, quotationId: quotation!.id, depositRequired: String(DEPOSIT_REQUIRED) });
+      return rental!.id;
+    });
+    await ensurePaidDeposit(adminCtxA, rentalId);
+
+    const reportDate = '2021-05-05';
+    await insertExtractedPaperCounterpart(reportDate, 4, 0, equipmentIdA, rentalId);
+    const digital = await edtr.capture(adminCtxA, { source: 'digital_entry', rentalId, equipmentId: equipmentIdA, reportDate, lineItems: { hoursActive: 4, hoursIdle: 0 } });
+    const polled = await edtr.get(adminCtxA, digital.id);
+    expect(polled.reconciliation?.status).toBe('matched');
+    const approved = await edtr.approve(adminCtxA, digital.id, { reconciliationId: polled.reconciliation!.id });
+    // 500/hr from the quote, not the 850/hr card in force on 2021-05-05.
+    expect(approved.deposit.deducted).toBe(4 * 500);
   });
 
   it('rejects an approve where no rate card was in force on the report date, instead of deducting at zero', async () => {

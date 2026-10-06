@@ -22,6 +22,8 @@ import {
   invoiceLineItems,
   invoices,
   notifications,
+  quotationItems,
+  quotations,
   rateCards,
   flagEdtrWeather,
   reconcileEdtr,
@@ -654,8 +656,27 @@ export class EdtrService {
   }
 
   private async hourlyRateFor(tx: Tx, ctx: RequestContext, record: typeof edtr.$inferSelect) {
-    // Priced at the hourly card in force on report_date (Manila calendar dates), never at `now`.
     const [equipmentRow] = await tx.select().from(equipment).where(eq(equipment.id, record.equipmentId)).limit(1);
+    // The accepted quote freezes the rate the customer agreed to, so a later card change cannot reprice the job.
+    const [quoted] = equipmentRow
+      ? await tx
+          .select({ rate: quotationItems.hourlyRatePhp })
+          .from(quotationItems)
+          .innerJoin(quotations, eq(quotations.id, quotationItems.quotationId))
+          .where(
+            and(
+              eq(quotations.tenantId, ctx.tenantId),
+              eq(quotations.rentalId, record.rentalId),
+              eq(quotations.status, 'accepted'),
+              eq(quotationItems.equipmentTypeId, equipmentRow.equipmentTypeId),
+              sql`${quotationItems.hourlyRatePhp} > 0`,
+            ),
+          )
+          .orderBy(desc(quotations.revision))
+          .limit(1)
+      : [];
+    if (quoted) return { hourlyRate: Number(quoted.rate), equipmentRow };
+    // No accepted quote: priced at the hourly card in force on report_date (Manila calendar dates), never at `now`.
     const [rateCard] = equipmentRow
       ? await tx
           .select()
