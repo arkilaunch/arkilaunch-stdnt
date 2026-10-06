@@ -199,7 +199,7 @@ function readCertificate(
 ): { fields: DocumentExtractionResult['fields']; layout: CertificateLayout | null } {
   if (documentType === 'government_id') {
     const fields = { ...result.fields, ...(result.text ? parseIdText(idType, result.text) : {}) };
-    // Query-field names and addresses lose their commas too, as the parsed ones do (the birth date keeps its).
+    // Query-field names lose their commas too, as the parsed ones do; addresses and the birth date keep theirs.
     for (const key of ID_TEXT_FIELDS) {
       const field = fields[key];
       if (field) fields[key] = { ...field, value: noComma(field.value) };

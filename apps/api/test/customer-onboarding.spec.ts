@@ -482,12 +482,12 @@ describe('Customer onboarding', () => {
         text: { content, lines, words: lines.map((line) => ({ offset: line.offset, length: line.length, confidence: 0.94 })) },
       }));
       const scan = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('licence-fixture'), 'drivers_license');
-      expect(scan.suggestions).toMatchObject({ firstName: 'ANA MARIA', middleName: 'REYES', lastName: 'SAN JUAN', address: '12 SAMPLE STREET BARANGAY UNO QUEZON CITY' });
+      expect(scan.suggestions).toMatchObject({ firstName: 'ANA MARIA', middleName: 'REYES', lastName: 'SAN JUAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
       expect(scan.confidence).toBe(0.94);
       const national = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('same-text-other-id'), 'philsys');
       // QA 36: PhilSys reads its own labels. No Apelyido/Last Name labels here, so names stay the query fields', but
       // the printed Address block now wins over the empty query field.
-      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '12 SAMPLE STREET BARANGAY UNO QUEZON CITY' });
+      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
     });
     const scanner = (fields: Record<string, { value: string; confidence: number }>) =>
       new CustomersService(events, new FixtureDocumentIntelligenceAdapter({ fields }));
@@ -545,7 +545,7 @@ describe('Customer onboarding', () => {
         idNumber: '1234-5678-9012-3456',
         birthDate: '1990-01-02',
         sex: 'M',
-        address: '1 Rizal St Quezon City',
+        address: '1 Rizal St, Quezon City',
         // An ID never suggests a company number, whatever the model said.
         tin: null,
       });

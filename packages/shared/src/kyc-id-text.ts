@@ -4,9 +4,9 @@ import type { PhIdTypeCode } from './kyc.js';
 type IdTextFields = Partial<Record<'first_name' | 'middle_name' | 'last_name' | 'address', ExtractedField>>;
 // PRC prints "LAST NAME ► HOFER": the arrow is a separator, never part of the value.
 const clean = (value: string) => value.replace(/^[\s|:;►▶>»•]+|[\s|;]+$/g, '').replace(/\s+/g, ' ').trim();
-// No parsed field keeps a comma: "RAMOS, ELLA" splits at it, and address lines join with a space.
+// No parsed name keeps a comma: "RAMOS, ELLA" splits at it. Addresses keep theirs.
 export const noComma = (value: string) => value.replace(/\s*,\s*/g, ' ').replace(/\s+/g, ' ').trim();
-export const ID_TEXT_FIELDS = ['first_name', 'middle_name', 'last_name', 'address'] as const;
+export const ID_TEXT_FIELDS = ['first_name', 'middle_name', 'last_name'] as const;
 const labelKey = (value: string) => value.toLowerCase().replace(/1/g, 'l').replace(/0/g, 'o').replace(/[^a-z]/g, '');
 
 // Only the complete combined label is fuzzy-matched: permit one substituted,
@@ -83,14 +83,14 @@ function valueAfter(lines: Line[], re: RegExp): Line | undefined {
   return next && !isLabel(next.value) ? next : undefined;
 }
 
-// Up to four address lines from index `from`, ending at the next label. Lines join with a space, never a comma.
+// Up to four address lines from index `from`, ending at the next label. Lines join with ", ".
 function addressFrom(text: DocumentText, lines: Line[], from: number, first?: Line): ExtractedField | undefined {
   const parts: Line[] = first ? [first] : [];
   for (const line of lines.slice(from)) {
     if (isLabel(line.value) || parts.length >= 4) break;
     parts.push(line);
   }
-  return parts.length ? { value: noComma(parts.map((l) => l.value).join(' ')), confidence: conf(text, parts) } : undefined;
+  return parts.length ? { value: parts.map((l) => l.value.replace(/,$/, '')).join(', '), confidence: conf(text, parts) } : undefined;
 }
 
 function addressAfter(text: DocumentText, lines: Line[]): ExtractedField | undefined {
@@ -173,7 +173,10 @@ function mrzName(text: DocumentText, lines: Line[]): IdTextFields {
 
 export function parseIdText(idType: PhIdTypeCode, text: DocumentText): IdTextFields {
   const fields = parseFields(LAYOUTS[idType], text);
-  for (const field of Object.values(fields)) field.value = noComma(field.value);
+  for (const key of ID_TEXT_FIELDS) {
+    const field = fields[key];
+    if (field) field.value = noComma(field.value);
+  }
   return fields;
 }
 
