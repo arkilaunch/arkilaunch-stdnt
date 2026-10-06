@@ -33,8 +33,6 @@ const FONT = 'Arial, Helvetica, sans-serif';
 const COLUMNS: { key: string; w: number; label?: string }[] = [
   { key: 'date', w: 14, label: 'DATE' },
   { key: 'day', w: 11, label: 'DAY' },
-  // v3.1: one tick for the printed standard shift, so most rows need no handwritten times.
-  { key: 'stdShift', w: 11, label: 'STD SHIFT' },
   { key: 'amIn', w: 13 },
   { key: 'amOut', w: 13 },
   { key: 'pmIn', w: 13 },
@@ -47,8 +45,8 @@ const COLUMNS: { key: string; w: number; label?: string }[] = [
   { key: 'breakdown', w: 15, label: 'BREAKDOWN HRS' },
   { key: 'weatherHrs', w: 13, label: 'WEATHER HRS' },
   { key: 'other', w: 12, label: 'OTHER HRS' },
-  { key: 'meterStart', w: 16.5, label: 'METER START' },
-  { key: 'meterEnd', w: 16.5, label: 'METER END' },
+  { key: 'meterStart', w: 22, label: 'METER START' },
+  { key: 'meterEnd', w: 22, label: 'METER END' },
   { key: 'weatherAm', w: 27 },
   { key: 'weatherPm', w: 27 },
   { key: 'initial', w: 11, label: 'INITIAL' },
@@ -202,7 +200,7 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
     text(
       M,
       58.5,
-      'HOW TO FILL:  1. Standard shift 07:30–12:00, 13:00–16:00? Tick STD SHIFT, leave IN/OUT blank; else write 24-hour time.   2. Split hours into RUNNING / IDLE / BREAKDOWN / WEATHER / OTHER: big dot (7.5), no bar on 7.   3. Tick weather per half-day.   4. Read the hour meter.',
+      'HOW TO FILL:  1. Write IN/OUT in 24-hour time.   2. Split hours into RUNNING / IDLE / BREAKDOWN / WEATHER / OTHER: big dot (7.5), no bar on 7.   3. Tick weather per half-day.   4. Read the hour meter.',
       2,
     ),
   );
@@ -297,7 +295,6 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
     }
     out.push(comb(center('meterStart'), base, 6, slotFor('meterStart', 6, 2.6), undefined, 4));
     out.push(comb(center('meterEnd'), base, 6, slotFor('meterEnd', 6, 2.6), undefined, 4));
-    out.push(tickGroup(colX('stdShift'), base, colW('stdShift'), 1));
     out.push(tickGroup(colX('weatherAm'), base, colW('weatherAm'), WEATHER_CODES.length));
     out.push(tickGroup(colX('weatherPm'), base, colW('weatherPm'), WEATHER_CODES.length));
     if (r > 0) out.push(line(tx, y, tx + tableW, y));
