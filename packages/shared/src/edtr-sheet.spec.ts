@@ -60,8 +60,8 @@ describe('parseEdtrSheet', () => {
     expect(result.days[0]!.totalMismatch).toBe(true);
   });
 
-  it('refuses the whole sheet when a dated row has an unreadable total, naming the day', () => {
-    // Load-bearing: silently dropping this row would lose a billable day.
+  it('names a dated row with an unreadable total for a human, and still reads the other days', () => {
+    // Load-bearing: the unreadable day is never silently dropped, and never holds the sheet back.
     const result = parseEdtrSheet(
       [
         table([
@@ -72,6 +72,14 @@ describe('parseEdtrSheet', () => {
       CAPTURE,
     );
 
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.days.map((d) => d.reportDate)).toEqual(['2026-03-01']);
+    expect(result.unreadable).toEqual(['2026-03-02']);
+  });
+
+  it('refuses the sheet when no dated row can be read', () => {
+    const result = parseEdtrSheet([table([['03/02', '07:00', '12:00', '13:00', '17:00', '', '', '', '']])], CAPTURE);
     expect(result).toEqual({ ok: false, reason: 'unreadable_total_hours:2026-03-02' });
   });
 
@@ -284,15 +292,78 @@ describe('parseEdtrSheet v3', () => {
     if (!clean.ok) return;
     expect(clean.days[0]!.hoursActive).toBe(4.5);
     expect(clean.days[0]!.computedHours).toBe(4.5);
-    expect(read('4..5')).toEqual({ ok: false, reason: 'unreadable_total_hours:2026-03-02' });
+    // The printed dot plus the written one reads as two; dots apart are no reading, so TOTAL fills it for a person.
+    const doubled = read('4..5');
+    expect(doubled.ok && doubled.days[0]!.hoursActive).toBe(4.5);
+    const ambiguous = read('1.2.5');
+    expect(ambiguous.ok && ambiguous.days[0]!.hoursFilled).toEqual(['running']);
   });
 
-  it('still refuses a filled v3 row whose running hours cannot be read', () => {
-    const result = parseEdtrSheet(
-      [v3Table([['03/02', 'MON', '07:00', '11:00', '', '', '', '', '4', '?!', '', '', '', '', '', '', '']])],
+  // Hours box: 2 whole-hour boxes, a printed dot, 1 decimal box. Azure drops the dot (live read, 2026-10-06).
+  const hours = (running: string, total = '') =>
+    parseEdtrSheet(
+      [v3Table([['03/02', 'MON', '', '', '', '', '', '', total, running, '', '', '', '', '', '', '']])],
       CAPTURE,
     );
-    expect(result).toEqual({ ok: false, reason: 'unreadable_total_hours:2026-03-02' });
+  const ran = (running: string, total = '') => {
+    const r = hours(running, total);
+    return r.ok ? [r.days[0]!.hoursActive, r.days[0]!.hoursFilled ?? []] : null;
+  };
+
+  it('reads a dropped decimal by box position, whole or half hours only', () => {
+    expect(ran('75')).toEqual([7.5, []]);
+    expect(ran('105')).toEqual([10.5, []]);
+    expect(ran('100')).toEqual([10, []]);
+    expect(ran('8')).toEqual([8, []]);
+    expect(ran('7,5')).toEqual([7.5, []]);
+    expect(ran('1.0,')).toEqual([1, []]);
+    // 10 is 1.0 by position but also 10 whole hours: read by position, held for a person.
+    expect(ran('10')).toEqual([1, ['running']]);
+    // Not a half-hour, or over a day: a misread, never a figure.
+    expect(ran('19')).toBeNull();
+    expect(ran('25.0')).toBeNull();
+  });
+
+  it('fills the one figure the reader lost from the row total, and holds it for a person', () => {
+    expect(ran('ZE', '75')).toEqual([7.5, ['running']]);
+    // With TOTAL lost too, the IN/OUT times stand in for it.
+    const result = parseEdtrSheet(
+      [v3Table([['03/02', 'MON', '07:00', '11:00', '', '', '', '', '', '?!', '', '', '', '', '', '', '']])],
+      CAPTURE,
+    );
+    expect(result.ok && [result.days[0]!.hoursActive, result.days[0]!.hoursFilled]).toEqual([4, ['total', 'running']]);
+  });
+
+  it('flags a row whose figures all read but do not add up to TOTAL', () => {
+    const result = hours('6.0', '9.0');
+    expect(result.ok && result.days[0]!.rowMismatch).toBe(true);
+    const adds = hours('9.0', '9.0');
+    expect(adds.ok && adds.days[0]!.rowMismatch).toBeUndefined();
+  });
+
+  it('reads the real 10/07-10/10 sheet as Azure returned it', () => {
+    const blank = ['', '', '', ''];
+    const result = parseEdtrSheet(
+      [
+        v3Table([
+          ['10/07', 'WED', '07:30', '12:00', '13:39', '16:30', '16:30', '17 :30', '85', '75', '1.9', '', ...blank, 'b.D'],
+          ['10/08', 'THU', '07:30', '13:99', '13:04', '16:00', '', '', '7.5', '75', '', '', ...blank, 'D.D'],
+          ['10/09', 'FRI', '07:30', '42:,92', '13:00', '16:00', '16:00', '19:00', '105', '95', '', '1.0,', ...blank, 'D.D'],
+          ['10/10', 'SAT', '07:30', '12:,92', '13.00', '16:00', '', '', '75', 'ZE', '', '', ...blank, 'D.D'],
+        ]),
+      ],
+      '2026-10-06',
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.unreadable).toEqual([]);
+    expect(result.days.map((d) => [d.reportDate, d.v3!.running, d.v3!.idle, d.v3!.breakdown, d.hoursFilled ?? []])).toEqual([
+      ['2026-10-07', 7.5, 1, 0, ['idle']],
+      ['2026-10-08', 7.5, 0, 0, []],
+      ['2026-10-09', 9.5, 0, 1, []],
+      ['2026-10-10', 7.5, 0, 0, ['running']],
+    ]);
+    expect(result.days.some((d) => d.rowMismatch)).toBe(false);
   });
 
   it('leaves a v2 sheet exactly as before: no v3 block, TOTAL is the reading', () => {

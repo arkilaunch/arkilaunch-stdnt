@@ -111,7 +111,11 @@ export function failureText(reason: string | null | undefined): string {
     case 'unreadable_date':
       return `A date could not be read clearly${where}. Write it clearly and retake, or type the hours in.`;
     case 'unreadable_total_hours':
-      return `The hours could not be read clearly${where}. Retake in better light, or type the hours in.`;
+      return `The hours could not be read clearly${where}. Type the hours in from the sheet.`;
+    case 'hours_filled':
+      return `Some hours were worked out from the row's total${days ? ` (${days.join(', ')})` : ''}. Check them against the sheet before approving.`;
+    case 'row_mismatch':
+      return "The day's hours do not add up to its TOTAL. Check the sheet before approving.";
     case 'duplicate_date':
       return `The same date is written twice${days ? ` (${days.join(', ')})` : ''}. Correct the sheet and retake.`;
     case 'no_dated_rows':
