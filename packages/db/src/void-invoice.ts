@@ -58,7 +58,7 @@ export async function voidEdtrInvoice(
     (invoice.invoiceType === 'deposit_deduction' && invoice.status !== 'void');
   if (!voidable) return { ok: false, error: 'invoice_not_voidable' };
 
-  let released = 0;
+  let released: number;
   if (invoice.invoiceType === 'weekly') {
     const rows = await tx
       .update(depositAccruals)

@@ -248,6 +248,14 @@ describe('Weather monitoring across the heavy-equipment rental journey', () => {
         })),
       ),
     );
+    // Step 5's live poll stamped the stop_work warning with the wall clock; put it at 14:00, inside the shift,
+    // so this step does not depend on what time of day CI runs (after 17:00 Manila no half would be flagged).
+    await withTenantTx(adminCtx, (tx) =>
+      tx
+        .update(eventsTable)
+        .set({ occurredAt: at('14:00') })
+        .where(and(eq(eventsTable.name, 'equipment_weather_warning'), dsql`${eventsTable.properties} ->> 'equipment_id' = ${equipmentId}`)),
+    );
     const created = await edtrs.capture(timekeeperCtx, {
       source: 'digital_entry',
       rentalId,
