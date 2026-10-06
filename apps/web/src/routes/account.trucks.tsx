@@ -520,7 +520,7 @@ function YourRequests({ openId, openCode }: { openId: string | null; openCode: s
       {list.data?.total === 0 && (
         <p className="text-sm text-text-muted">{status === 'open' ? 'No active trips. Book one on the map.' : 'No past trips yet.'}</p>
       )}
-      <div className="grid gap-3 xl:grid-cols-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 xl:grid-cols-2">
         {list.data?.items.map((r) => (
           <TruckRequestCard key={r.id} request={r} initiallyOpen={r.id === openId} />
         ))}

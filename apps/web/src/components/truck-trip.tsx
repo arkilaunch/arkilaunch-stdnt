@@ -186,27 +186,27 @@ export function TruckRequestCard({ request: r, initiallyOpen = false }: { reques
         ].join(' ')}
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <BookingCode code={r.code} />
             <span className="text-xs text-text-muted">{when(r.scheduledFor)}</span>
           </div>
           <StatusBadge status={r.status} />
         </div>
         {r.loadDescription && (
-          <p className="truncate text-sm text-text">
+          <p className="break-words text-sm text-text">
             <span className="text-text-muted">Loading: </span>
             {r.loadDescription}
           </p>
         )}
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-1.5 text-sm text-text">
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="flex min-w-0 items-start gap-2">
               <Dot which="A" />
-              <span className="truncate">{r.pickup}</span>
+              <span className="min-w-0 break-words">{r.pickup}</span>
             </span>
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="flex min-w-0 items-start gap-2">
               <Dot which="B" />
-              <span className="truncate">{r.dropoff}</span>
+              <span className="min-w-0 break-words">{r.dropoff}</span>
             </span>
           </div>
           <p className="shrink-0 text-right font-mono text-base font-semibold tabular-nums text-text">
