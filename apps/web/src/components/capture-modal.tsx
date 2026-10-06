@@ -254,7 +254,10 @@ export function CaptureModal({
       } else {
         // Multipart carries strings only: hours travel JSON-encoded.
         const transcribed = !ocrPipeline && lineItems ? { lineItems: JSON.stringify(lineItems) } : {};
-        const fields = { source: 'paper_ocr', rentalId, equipmentId, reportDate, captureId, ...transcribed };
+        // The picker holds the week's Monday; a rental starting mid-week begins after it.
+        const start = target?.startDate ? manilaDate(target.startDate) : reportDate;
+        const day = reportDate < start ? start : reportDate;
+        const fields = { source: 'paper_ocr', rentalId, equipmentId, reportDate: day, captureId, ...transcribed };
         try {
           res = await apiPostForm<EdtrCaptureResponse>('/edtr', fields, scanFile ?? undefined);
         } catch (err) {
