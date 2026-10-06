@@ -20,7 +20,10 @@ import {
   WEATHER_STALE_AFTER_MINUTES,
   type DeploymentCreateRequest,
   type DeploymentReturnRequest,
+  type IncidentCompanyTallyResponse,
   type IncidentListQuery,
+  type IncidentReviewRequest,
+  type IncidentStatus,
   type SiteEquipmentWeatherResponse,
   type SiteListQuery,
   type IncidentListResponse,
@@ -99,6 +102,41 @@ function discrepancyDetail(
     evidence.push(`rain in ${wet} of ${readings.length} half-hourly readings`);
   }
   return `${base}${evidence.length ? ` Recorded: ${evidence.join(', ')}.` : ''} For review, not a finding.`;
+}
+
+const LOGGED_INCIDENT_NAMES = ['weather_liability_incident', 'equipment_used_despite_warning'];
+const INCIDENT_EVENT_NAMES = [...LOGGED_INCIDENT_NAMES, 'edtr_weather_discrepancy'];
+
+interface IncidentProperties {
+  project_site_id?: string;
+  rental_id?: string;
+  severity?: string;
+  observed?: unknown;
+  rule?: string;
+  date?: string;
+  half?: 'am' | 'pm' | 'day';
+  system?: unknown;
+  level?: string;
+  reasons?: string[];
+  hours_active?: number;
+  weather_hours?: number | null;
+  warned_at?: string;
+  equipment_id?: string;
+  edtr_id?: string;
+  source?: 'system' | 'sheet';
+  reported?: { am: string | null; pm: string | null };
+  readings?: { minute: number; precip_mm: number }[];
+  review?: { status: IncidentStatus; note: string | null; by: string; at: string };
+}
+
+const BAD_WEATHER_WORDS: Record<string, string> = { HR: 'heavy rain', W: 'strong wind', T: 'a storm signal' };
+
+function sheetWeatherDetail(p: IncidentProperties): string {
+  const marked = (['am', 'pm'] as const).flatMap((half) => {
+    const words = BAD_WEATHER_WORDS[p.reported?.[half] ?? ''];
+    return words ? [`${words} (${half.toUpperCase()})`] : [];
+  });
+  return `${p.hours_active ?? '?'} h logged on ${p.date ?? 'that day'} while the field log itself marks ${marked.join(' and ') || 'bad weather'}.`;
 }
 
 @Injectable()
@@ -568,7 +606,7 @@ export class SitesService {
     });
   }
 
-  // No incidents table: reads the `events` rows the weather poller writes on a severity crossing.
+  // No incidents table: reads the `events` rows the weather poller and the field-log checks write.
   async incidents(ctx: RequestContext, query: IncidentListQuery): Promise<IncidentListResponse> {
     return withTenantTx(ctx, async (tx) => {
       const names =
@@ -578,13 +616,21 @@ export class SitesService {
             ? ['edtr_weather_discrepancy']
             : query.kind === 'used_despite_warning'
               ? ['equipment_used_despite_warning']
-              : ['weather_liability_incident', 'edtr_weather_discrepancy', 'equipment_used_despite_warning'];
+              : // D1/D2 report discrepancies stay out of the log; one field log's weather check still reads them.
+                query.edtrId
+                ? INCIDENT_EVENT_NAMES
+                : LOGGED_INCIDENT_NAMES;
       const conditions: SQL[] = [inArray(events.name, names)];
       if (query.projectSiteId) {
         conditions.push(sql`${events.properties} ->> 'project_site_id' = ${query.projectSiteId}`);
       }
       if (query.edtrId) {
         conditions.push(sql`${events.properties} ->> 'edtr_id' = ${query.edtrId}`);
+      }
+      if (query.customerId) {
+        conditions.push(
+          sql`${events.properties} ->> 'rental_id' in (select ${rentals.id}::text from ${rentals} where ${rentals.customerId} = ${query.customerId})`,
+        );
       }
 
       const total = await countRows(tx, events, and(...conditions));
@@ -596,13 +642,12 @@ export class SitesService {
         .limit(query.limit)
         .offset(query.offset);
 
-      const siteIds = [
-        ...new Set(
-          rows
-            .map((row) => (row.properties as { project_site_id?: string }).project_site_id)
-            .filter((id): id is string => Boolean(id)),
-        ),
+      const propsOf = (row: (typeof rows)[number]) => row.properties as IncidentProperties;
+      const ids = (key: 'project_site_id' | 'rental_id') => [
+        ...new Set(rows.map((row) => propsOf(row)[key]).filter((id): id is string => Boolean(id))),
       ];
+      const siteIds = ids('project_site_id');
+      const rentalIds = ids('rental_id');
       const siteRows =
         siteIds.length === 0
           ? []
@@ -612,29 +657,24 @@ export class SitesService {
               .leftJoin(addresses, eq(addresses.id, projectSites.addressId))
               .where(inArray(projectSites.id, siteIds));
       const siteById = new Map(siteRows.map((site) => [site.id, site]));
+      const companyRows =
+        rentalIds.length === 0
+          ? []
+          : await tx
+              .select({ rentalId: rentals.id, customerId: customers.id, companyName: customers.companyName })
+              .from(rentals)
+              .innerJoin(customers, eq(customers.id, rentals.customerId))
+              .where(inArray(rentals.id, rentalIds));
+      const companyByRental = new Map(companyRows.map((c) => [c.rentalId, c]));
 
       const items = rows.map((row) => {
-        const properties = row.properties as {
-          project_site_id?: string;
-          severity?: string;
-          observed?: unknown;
-          rule?: string;
-          date?: string;
-          half?: string;
-          system?: unknown;
-          level?: string;
-          reasons?: string[];
-          hours_active?: number;
-          warned_at?: string;
-          equipment_id?: string;
-          edtr_id?: string;
-          readings?: { minute: number; precip_mm: number }[];
-        };
+        const properties = propsOf(row);
         const discrepancy = row.name === 'edtr_weather_discrepancy';
         const ignored = row.name === 'equipment_used_despite_warning';
-        const site = properties.project_site_id
-          ? siteById.get(properties.project_site_id)
-          : undefined;
+        const site = properties.project_site_id ? siteById.get(properties.project_site_id) : undefined;
+        const company = properties.rental_id ? companyByRental.get(properties.rental_id) : undefined;
+        // Logged before the sheet source existed: those came from the system warning.
+        const source = ignored ? (properties.source ?? 'system') : null;
         return {
           id: row.id,
           projectSiteId: properties.project_site_id ?? null,
@@ -645,23 +685,34 @@ export class SitesService {
           observed: discrepancy
             ? { ...(properties.system as object | undefined), rule: properties.rule, date: properties.date, half: properties.half }
             : ignored
-              ? {
-                  equipment_id: properties.equipment_id,
-                  level: properties.level,
-                  hours_active: properties.hours_active,
-                  date: properties.date,
-                  warned_at: properties.warned_at,
-                  reasons: properties.reasons ?? [],
-                }
+              ? source === 'sheet'
+                ? {
+                    equipment_id: properties.equipment_id,
+                    hours_active: properties.hours_active,
+                    weather_hours: properties.weather_hours ?? null,
+                    date: properties.date,
+                    reported_am: properties.reported?.am ?? null,
+                    reported_pm: properties.reported?.pm ?? null,
+                  }
+                : {
+                    equipment_id: properties.equipment_id,
+                    level: properties.level,
+                    hours_active: properties.hours_active,
+                    date: properties.date,
+                    warned_at: properties.warned_at,
+                    reasons: properties.reasons ?? [],
+                  }
               : (properties.observed ?? null),
           occurredAt: row.occurredAt,
           kind: ignored ? ('used_despite_warning' as const) : discrepancy ? ('discrepancy' as const) : ('weather' as const),
           edtrId: properties.edtr_id ?? null,
-          half: properties.half === 'am' || properties.half === 'pm' || properties.half === 'day' ? (properties.half as 'am' | 'pm' | 'day') : null,
+          half: properties.half === 'am' || properties.half === 'pm' || properties.half === 'day' ? properties.half : null,
           detail: ignored
-            ? `${properties.hours_active ?? '?'} h logged on ${properties.date ?? 'that day'} on a machine warned to STOP WORK${
-                properties.warned_at ? ` at ${new Date(properties.warned_at).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' })}` : ''
-              }${properties.reasons?.length ? `: ${properties.reasons.join('; ')}` : ''}.`
+            ? source === 'sheet'
+              ? sheetWeatherDetail(properties)
+              : `${properties.hours_active ?? '?'} h logged on ${properties.date ?? 'that day'} on a machine warned to STOP WORK${
+                  properties.warned_at ? ` at ${new Date(properties.warned_at).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' })}` : ''
+                }${properties.reasons?.length ? `: ${properties.reasons.join('; ')}` : ''}.`
             : discrepancy
               ? discrepancyDetail(
                   properties.rule,
@@ -671,9 +722,62 @@ export class SitesService {
                   properties.readings,
                 )
               : null,
+          customerId: company?.customerId ?? null,
+          customerName: company?.companyName ?? null,
+          source,
+          status: properties.review?.status ?? 'open',
+          reviewNote: properties.review?.note ?? null,
+          reviewedAt: properties.review?.at ? new Date(properties.review.at) : null,
         };
       });
       return { items, total };
+    });
+  }
+
+  // Repeat offenders: used-despite-warning incidents per renting company, dismissed ones left out.
+  async incidentCompanies(ctx: RequestContext): Promise<IncidentCompanyTallyResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const status = sql`coalesce(${events.properties} -> 'review' ->> 'status', 'open')`;
+      const rows = await tx
+        .select({
+          customerId: customers.id,
+          companyName: customers.companyName,
+          total: sql<number>`count(*)::int`,
+          open: sql<number>`(count(*) filter (where ${status} = 'open'))::int`,
+        })
+        .from(events)
+        .innerJoin(rentals, sql`${rentals.id}::text = ${events.properties} ->> 'rental_id'`)
+        .innerJoin(customers, eq(customers.id, rentals.customerId))
+        .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${status} <> 'dismissed'`))
+        .groupBy(customers.id, customers.companyName)
+        .orderBy(sql`count(*) desc`, customers.companyName);
+      return { items: rows };
+    });
+  }
+
+  // A person's call on an incident; the event row keeps it, the audit log keeps who and why. Never money (RFC-2).
+  async reviewIncident(ctx: RequestContext, id: string, body: IncidentReviewRequest) {
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx
+        .select({ id: events.id })
+        .from(events)
+        .where(and(eq(events.id, id), inArray(events.name, INCIDENT_EVENT_NAMES)))
+        .limit(1);
+      if (!row) throw new NotFoundException({ error: 'incident_not_found' });
+      const review = { status: body.status, note: body.note || null, by: ctx.userId, at: new Date().toISOString() };
+      await tx
+        .update(events)
+        .set({ properties: sql`${events.properties} || jsonb_build_object('review', ${JSON.stringify(review)}::jsonb)` })
+        .where(eq(events.id, id));
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'incident',
+        entityId: id,
+        reason: review.note ? `${review.status}: ${review.note}` : review.status,
+      });
+      return { id, status: review.status, reviewNote: review.note, reviewedAt: new Date(review.at) };
     });
   }
 }

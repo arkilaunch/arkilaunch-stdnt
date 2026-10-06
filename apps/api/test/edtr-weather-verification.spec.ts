@@ -1,8 +1,10 @@
 import { describe, expect, it, beforeAll } from 'vitest';
+import { NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   addresses,
+  auditLogs,
   edtr as edtrTable,
   edtrLineItems,
   equipment as equipmentTable,
@@ -16,9 +18,10 @@ import {
   weatherAlerts,
   withTenantTx,
 } from '@arkilaunch/db';
-import type { RequestContext } from '@arkilaunch/shared';
+import { IncidentReviewRequestSchema, type RequestContext } from '@arkilaunch/shared';
 import { EdtrService } from '../src/edtr/edtr.service.js';
 import { EventsService } from '../src/events/events.service.js';
+import { SitesService } from '../src/sites/sites.service.js';
 import { ensurePaidDeposit } from './paid-deposit.js';
 
 // A discrepancy is a review flag plus an incident-log row; it never holds the day or touches money.
@@ -26,6 +29,7 @@ describe('EDTR weather verification (digital entry)', () => {
   const events_ = new EventsService();
   const service = new EdtrService(events_);
   let ctx: RequestContext;
+  let ctxB: RequestContext;
   let tenantId: string;
   let rentalId: string;
   let equipmentId: string;
@@ -46,7 +50,12 @@ describe('EDTR weather verification (digital entry)', () => {
     const [customer] = await raw`select id from customers where tenant_id = ${tenantId} and company_name like 'test-tenant-% Customer Co.' order by created_at limit 1`;
     const [card] = await raw`select equipment_type_id from rate_cards where tenant_id = ${tenantId} and rate_type = 'hourly' limit 1`;
     await raw.end();
+    const raw2 = postgres(url, { max: 1 });
     ctx = { tenantId, userId: (admin as { id: string }).id, role: 'admin' };
+    const [tenantB] = await raw2`select id from tenants where slug = 'test-tenant-b'`;
+    const [adminB] = await raw2`select id from users where tenant_id = ${(tenantB as { id: string }).id} and email = 'admin@test-tenant-b.test'`;
+    await raw2.end();
+    ctxB = { tenantId: (tenantB as { id: string }).id, userId: (adminB as { id: string }).id, role: 'admin' };
 
     await withTenantTx(ctx, async (tx) => {
       const [address] = await tx
@@ -161,6 +170,40 @@ describe('EDTR weather verification (digital entry)', () => {
     // The typed ticks are kept and shown back to the reviewer.
     expect([line!.weatherAm, line!.weatherPm]).toEqual(['HR', 'C']);
     expect((await service.get(ctx, created.id)).weather).toMatchObject({ am: 'HR', pm: 'C' });
+  });
+
+  it('the incident log carries the company, tallies it, and keeps a reviewed status; D1/D2 stay out of the log', async () => {
+    const created = await capture('2022-07-04', { hoursActive: 6, hoursIdle: 0, weatherAm: 'T', weatherPm: 'W' });
+    const sites = new SitesService(events_);
+    const { items } = await sites.incidents(ctx, { kind: 'used_despite_warning', limit: 50, offset: 0 });
+    const incident = items.find((i) => i.edtrId === created.id)!;
+    expect(incident).toMatchObject({ source: 'sheet', half: 'day', status: 'open', customerName: expect.stringMatching(/Customer Co\./) });
+    expect(incident.detail).toContain('a storm signal (AM) and strong wind (PM)');
+
+    // Filter by the company; the tally counts it as open.
+    const byCompany = await sites.incidents(ctx, { customerId: incident.customerId!, limit: 50, offset: 0 });
+    expect(byCompany.items.some((i) => i.id === incident.id)).toBe(true);
+    const before = (await sites.incidentCompanies(ctx)).items.find((c) => c.customerId === incident.customerId)!;
+    expect(before.open).toBeGreaterThan(0);
+
+    // Report discrepancies are not in the log, but one field log's weather check still reads them.
+    const all = await sites.incidents(ctx, { limit: 200, offset: 0 });
+    expect(all.items.some((i) => i.kind === 'discrepancy')).toBe(false);
+
+    // A dismissal needs a note; the call is kept on the incident and in the audit log.
+    expect(IncidentReviewRequestSchema.safeParse({ status: 'dismissed' }).success).toBe(false);
+    await sites.reviewIncident(ctx, incident.id, { status: 'dismissed', note: 'Operator was covering the unit, not running it.' });
+    const reviewed = (await sites.incidents(ctx, { edtrId: created.id, limit: 50, offset: 0 })).items.find((i) => i.id === incident.id)!;
+    expect(reviewed).toMatchObject({ status: 'dismissed', reviewNote: 'Operator was covering the unit, not running it.' });
+    const after = (await sites.incidentCompanies(ctx)).items.find((c) => c.customerId === incident.customerId);
+    expect(after?.total ?? 0).toBe(before.total - 1);
+    const audit = await withTenantTx(ctx, (tx) => tx.select().from(auditLogs).where(eq(auditLogs.entityId, incident.id)));
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ entity: 'incident', action: 'UPDATE', actorId: ctx.userId });
+
+    // Another tenant can neither see nor review it (RLS).
+    await expect(sites.reviewIncident(ctxB, incident.id, { status: 'acknowledged' })).rejects.toThrow(NotFoundException);
+    expect((await sites.incidentCompanies(ctxB)).items.some((c) => c.customerId === incident.customerId)).toBe(false);
   });
 
   it('an entry that matches the recorded weather is not flagged', async () => {
