@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
 import { createZodDto } from 'nestjs-zod';
 import { DeploymentReturnSchema, TimekeeperAssignRequestSchema } from '@arkilaunch/shared';
 import { RequirePermission, STAFF_READ } from '../common/decorators/require-permission.decorator.js';
@@ -7,6 +7,7 @@ import { SiteHubService } from './site-hub.service.js';
 import {
   DeploymentCreateDto,
   IncidentListQueryDto,
+  IncidentReviewDto,
   SiteCreateDto,
   SiteListQueryDto,
   SiteUpdateDto,
@@ -109,5 +110,18 @@ export class SitesController {
   @RequirePermission(...STAFF_READ)
   incidents(@Query() query: IncidentListQueryDto, @Req() req: CtxRequest) {
     return this.sites.incidents(req.ctx, query);
+  }
+
+  @Get('incidents/companies')
+  @RequirePermission(...STAFF_READ)
+  incidentCompanies(@Req() req: CtxRequest) {
+    return this.sites.incidentCompanies(req.ctx);
+  }
+
+  // The same people who decide a field log decide its incident.
+  @Patch('incidents/:id')
+  @RequirePermission('edtr:approve')
+  reviewIncident(@Param('id', ParseUUIDPipe) id: string, @Body() body: IncidentReviewDto, @Req() req: CtxRequest) {
+    return this.sites.reviewIncident(req.ctx, id, body);
   }
 }

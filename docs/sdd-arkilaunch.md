@@ -510,6 +510,8 @@ erDiagram
 | `PATCH` | `/api/v1/sites/:id/deployments/:assignmentId/return` | Return deployed equipment | PRD-F4 |
 | `GET` | `/api/v1/weather/advisories` | Active advisories across every tenant site | PRD-F5 |
 | `GET` | `/api/v1/incidents` | Liability incident log, read from `events` (no new table) | PRD-F5 |
+| `GET` | `/api/v1/incidents/companies` | Used-despite-warning incidents per renting company, dismissed left out (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
+| `PATCH` | `/api/v1/incidents/:id` | Review status `open/acknowledged/dismissed` + note (a dismissal needs one), audit-logged; never money (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `GET` | `/api/v1/notifications`, `PATCH /api/v1/notifications/:id/read` | The caller's own notifications feed (`cr-arkilaunch-f9-read-surface.md`) | cross-cutting |
 | `GET` | `/api/v1/reports/financial` | Invoiced/paid/deducted totals by period (QAD-T8's financial half) | PRD-F4 |
 

@@ -268,11 +268,14 @@ describe('Weather monitoring across the heavy-equipment rental journey', () => {
     const [line] = await withTenantTx(adminCtx, (tx) => tx.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, edtrId)));
     expect(line!.reviewFlags).toContain('weather_D2');
 
+    // The incident log names the company; the D2 discrepancy is read on the field log, not listed in the log.
     const incidents = await sites.incidents(adminCtx, { limit: 50, offset: 0, projectSiteId: siteId });
     const kinds = incidents.items.map((i) => i.kind);
     expect(kinds).toContain('used_despite_warning');
-    expect(kinds).toContain('discrepancy');
-    const d2 = incidents.items.find((i) => i.kind === 'discrepancy')!;
+    expect(kinds).not.toContain('discrepancy');
+    expect(incidents.items.find((i) => i.kind === 'used_despite_warning')!.customerName).toBeTruthy();
+    const fieldLog = await sites.incidents(adminCtx, { limit: 50, offset: 0, edtrId });
+    const d2 = fieldLog.items.find((i) => i.kind === 'discrepancy')!;
     expect(d2.detail).toContain('mm rain recorded');
     expect(d2.detail).toContain('For review, not a finding');
 

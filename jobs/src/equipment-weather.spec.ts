@@ -111,7 +111,7 @@ describe('per-equipment weather (warning -> used despite warning)', () => {
         .from(events)
         .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${row!.id}`))
         .limit(1);
-      expect(incident?.properties).toMatchObject({ equipment_id: craneId, level: 'stop_work', hours_active: 6 });
+      expect(incident?.properties).toMatchObject({ equipment_id: craneId, level: 'stop_work', hours_active: 6, source: 'system' });
     } finally {
       await client.end();
     }

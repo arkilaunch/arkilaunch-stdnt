@@ -24,6 +24,7 @@ import type {
   FinancialReportResponse,
   LeakageReport,
   LeakageReportQuery,
+  IncidentCompanyTallyResponse,
   IncidentListResponse,
   InvoiceDetailResponse,
   InvoiceListResponse,
@@ -235,11 +236,17 @@ export const invoicesQueries = {
 };
 
 export const incidentsQueries = {
-  list: (limit = PAGE_SIZE, offset = 0, kind?: 'weather' | 'discrepancy' | 'used_despite_warning') =>
+  list: (limit = PAGE_SIZE, offset = 0, kind?: 'weather' | 'used_despite_warning', customerId?: string) =>
     queryOptions({
-      queryKey: ['incidents', limit, offset, kind ?? 'all'] as const,
+      queryKey: ['incidents', limit, offset, kind ?? 'all', customerId ?? 'any'] as const,
       queryFn: () =>
-        apiGet<IncidentListResponse>(withParams('/incidents', { limit, offset, kind })),
+        apiGet<IncidentListResponse>(withParams('/incidents', { limit, offset, kind, customerId })),
+    }),
+  // Used-despite-warning incidents per renting company: the repeat offenders.
+  companies: () =>
+    queryOptions({
+      queryKey: ['incidents', 'companies'] as const,
+      queryFn: () => apiGet<IncidentCompanyTallyResponse>('/incidents/companies'),
     }),
   // Weather flags and stop-work warnings raised by one field log, for the reviewer beside its scan.
   forFieldLog: (edtrId: string) =>

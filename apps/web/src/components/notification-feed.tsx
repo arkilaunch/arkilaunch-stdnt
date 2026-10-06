@@ -270,7 +270,9 @@ function describeWeather(type: WeatherNoticeType, p: Record<string, unknown>, ar
         : { label: 'My bookings', to: '/account/bookings', params: {} }
       : audience === 'timekeeper'
         ? { label: 'Open dashboard', to: '/field', params: {} }
-        : siteId
+        : typeof p.incident_id === 'string'
+          ? { label: 'Open incident', to: '/app/incidents', params: {}, search: { open: p.incident_id } }
+          : siteId
           ? { label: 'Open site', to: '/app/deployment/$siteId', params: { siteId } }
           : { label: 'Open incidents', to: '/app/incidents', params: {} };
   return { title, body, action };

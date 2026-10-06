@@ -119,8 +119,11 @@ export async function notifySiteWeather(
   type: WeatherNoticeType,
   payload: Record<string, unknown> & { machines?: WeatherNoticeMachine[] },
   rentalIds: string[],
+  audiences?: WeatherAudience[],
 ): Promise<string[]> {
-  const recipients = await siteRecipients(ex, tenantId, siteId, rentalIds);
+  const recipients = (await siteRecipients(ex, tenantId, siteId, rentalIds)).filter(
+    (r) => !audiences || audiences.includes(r.audience),
+  );
   if (recipients.length === 0) return [];
 
   const [tenant] = await ex

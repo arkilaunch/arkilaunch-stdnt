@@ -5,6 +5,8 @@ export const WEATHER_NOTICE_TYPES = [
   'equipment_weather_outlook',
   'equipment_weather_warning',
   'equipment_weather_alert',
+  // Staff only: a field log shows a machine ran through a stop-work warning or the sheet's own bad-weather tick.
+  'equipment_used_despite_warning',
 ] as const;
 export type WeatherNoticeType = (typeof WEATHER_NOTICE_TYPES)[number];
 
@@ -77,6 +79,19 @@ export function weatherNoticeText(
         heads,
     };
   }
+  if (type === 'equipment_used_despite_warning') {
+    const machine = typeof payload.equipment_name === 'string' ? payload.equipment_name : 'A machine';
+    const company = typeof payload.company_name === 'string' ? ` (${payload.company_name})` : '';
+    const date = typeof payload.date === 'string' ? payload.date : 'a day';
+    const why =
+      payload.source === 'sheet'
+        ? 'while its own field log marks heavy rain, strong wind or a storm signal'
+        : 'while it was under a stop-work weather warning';
+    return {
+      title: `Worked through bad weather: ${machine}${company}`,
+      body: `${machine}${company} logged ${String(payload.hours_active ?? '?')} running hours on ${date} ${why}. Logged in the incident log for review; nothing is charged.`,
+    };
+  }
   const level = levelOf(payload.level);
   const info = WEATHER_LEVEL_INFO[level];
   const name = typeof payload.equipment_name === 'string' ? payload.equipment_name : 'A machine';
@@ -92,6 +107,7 @@ export function weatherNoticePath(audience: WeatherAudience, payload: Record<str
   const siteId = typeof payload.project_site_id === 'string' ? payload.project_site_id : '';
   if (audience === 'customer') return rentalId ? `/account/bookings/${rentalId}` : '/account/bookings';
   if (audience === 'timekeeper') return '/field';
+  if (typeof payload.incident_id === 'string') return `/app/incidents?open=${payload.incident_id}`;
   return siteId ? `/app/deployment/${siteId}` : '/app/incidents';
 }
 

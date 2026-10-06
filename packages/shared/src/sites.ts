@@ -44,9 +44,22 @@ export type DeploymentCreateRequest = z.infer<typeof DeploymentCreateRequestSche
 
 export const IncidentListQuerySchema = PaginationQuerySchema.extend({
   projectSiteId: z.string().uuid().optional(),
+  // 'discrepancy' (D1/D2) is not in the incident log; it is still read per field log (edtrId) for the weather check.
   kind: z.enum(['weather', 'discrepancy', 'used_despite_warning']).optional(),
   edtrId: z.string().uuid().optional(),
+  customerId: z.string().uuid().optional(),
 });
+
+export const INCIDENT_STATUSES = ['open', 'acknowledged', 'dismissed'] as const;
+export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
+
+export const IncidentReviewRequestSchema = z
+  .object({
+    status: z.enum(INCIDENT_STATUSES),
+    note: z.string().trim().max(1000).optional(),
+  })
+  .refine((d) => d.status !== 'dismissed' || Boolean(d.note), { message: 'A dismissal needs a note', path: ['note'] });
+export type IncidentReviewRequest = z.infer<typeof IncidentReviewRequestSchema>;
 
 export const SiteDeploymentFilterSchema = z.enum(['active', 'upcoming', 'idle']);
 export type SiteDeploymentFilter = z.infer<typeof SiteDeploymentFilterSchema>;
@@ -108,6 +121,14 @@ export const IncidentResponseSchema = z.object({
   // Set on EDTR-born incidents (discrepancy, used despite warning), so the log can open the field log.
   edtrId: z.string().uuid().nullable(),
   half: z.enum(['am', 'pm', 'day']).nullable(),
+  // The renting company, through the incident's rental; null on a site-wide weather incident.
+  customerId: z.string().uuid().nullable(),
+  customerName: z.string().nullable(),
+  // Used despite warning: the system stop-work warning, or the field log's own HR/W/T tick.
+  source: z.enum(['system', 'sheet']).nullable(),
+  status: z.enum(INCIDENT_STATUSES),
+  reviewNote: z.string().nullable(),
+  reviewedAt: z.coerce.date().nullable(),
 });
 export type IncidentResponse = z.infer<typeof IncidentResponseSchema>;
 
@@ -115,6 +136,19 @@ export const IncidentListResponseSchema = z.object({
   items: z.array(IncidentResponseSchema),
   total: z.number().int(),
 });
+
+// Used-despite-warning incidents per renting company, dismissed ones left out.
+export const IncidentCompanyTallyResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      customerId: z.string().uuid(),
+      companyName: z.string(),
+      total: z.number().int(),
+      open: z.number().int(),
+    }),
+  ),
+});
+export type IncidentCompanyTallyResponse = z.infer<typeof IncidentCompanyTallyResponseSchema>;
 export type IncidentListResponse = z.infer<typeof IncidentListResponseSchema>;
 
 // Refused (409) while field-log days are unapproved or missing, unless the admin confirms with an audit-logged reason.

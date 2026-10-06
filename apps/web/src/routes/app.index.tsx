@@ -362,8 +362,9 @@ function AdminDashboardPage() {
                 <button type="button" key={incident.id} onClick={() => setIncidentOpen(incident)} className={ROW}>
                   <span className="flex flex-col">
                     <span className="font-medium text-text">
-                      {incident.siteCity ?? incident.siteProvince ?? 'Unnamed site'}
-                      {incident.severity ? ` - ${formatSeverity(incident.severity)}` : ''}
+                      {incident.kind === 'used_despite_warning'
+                        ? `Used during warning - ${incident.customerName ?? 'Unknown company'}`
+                        : `${incident.siteCity ?? incident.siteProvince ?? 'Unnamed site'}${incident.severity ? ` - ${formatSeverity(incident.severity)}` : ''}`}
                     </span>
                     <span className="text-xs text-text-muted">{formatDateTime(incident.occurredAt)}</span>
                   </span>
@@ -432,7 +433,7 @@ function AdminDashboardPage() {
       <Modal
         open={incidentOpen != null}
         onClose={() => setIncidentOpen(null)}
-        title="Weather incident"
+        title={incidentOpen?.kind === 'used_despite_warning' ? 'Used during a weather warning' : 'Weather incident'}
         size="md"
       >
         {incidentOpen && <IncidentDetail incident={incidentOpen} />}
@@ -494,6 +495,16 @@ function AdminDashboardPage() {
 }
 
 function IncidentDetail({ incident }: { incident: IncidentResponse }) {
+  // A field-log incident stores the log's hours, not a weather reading: its detail line says what happened.
+  if (incident.kind !== 'weather') {
+    return (
+      <div className="flex flex-col gap-2 text-sm text-text">
+        <p className="font-medium">{incident.customerName ?? 'Unknown company'}</p>
+        <p className="text-text-muted">{formatDateTime(incident.occurredAt)}</p>
+        <p>{incident.detail}</p>
+      </div>
+    );
+  }
   const observed = incident.observed as
     | { tempC: number; windKph: number; precipMm: number; code: number }
     | null;
