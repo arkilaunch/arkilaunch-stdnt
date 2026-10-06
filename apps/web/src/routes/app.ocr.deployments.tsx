@@ -54,8 +54,8 @@ export const appOcrDeploymentsRoute = createRoute({
   component: () => <DeploymentScanPage billingTo="/app/billing/weekly" />,
 });
 
-// Same server permission (edtr:create); only the layout guard differs. Timekeepers lack edtr:read, so the
-// modal must not poll the log it just sent.
+// Same server permission (edtr:create); only the layout guard differs. submitOnly: the timekeeper sends the
+// sheet and the modal closes, with no view of how the office reads or approves it.
 export const fieldScanRoute = createRoute({
   getParentRoute: () => fieldLayoutRoute,
   path: '/field/scan',

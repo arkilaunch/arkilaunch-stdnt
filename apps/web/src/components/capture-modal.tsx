@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { parseEdtrSheetQr, type EdtrCaptureResponse, type FieldSheetDownloadResponse, type EdtrDetailResponse, type ScanTarget } from '@arkilaunch/shared';
+import {
+  parseEdtrSheetQr,
+  type EdtrCaptureResponse,
+  type EdtrSheetContext,
+  type FieldSheetDownloadResponse,
+  type EdtrDetailResponse,
+  type ScanTarget,
+} from '@arkilaunch/shared';
 import { ApiError, apiErrorText, apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
 import { useTenant } from '../lib/tenant.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
@@ -15,7 +22,7 @@ import { Select } from './select.js';
 import { Surface } from './surface.js';
 import { Modal } from './modal.js';
 import { ParsedColumns, ScanReview } from './scan-review.js';
-import { edtrQueries, referenceQueries, usersQueries } from '../lib/queries.js';
+import { bookingsQueries, edtrQueries, referenceQueries, usersQueries } from '../lib/queries.js';
 import { LIMIT_REACHED } from './field-sheets-panel.js';
 import { readSheetQr } from '../lib/sheet-qr.js';
 import { PAGE_MM } from '../lib/sheet-marks.js';
@@ -61,6 +68,38 @@ export function sheetWeeks(start: string, end: string, today = manilaDate(new Da
   const weeks: string[] = [];
   for (let d = weekStart(start); d <= last; d = addDaysIso(d, 7)) weeks.push(d);
   return weeks;
+}
+
+// The printed sheet's header for this machine and week, so the timekeeper checks it against the paper before sending.
+function SheetHeader({ context, equipmentId, day }: { context: EdtrSheetContext; equipmentId: string; day: string }) {
+  const unit = context.equipment.find((u) => u.id === equipmentId);
+  const start = unit ? unit.start : context.rentalStart;
+  const end = unit ? unit.end : context.rentalEnd;
+  const week = day ? weekStart(day) : '';
+  const rows: [string, string][] = [
+    ['Booking code', context.bookingCode || '--'],
+    ['Charge to', context.chargeTo || '--'],
+    ['Equipment', unit ? `${unit.type} · ${unit.model} · SN ${unit.serialNo}` : 'Choose the machine'],
+    ['Project location', context.projectLocation || '--'],
+    ['Operator', unit?.operatorName || 'Not assigned'],
+    ['Client site rep', context.siteRep || '--'],
+    ['Rental period', start ? `${formatDate(start)} to ${end ? formatDate(end) : 'open'}` : '--'],
+    ['Date covered', week ? `${formatDate(week)} to ${formatDate(addDaysIso(week, 6))}` : 'Choose the week'],
+    ['Hour meter at start of week', unit?.lastHourMeter != null ? unit.lastHourMeter.toFixed(1) : '--'],
+  ];
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-3">
+      <h3 className="text-sm font-medium text-text-muted">On the sheet</h3>
+      <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-xs font-semibold text-text-muted">{label}</dt>
+            <dd className="text-text">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </Surface>
+  );
 }
 
 export function CaptureModal({
@@ -122,6 +161,7 @@ export function CaptureModal({
 
   // QA 32: only bookings and machines the server will accept: on site now (and, for staff, just returned).
   const scanTargets = useQuery({ ...edtrQueries.scanTargets(), enabled: open });
+  const sheetContext = useQuery({ ...bookingsQueries.edtrSheet(rentalId), enabled: open && submitOnly && !!rentalId });
   const targets = (scanTargets.data?.items ?? []).filter((t) => !siteId || t.siteId === siteId);
 
   // With the OCR pipeline on, a paper scan must not carry typed hours (422 line_items_not_accepted).
@@ -270,9 +310,14 @@ export function CaptureModal({
           return;
         }
       }
-      // A paper sheet stays open so the timekeeper sees what was read while still on site.
-      if (submitOnly && source === 'digital_entry') {
-        toast.success('Sent to the office', `${formatDate(reportDate)} is pending approval.`);
+      // A timekeeper only submits: reading, matching and approval happen in the office, out of their view.
+      if (submitOnly) {
+        toast.success(
+          'Sent to the office',
+          source === 'paper_ocr'
+            ? `The sheet for the week of ${formatDate(reportDate)} is with the office.`
+            : `${formatDate(reportDate)} is pending approval.`,
+        );
         onCaptured();
         handleClose();
         return;
@@ -443,6 +488,8 @@ export function CaptureModal({
           }
         />
         )}
+
+        {submitOnly && sheetContext.data && <SheetHeader context={sheetContext.data} equipmentId={equipmentId} day={reportDate} />}
 
         {source === 'paper_ocr' && (
           <CaptureField
