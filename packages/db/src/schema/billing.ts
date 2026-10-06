@@ -7,6 +7,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  smallint,
   text,
   timestamp,
   unique,
@@ -44,10 +45,13 @@ export const edtr = pgTable(
     lockedAt: timestamp('locked_at', { withTimezone: true }),
     lastError: text('last_error'),
     submittedBy: uuid('submitted_by').references(() => users.id),
+    // Degrees a reviewer turned the scan to read it; display only, the stored image is untouched.
+    scanRotation: smallint('scan_rotation').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     tenantIsolationPolicy(),
+    check('edtr_scan_rotation_chk', sql`${t.scanRotation} IN (0, 90, 180, 270)`),
     check(
       'edtr_status_chk',
       sql`${t.status} IN ('queued','extracting','extracted','review','reconciled','hard_failed')`,

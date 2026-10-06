@@ -596,6 +596,13 @@
       "when": 1791331200000,
       "tag": "0085_assignment_operator_name",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1791417600000,
+      "tag": "0086_edtr_scan_rotation",
+      "breakpoints": true
     }
   ]
 }

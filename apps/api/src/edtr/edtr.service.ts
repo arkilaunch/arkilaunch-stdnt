@@ -519,6 +519,7 @@ export class EdtrService {
         weather: payload?.weather ?? null,
         // Why the worker gave up on the sheet; only meaningful while it is hard_failed.
         failureReason: row.status === 'hard_failed' ? row.lastError : null,
+        scanRotation: row.scanRotation as 0 | 90 | 180 | 270,
         reportDate: row.reportDate === null ? null : String(row.reportDate),
         // Provenance: a human transcription's 1.00 confidence must not read as model certainty.
         extraction: payload
@@ -603,6 +604,15 @@ export class EdtrService {
     });
     // Read after commit: get() opens its own transaction.
     return this.get(ctx, edtrId);
+  }
+
+  // Display only: how reviewers see the scan. Never touches hours, status or money.
+  async setRotation(ctx: RequestContext, edtrId: string, degrees: 0 | 90 | 180 | 270) {
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx.update(edtr).set({ scanRotation: degrees }).where(eq(edtr.id, edtrId)).returning({ id: edtr.id });
+      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      return { id: row.id, scanRotation: degrees };
+    });
   }
 
   // Read-only twin of approve()'s pricing: same hours rule, rate card and deposit split, no lock, no writes.

@@ -16,19 +16,27 @@ import { Modal } from './modal.js';
 import { ParsedColumns, ScanReview } from './scan-review.js';
 import { edtrQueries, referenceQueries } from '../lib/queries.js';
 import { readSheetQr } from '../lib/sheet-qr.js';
+import { PAGE_MM } from '../lib/sheet-marks.js';
 import { useToast } from './toast.js';
 
 const TERMINAL_STATUSES = new Set(['review', 'reconciled', 'hard_failed']);
-// Letter and Legal, as PAGE in lib/edtr-sheet.ts prints them (not imported: it drags pdf-lib into capture).
-const SHEET_RATIOS = [279.4 / 215.9, 355.6 / 215.9];
+// Letter and Legal, as the sheet is printed.
+const SHEET_RATIOS = Object.values(PAGE_MM).map((page) => page.w / page.h);
 
 const SCANNING_TIPS = [
   {
     title: 'Good light',
     detail: 'Light the sheet evenly and keep overhead glare off the glossy parts.',
   },
-  { title: 'Flat and square', detail: 'Lay the sheet flat and fit its edges inside the frame.' },
-  { title: 'Hold still', detail: 'A steady shot is what keeps the handwritten totals readable.' },
+  {
+    title: 'Flat, on a plain surface',
+    detail: 'Lay the sheet flat on a table, not held in your hand, so the lines stay straight.',
+  },
+  {
+    title: 'All four black corner squares',
+    detail: 'Keep the four small black squares in view and your fingers off them: they let the app crop and turn the sheet for you.',
+  },
+  { title: 'No shadow, hold still', detail: 'Stand so your shadow is off the sheet, and hold steady so the numbers stay sharp.' },
 ];
 
 export const targetLabel = (t: ScanTarget) =>
@@ -366,6 +374,7 @@ export function CaptureModal({
             accept="image/*"
             size="field"
             scanner
+            sheetMarks
             snapAspect={SHEET_RATIOS}
             value={scanFile}
             onChange={(file) => void onScanFile(file)}

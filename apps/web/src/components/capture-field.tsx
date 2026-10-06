@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Button } from './button.js';
 import { describeUploadProblem, prepareUpload, type PrepareUploadOptions } from '../lib/image-compression.js';
-import { analyzeDocument, analyzePickedDocument, loadDocumentScanner, steadyHold, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
+import { analyzeDocument, analyzePickedDocument, detectSheetMarks, loadDocumentScanner, steadyHold, straightenBySheetMarks, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
 
 // getUserMedia is missing on insecure origins and rejects without permission or a camera: always keep the file-input fallback.
 // KYC enables local edge detection; field sheets keep the lightweight manual frame.
@@ -21,6 +21,8 @@ export interface CaptureFieldProps {
   scanner?: boolean;
   /** Page ratios (long / short) the straightened scan snaps to, e.g. Letter and Legal for field sheets. */
   snapAspect?: readonly number[] | undefined;
+  /** eDTR sheets: find the printed corner marks to crop, turn upright and even out the light. */
+  sheetMarks?: boolean;
   onAccepted?: ((file: File) => void) | undefined;
 }
 
@@ -56,6 +58,7 @@ export function CaptureField({
   uploadOptions,
   scanner = false,
   snapAspect,
+  sheetMarks = false,
   onAccepted,
 }: CaptureFieldProps) {
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -235,6 +238,18 @@ export function CaptureField({
     setCorrected(null);
     setAdjusting(false);
     setReviewing(autoAccept);
+    // Printed marks beat the paper edge: a hand or a busy background breaks the edge, not the marks.
+    const marks = sheetMarks && source ? await detectSheetMarks(source).catch(() => null) : null;
+    if (marks && source) {
+      try {
+        const straightened = await straightenBySheetMarks(source, marks);
+        if (reviewId !== reviewIdRef.current) return;
+        setCorrected(straightened);
+        setPhotoIssue((issue) => (issue === 'no_document' ? null : issue));
+        if (autoAccept) await acceptReview(straightened);
+        return;
+      } catch { /* Fall back to the paper edge below. */ }
+    }
     if (source && detected) {
       try {
         const straightened = await straightenDocument(source, detected, { snapAspect });

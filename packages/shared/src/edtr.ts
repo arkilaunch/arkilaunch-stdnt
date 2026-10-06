@@ -186,6 +186,12 @@ const AdjustmentsSchema = z.object({
   hoursOtherDowntime: hours.nullable().optional(),
 });
 
+// PATCH /api/v1/edtr/:id/rotation: how the scan reads upright, saved for every reviewer.
+export const EdtrRotationRequestSchema = z.object({
+  degrees: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+});
+export type EdtrRotationRequest = z.infer<typeof EdtrRotationRequestSchema>;
+
 // GET /api/v1/edtr/:id/bill-preview: the same hours approve() would price; omitted = the stored reading.
 const queryHours = z.coerce.number().pipe(hours).optional();
 export const EdtrBillPreviewQuerySchema = z.object({
@@ -293,6 +299,7 @@ export const EdtrDetailResponseSchema = z.object({
   weather: OcrPayloadSchema.shape.weather.unwrap().nullable(),
   reportDate: z.string().nullable(),
   failureReason: z.string().nullable(),
+  scanRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
 

@@ -513,6 +513,12 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     expect(after.failureReason).toBeNull();
     expect(after.extraction?.isManualTranscription).toBe(true);
     expect(after.lineItems[0]?.hoursActive).toBe(6);
+    // The reviewer's rotation is saved for everyone and changes nothing else.
+    expect(after.scanRotation).toBe(0);
+    await edtr.setRotation(adminCtx, failed!.id, 90);
+    const turned = await edtr.get(adminCtx, failed!.id);
+    expect(turned.scanRotation).toBe(90);
+    expect(turned.lineItems[0]?.hoursActive).toBe(6);
     // Never twice: the row is no longer a failed sheet.
     await expect(edtr.transcribe(adminCtx, failed!.id, { hoursActive: 7, hoursIdle: 0 })).rejects.toThrow();
   });

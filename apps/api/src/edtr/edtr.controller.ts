@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -16,7 +17,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { validateUpload } from '../storage/upload-validation.js';
 import { StorageService, edtrBucket } from '../storage/storage.service.js';
 import { EdtrService } from './edtr.service.js';
-import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
+import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrRotationDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto } from './dto.js';
 import type { CtxRequest, MulterFile } from '../common/request.js';
 
 @Controller('edtr')
@@ -57,6 +58,12 @@ export class EdtrController {
   @RequirePermission('edtr:create', 'edtr:read')
   get(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.edtr.get(req.ctx, id);
+  }
+
+  @Patch(':id/rotation')
+  @RequirePermission('edtr:approve')
+  rotate(@Param('id') id: string, @Body() body: EdtrRotationDto, @Req() req: CtxRequest) {
+    return this.edtr.setRotation(req.ctx, id, body.degrees);
   }
 
   // Approvers only: hours typed from the photo of a sheet the worker could not read.

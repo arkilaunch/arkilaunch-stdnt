@@ -10,6 +10,19 @@ import { Surface } from './surface.js';
 
 export interface ScanReviewProps {
   detail: EdtrDetailResponse;
+  /** Approvers save the turn for everyone; without it the turn is for this screen only. */
+  onRotate?: ((degrees: Rotation) => void) | undefined;
+}
+
+export type Rotation = 0 | 90 | 180 | 270;
+
+// A box on the page (fractions of width/height) after turning the page clockwise.
+export function rotateBox<T extends { left: number; top: number; width: number; height: number }>(box: T, degrees: Rotation): T {
+  const { left, top, width, height } = box;
+  if (degrees === 90) return { ...box, left: 1 - top - height, top: left, width: height, height: width };
+  if (degrees === 180) return { ...box, left: 1 - left - width, top: 1 - top - height };
+  if (degrees === 270) return { ...box, left: top, top: 1 - left - width, width: height, height: width };
+  return box;
 }
 
 interface Box {
@@ -88,7 +101,15 @@ export function ParsedColumns({ item }: { item: LineItem }) {
   );
 }
 
-export function ScanReview({ detail }: ScanReviewProps) {
+export function ScanReview({ detail, onRotate }: ScanReviewProps) {
+  const [rotation, setRotation] = useState<Rotation>(detail.scanRotation);
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => setRotation(detail.scanRotation), [detail.id, detail.scanRotation]);
+  function turn() {
+    const next = ((rotation + 90) % 360) as Rotation;
+    setRotation(next);
+    onRotate?.(next);
+  }
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageUnavailable, setImageUnavailable] = useState(false);
   const [view, setView] = useState<'scanned' | 'original'>('scanned');
@@ -129,7 +150,13 @@ export function ScanReview({ detail }: ScanReviewProps) {
 
   const shown = view === 'scanned' && scannedUrl ? scannedUrl : imageUrl;
 
-  const boxes = detail.fields.map(toBox).filter((box): box is Box => box !== null);
+  const boxes = detail.fields
+    .map(toBox)
+    .filter((box): box is Box => box !== null)
+    .map((box) => rotateBox(box, rotation));
+  const sideways = rotation === 90 || rotation === 270;
+  // Turned a quarter, the frame takes the page's swapped shape and the image is centred and turned inside it.
+  const ratio = natural ? natural.w / natural.h : null;
   const needsReview = detail.fields.filter((field) => field.belowGate);
 
   return (
@@ -151,6 +178,14 @@ export function ScanReview({ detail }: ScanReviewProps) {
                 {option === 'scanned' ? 'Scanned' : 'Original'}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={turn}
+              className="rounded-sm border border-border px-3 py-1 text-sm text-text"
+              aria-label={`Rotate the sheet 90 degrees, now at ${rotation} degrees`}
+            >
+              Rotate 90°
+            </button>
             {view === 'scanned' && !scannedUrl && (
               <span className="text-xs text-text-muted">
                 {scanFailed ? 'Black-and-white view unavailable; showing the original.' : 'Preparing the scan...'}
@@ -159,11 +194,25 @@ export function ScanReview({ detail }: ScanReviewProps) {
           </div>
         )}
         {shown ? (
-          <div className="relative w-full">
+          <div
+            className="relative w-full overflow-hidden rounded-sm border border-border"
+            style={ratio ? { aspectRatio: sideways ? 1 / ratio : ratio } : undefined}
+          >
             <img
               src={shown}
               alt="The scanned sheet, with the readings the model took marked on it"
-              className="w-full rounded-sm border border-border"
+              onLoad={(event) => setNatural({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })}
+              className={ratio ? 'absolute left-1/2 top-1/2 max-w-none' : 'w-full'}
+              style={
+                ratio
+                  ? {
+                      // Sized to the unturned page, so after the turn it fills the frame exactly.
+                      width: sideways ? `${ratio * 100}%` : '100%',
+                      height: sideways ? `${100 / ratio}%` : '100%',
+                      transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                    }
+                  : undefined
+              }
             />
             {boxes.map((box) => (
               <span

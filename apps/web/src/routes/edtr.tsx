@@ -2,7 +2,7 @@ import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
-import { apiGet, apiPost } from '../lib/api-client.js';
+import { apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { useScanDeployments } from '../lib/use-scan-deployments.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
 import { EMPTY_HOURS, HourFields, toLineItems } from '../components/hour-fields.js';
@@ -24,7 +24,7 @@ import { Check, CircleX, Clock, TriangleAlert } from 'lucide-react';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { useToast } from '../components/toast.js';
-import { ParsedColumns, ScanReview } from '../components/scan-review.js';
+import { ParsedColumns, ScanReview, type Rotation } from '../components/scan-review.js';
 import { WeatherCheck } from '../components/weather-check.js';
 import { edtrQueries, usersQueries } from '../lib/queries.js';
 import type { EdtrBillPreviewQuery, EdtrBillPreviewResponse, EdtrDetailResponse } from '@arkilaunch/shared';
@@ -581,6 +581,14 @@ interface ApproveResult {
 
 // What the reviewer decides on: the sheet itself, every column read from it, and its weather check.
 function FieldLogEvidence({ detail }: { detail: EdtrDetailResponse }) {
+  const queryClient = useQueryClient();
+  const me = useQuery(usersQueries.me());
+  // Approvers save how the sheet reads upright, for everyone; others turn it on their screen only.
+  const canSave = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
+  const saveRotation = (degrees: Rotation) =>
+    void apiPatch(`/edtr/${detail.id}/rotation`, { degrees })
+      .then(() => queryClient.invalidateQueries({ queryKey: edtrQueries.detail(detail.id).queryKey }))
+      .catch(() => {});
   return (
     <div className="flex flex-col gap-4">
       {detail.status === 'hard_failed' && (
@@ -591,7 +599,7 @@ function FieldLogEvidence({ detail }: { detail: EdtrDetailResponse }) {
       )}
       {/* The photo whenever there is one: a failed sheet has no fields, and is exactly when a person must look. */}
       {detail.source === 'paper_ocr' ? (
-        <ScanReview detail={detail} />
+        <ScanReview detail={detail} onRotate={canSave ? saveRotation : undefined} />
       ) : (
         detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />
       )}
