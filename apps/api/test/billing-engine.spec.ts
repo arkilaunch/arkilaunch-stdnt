@@ -8,6 +8,7 @@ import {
   equipment as equipmentTable,
   quotationItems,
   quotations,
+  rateCards,
   rentalContracts,
   rentals,
   withTenantTx,
@@ -95,13 +96,13 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
 
   // Simulates the paper_ocr counterpart directly (same technique as
   // edtr-engine.spec.ts) so a digital_entry capture reconciles to 'matched'.
-  async function insertExtractedPaperCounterpart(reportDate: string, hoursActive: number, hoursIdle: number, equipmentId = equipmentIdA) {
+  async function insertExtractedPaperCounterpart(reportDate: string, hoursActive: number, hoursIdle: number, equipmentId = equipmentIdA, rentalId = depositRentalId) {
     return withTenantTx(adminCtxA, async (tx) => {
       const [row] = await tx
         .insert(edtrTable)
         .values({
           tenantId: adminCtxA.tenantId,
-          rentalId: depositRentalId,
+          rentalId,
           equipmentId,
           source: 'paper_ocr',
           reportDate,
@@ -165,6 +166,7 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
         .values({ tenantId: adminCtxA.tenantId, customerId: base!.customerId, projectSiteId: base!.projectSiteId, status: 'active', startDate: base!.startDate })
         .returning();
       const [unit] = await tx.select().from(equipmentTable).where(eq(equipmentTable.id, equipmentIdA));
+      const [card] = await tx.select({ id: rateCards.id }).from(rateCards).where(eq(rateCards.equipmentTypeId, unit!.equipmentTypeId)).limit(1);
       const [quotation] = await tx
         .insert(quotations)
         .values({ tenantId: adminCtxA.tenantId, customerId: base!.customerId, rentalId: rental!.id, status: 'accepted' })
@@ -173,6 +175,7 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
         tenantId: adminCtxA.tenantId,
         quotationId: quotation!.id,
         equipmentTypeId: unit!.equipmentTypeId,
+        rateCardId: card!.id,
         hourlyRatePhp: '500.00',
       });
       await tx.insert(rentalContracts).values({ tenantId: adminCtxA.tenantId, quotationId: quotation!.id, depositRequired: String(DEPOSIT_REQUIRED) });
@@ -181,13 +184,7 @@ describe('BillingService (PRD-F2/F3 read surface)', () => {
     await ensurePaidDeposit(adminCtxA, rentalId);
 
     const reportDate = '2021-05-05';
-    await withTenantTx(adminCtxA, async (tx) => {
-      const [row] = await tx
-        .insert(edtrTable)
-        .values({ tenantId: adminCtxA.tenantId, rentalId, equipmentId: equipmentIdA, source: 'paper_ocr', reportDate, rawFileUri: 'storage://fixtures/quote-rate.jpg', status: 'extracted' })
-        .returning();
-      await tx.insert(edtrLineItems).values({ tenantId: adminCtxA.tenantId, edtrId: row!.id, hoursActive: '4', hoursIdle: '0' });
-    });
+    await insertExtractedPaperCounterpart(reportDate, 4, 0, equipmentIdA, rentalId);
     const digital = await edtr.capture(adminCtxA, { source: 'digital_entry', rentalId, equipmentId: equipmentIdA, reportDate, lineItems: { hoursActive: 4, hoursIdle: 0 } });
     const polled = await edtr.get(adminCtxA, digital.id);
     expect(polled.reconciliation?.status).toBe('matched');
