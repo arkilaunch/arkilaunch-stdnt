@@ -22,8 +22,8 @@ describe('explainEdtrError', () => {
 
 describe('failureText', () => {
   it('names the rows the worker could not read, in words a timekeeper can act on', () => {
-    expect(failureText('unreadable_total_hours:3,5')).toBe(
-      'The hours could not be read clearly (row 3, 5). Retake in better light, or type the hours in.',
+    expect(failureText('unreadable_total_hours:2026-10-11,2026-10-12')).toBe(
+      'The hours could not be read clearly (for 10/11, 10/12). Retake in better light, or type the hours in.',
     );
     expect(failureText('no_timesheet_table')).toMatch(/No timesheet was found/);
     expect(failureText('something_new')).toBe('The sheet could not be read.');
