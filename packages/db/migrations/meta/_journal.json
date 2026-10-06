@@ -603,6 +603,20 @@
       "when": 1791417600000,
       "tag": "0086_edtr_scan_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1791504000000,
+      "tag": "0087_billing_skip_deposit_for_edtr",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1791590400000,
+      "tag": "0088_billing_skip_ocr_accuracy_gate",
+      "breakpoints": true
     }
   ]
 }

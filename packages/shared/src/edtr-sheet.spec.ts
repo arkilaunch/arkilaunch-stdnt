@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseEdtrSheet, resolveSheetDate } from './edtr-sheet.js';
+import { parseEdtrSheet, readWeekSummary, resolveSheetDate } from './edtr-sheet.js';
 import type { ExtractedTable } from './document-intelligence-port.js';
 
 // The header shape prebuilt-layout returned for the real Almara sheet: row 0 groups, row 1 IN/OUT, data from row 2.
@@ -364,6 +364,77 @@ describe('parseEdtrSheet v3', () => {
       ['2026-10-10', 7.5, 0, 0, ['running']],
     ]);
     expect(result.days.some((d) => d.rowMismatch)).toBe(false);
+  });
+
+  it('reads the WEEK SUMMARY table the sheet carries below the grid', () => {
+    // As Azure returned it for EQR-2026-0013 (2026-10-06).
+    const rows = [
+      ['WEEK SUMMARY (cross-check; the system recomputes)', ''],
+      ['Running + Idle = BILLABLE HOURS', '33'],
+      ['Breakdown + Weather + Other = NOT BILLED', '1'],
+      ['Hour meter end - start = METER HOURS', ''],
+    ];
+    const summary: ExtractedTable = {
+      rowCount: 4,
+      columnCount: 2,
+      cells: rows.flatMap((row, rowIndex) => row.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: 0.9 }))),
+    };
+    expect(readWeekSummary([summary])).toEqual({ billable: 33, notBilled: 1 });
+    expect(readWeekSummary([])).toEqual({ billable: null, notBilled: null });
+  });
+
+  it('reads weather ticks at the confidence Azure gives scanned checkboxes, and not below the tick gate', () => {
+    const header = [
+      ['DATE', 'DAY', 'TOTAL HOURS', 'RUNNING HRS', 'WEATHER AM', 'WEATHER PM'],
+      ['', '', '', '', 'C O LR HR W T', 'C O LR HR W T'],
+    ];
+    const ticks = ':selected: :unselected: :unselected: :unselected: :unselected: :unselected:';
+    const read = (tickConfidence: number) => {
+      const rows = [...header, ['10/07', 'WED', '8.5', '7.5', ticks, ticks]];
+      const result = parseEdtrSheet(
+        [
+          {
+            rowCount: rows.length,
+            columnCount: 6,
+            cells: rows.flatMap((row, rowIndex) =>
+              row.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: columnIndex >= 4 ? tickConfidence : 0.99 })),
+            ),
+          },
+        ],
+        '2026-10-06',
+      );
+      return result.ok ? [result.days[0]!.v2?.weatherAm, result.days[0]!.v2?.weatherPm] : null;
+    };
+    // 0.69 is what Azure returned for the ticks on EQR-2026-0013.
+    expect(read(0.69)).toEqual(['C', 'C']);
+    expect(read(0.5)).toEqual([null, null]);
+  });
+
+  // v3.1 adds one STD SHIFT tick after DAY.
+  const v31 = (dataRows: string[][]): ExtractedTable => {
+    const rows = [...V3_HEADER.map((h) => [h[0]!, h[1]!, h === V3_HEADER[0] ? 'STD SHIFT' : '', ...h.slice(2)]), ...dataRows];
+    return {
+      rowCount: rows.length,
+      columnCount: rows[0]!.length,
+      cells: rows.flatMap((row, rowIndex) => row.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: 0.99 }))),
+    };
+  };
+  const shift = (tick: string, times: string[], total: string, running: string) =>
+    parseEdtrSheet([v31([['03/02', 'MON', tick, ...times, '', '', total, running, '', '', '', '', '', '', '']])], CAPTURE);
+
+  it('reads a ticked STD SHIFT with blank times as 07:30-12:00 and 13:00-16:00', () => {
+    const result = shift(':selected:', ['', '', '', ''], '7.5', '7.5');
+    expect(result.ok && [result.days[0]!.computedHours, result.days[0]!.totalMismatch, result.days[0]!.hoursActive]).toEqual([7.5, false, 7.5]);
+    // The tick checks TOTAL; it never bills. A day shorter than the shift reaches a person.
+    const short = shift(':selected:', ['', '', '', ''], '5', '5');
+    expect(short.ok && short.days[0]!.totalMismatch).toBe(true);
+  });
+
+  it('lets written times win over the STD SHIFT tick, and ignores an unticked box', () => {
+    const written = shift(':selected:', ['07:00', '11:00', '', ''], '4', '4');
+    expect(written.ok && [written.days[0]!.computedHours, written.days[0]!.totalMismatch]).toEqual([4, false]);
+    const unticked = shift(':unselected:', ['', '', '', ''], '7.5', '7.5');
+    expect(unticked.ok && unticked.days[0]!.computedHours).toBeNull();
   });
 
   it('leaves a v2 sheet exactly as before: no v3 block, TOTAL is the reading', () => {

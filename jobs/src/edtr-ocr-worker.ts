@@ -9,6 +9,7 @@ import {
   validateDayEntry,
   type DocumentIntelligencePort,
   type EdtrSheetDay,
+  type EdtrWeekSummary,
   type OcrPayload,
 } from '@arkilaunch/shared';
 import { createDocumentIntelligenceAdapter, EDTR_MODEL_ID } from '@arkilaunch/document-intelligence';
@@ -25,7 +26,7 @@ const CLAIM_BATCH_SIZE = 10;
 const STALE_LOCK_MS = 15 * 60 * 1000;
 const API_VERSION = '2024-11-30';
 
-function toOcrPayload(day: EdtrSheetDay): OcrPayload {
+function toOcrPayload(day: EdtrSheetDay, week: EdtrWeekSummary): OcrPayload {
   const fields = [
     {
       name: 'hours_active',
@@ -51,6 +52,7 @@ function toOcrPayload(day: EdtrSheetDay): OcrPayload {
     fields,
     min_field_confidence: day.confidence,
     pages: 1,
+    week_summary: { billable: week.billable, not_billed: week.notBilled },
     ...(day.v2
       ? {
           weather: {
@@ -161,7 +163,7 @@ export async function runEdtrOcrWorker(
 
         await db.transaction(async (tx) => {
           for (const [index, day] of sheet.days.entries()) {
-            const ocrPayload = toOcrPayload(day);
+            const ocrPayload = toOcrPayload(day, sheet.weekSummary);
 
             let edtrId = row.id;
             if (index === 0) {

@@ -62,6 +62,10 @@ export const InvoiceAmountUpdateSchema = z.object({
 });
 export type InvoiceAmountUpdate = z.infer<typeof InvoiceAmountUpdateSchema>;
 
+// Voiding an EDTR bill (weekly or deposit deduction): it stays as history and its field-log hours wait for a new bill.
+export const InvoiceVoidSchema = z.object({ reason: z.string().trim().min(3).max(500) });
+export type InvoiceVoid = z.infer<typeof InvoiceVoidSchema>;
+
 export const PaymongoAccountUpdateSchema = z.object({
   accountId: z
     .string()

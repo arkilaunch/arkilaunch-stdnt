@@ -30,7 +30,7 @@ describe('buildEdtrSheetSvg (EDTR v3)', () => {
   const svg = buildEdtrSheetSvg({ context, equipmentId: context.equipment[0]!.id, weekStart: '2026-09-21' });
 
   it('prints every header word the parser finds the v3 grid by', () => {
-    for (const word of ['DATE', 'DAY', 'AM', 'PM', 'OVERTIME', 'TOTAL', 'RUNNING', 'IDLE', 'BREAKDOWN', 'WEATHER', 'OTHER', 'HRS', 'METER', 'START', 'END', 'IN', 'OUT', 'WEATHER AM', 'WEATHER PM', 'INITIAL']) {
+    for (const word of ['DATE', 'DAY', 'AM', 'PM', 'OVERTIME', 'TOTAL', 'RUNNING', 'IDLE', 'BREAKDOWN', 'WEATHER', 'OTHER', 'HRS', 'METER', 'START', 'END', 'IN', 'OUT', 'WEATHER AM', 'WEATHER PM', 'INITIAL', 'STD', 'SHIFT']) {
       expect(svg).toContain(`>${word}<`);
     }
     expect(svg).not.toContain('>IDLE REASON<');
@@ -44,9 +44,10 @@ describe('buildEdtrSheetSvg (EDTR v3)', () => {
     expect(svg).not.toContain('>MON<');
   });
 
-  it('prints one weather tick box per code, per half-day, on each fillable row', () => {
+  it('prints one weather tick box per code, per half-day, and one STD SHIFT box on each fillable row', () => {
     const boxes = svg.match(/width="3.2" height="3.2"/g) ?? [];
-    expect(boxes).toHaveLength(4 * 2 * WEATHER_CODES.length);
+    expect(boxes).toHaveLength(4 * (2 * WEATHER_CODES.length + 1));
+    expect(svg).toContain('Tick STD SHIFT, leave IN/OUT blank');
   });
 
   it('carries the booking code, tenant, site rep, operator and hour meter; the QR names no tenant', () => {
@@ -104,13 +105,13 @@ describe('buildEdtrSheetSvg (EDTR v3)', () => {
   // Round trip at the contract level: the grid as a layout model would
   // return it for this printed header parses back into the v3 fields.
   it('round-trips through the parser with the printed header labels', () => {
-    const header0 = ['DATE', 'DAY', 'AM', 'AM', 'PM', 'PM', 'OVERTIME', 'OVERTIME', 'TOTAL HOURS', 'RUNNING HRS', 'IDLE HRS', 'BREAKDOWN HRS', 'WEATHER HRS', 'OTHER HRS', 'METER START', 'METER END', 'WEATHER AM', 'WEATHER PM', 'INITIAL'];
-    const header1 = ['', '', 'IN', 'OUT', 'IN', 'OUT', 'IN', 'OUT', '', '', '', '', '', '', '', '', '', '', ''];
+    const header0 = ['DATE', 'DAY', 'STD SHIFT', 'AM', 'AM', 'PM', 'PM', 'OVERTIME', 'OVERTIME', 'TOTAL HOURS', 'RUNNING HRS', 'IDLE HRS', 'BREAKDOWN HRS', 'WEATHER HRS', 'OTHER HRS', 'METER START', 'METER END', 'WEATHER AM', 'WEATHER PM', 'INITIAL'];
+    const header1 = ['', '', '', 'IN', 'OUT', 'IN', 'OUT', 'IN', 'OUT', '', '', '', '', '', '', '', '', '', '', ''];
     const rows = [
       header0,
       header1,
-      ['09/21', 'OUTSIDE RENTAL', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-      ['09/22', 'TUE', '07:00', '12:00', '13:00', '17:00', '', '', '9', '7', '0.5', '1.5', '', '', '1234.5', '1241.5', '', '', 'ER'],
+      ['09/21', 'OUTSIDE RENTAL', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['09/22', 'TUE', ':unselected:', '07:00', '12:00', '13:00', '17:00', '', '', '9', '7', '0.5', '1.5', '', '', '1234.5', '1241.5', '', '', 'ER'],
     ];
     const parsed = parseEdtrSheet(
       [

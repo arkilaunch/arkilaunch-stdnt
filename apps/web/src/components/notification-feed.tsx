@@ -451,6 +451,12 @@ export function describeNotification(type: string, payload: unknown, area: FeedA
         body: `Booking ${ref} has ${formatPeso(p.balance_php as number)} left of its ${formatPeso(p.deposit_php as number)} deposit. Hours past it are billed weekly.`,
         action: { label: 'View booking', ...toBooking },
       };
+    case 'weekly_statement':
+      return {
+        title: 'Weekly statement',
+        body: `Booking ${ref}: ${Number(p.hours ?? 0).toFixed(1)} h this week, ${formatPeso(p.from_deposit_php as number)} from your deposit (${formatPeso(p.deposit_left_php as number)} left). ${Number(p.due_php ?? 0) > 0 ? `${formatPeso(p.due_php as number)} to pay.` : 'Nothing to pay.'}`,
+        action: { label: 'View statement', to: '/account/bookings/$bookingId/statement', params: { bookingId: rentalId } },
+      };
     case 'weekly_invoice':
       return {
         title: 'Weekly invoice',
@@ -488,7 +494,7 @@ function toneOf(type: string): NotificationTone {
 }
 
 function categoryOf(type: string): string {
-  if (/^(payment_|weekly_invoice|deposit_)/.test(type)) return 'Billing';
+  if (/^(payment_|weekly_invoice|weekly_statement|deposit_)/.test(type)) return 'Billing';
   if (type.startsWith('maintenance_')) return 'Maintenance';
   if (type.includes('weather')) return 'Weather';
   if (type.startsWith('truck_')) return 'Truck';

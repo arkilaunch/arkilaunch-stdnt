@@ -1,4 +1,4 @@
-import { CONFIDENCE_GATE, DEFAULT_TOLERANCE_HOURS } from './edtr.js';
+import { DEFAULT_TOLERANCE_HOURS, TICK_CONFIDENCE_GATE } from './edtr.js';
 import {
   IDLE_REASONS,
   WEATHER_CODES,
@@ -44,9 +44,15 @@ export interface EdtrSheetDay {
   rowMismatch?: boolean;
 }
 
+// The sheet's own WEEK SUMMARY, a cross-check for the office; never billed from (RFC-2).
+export interface EdtrWeekSummary {
+  billable: number | null;
+  notBilled: number | null;
+}
+
 export type EdtrSheetParse =
   // `unreadable`: dated, filled days whose billed hours could not be read; each goes to a human.
-  | { ok: true; days: EdtrSheetDay[]; unreadable: string[] }
+  | { ok: true; days: EdtrSheetDay[]; unreadable: string[]; weekSummary: EdtrWeekSummary }
   | { ok: false; reason: string };
 
 const DATE_HEADER = 'DATE';
@@ -103,6 +109,7 @@ interface Columns {
   other: number;
   meterStart: number;
   meterEnd: number;
+  stdShift: number;
   headerRows: number;
 }
 
@@ -155,6 +162,7 @@ function findColumns(grid: Grid): Columns | null {
     other: at('OTHER HRS'),
     meterStart: at('METER START'),
     meterEnd: at('METER END'),
+    stdShift: at('STD SHIFT'),
     headerRows: 2,
   };
 }
@@ -241,7 +249,7 @@ function window(row: string[], pair: [number, number] | null): [number, number] 
 function readV2(row: string[], confidences: number[], columns: Columns): EdtrSheetDay['v2'] {
   if (columns.weatherAm < 0 && columns.weatherPm < 0 && columns.idleReason < 0) return undefined;
   const tick = <T extends string>(col: number, options: readonly T[]) =>
-    col < 0 ? null : readTickGroup(row[col] ?? '', options, confidences[col] ?? 0, CONFIDENCE_GATE);
+    col < 0 ? null : readTickGroup(row[col] ?? '', options, confidences[col] ?? 0, TICK_CONFIDENCE_GATE);
   return {
     idleHours: columns.idleHours < 0 ? null : parseHours(row[columns.idleHours] ?? ''),
     idleReason: tick(columns.idleReason, IDLE_REASONS),
@@ -271,6 +279,23 @@ function v3FillColumns(columns: Columns): number[] {
     columns.meterStart,
     columns.meterEnd,
   ].filter((c) => c >= 0);
+}
+
+// v3.1: one tick stands for the printed standard shift, so the commonest day needs no handwritten times.
+const STD_SHIFT = { am: ['07:30', '12:00'], pm: ['13:00', '16:00'] } as const;
+
+// The tick only fills blank AM/PM times; written times always win. It feeds the TOTAL cross-check,
+// never the billed RUNNING figure (RFC-2).
+function withStdShift(row: string[], confidences: number[], columns: Columns): { row: string[]; ticked: boolean } {
+  const c = columns.stdShift;
+  const ticked = c >= 0 && readTickGroup(row[c] ?? '', ['STD'], confidences[c] ?? 0, TICK_CONFIDENCE_GATE) === 'STD';
+  if (!ticked || !columns.am || !columns.pm) return { row, ticked };
+  const cols = [...columns.am, ...columns.pm];
+  if (cols.some((i) => /\d/.test(row[i] ?? ''))) return { row, ticked };
+  const out = [...row];
+  [out[columns.am[0]], out[columns.am[1]]] = STD_SHIFT.am;
+  [out[columns.pm[0]], out[columns.pm[1]]] = STD_SHIFT.pm;
+  return { row: out, ticked };
 }
 
 function computeHours(row: string[], pairs: Array<[number, number]>): number | null {
@@ -318,7 +343,7 @@ export function parseEdtrSheet(
   const duplicates: string[] = [];
 
   for (let r = columns.headerRows; r < grid.rowCount; r++) {
-    const row = grid.rows[r]!;
+    const { row, ticked } = withStdShift(grid.rows[r]!, grid.confidences[r]!, columns);
     const rawDate = row[columns.date] ?? '';
     if (norm(rawDate) === '') continue;
 
@@ -328,7 +353,7 @@ export function parseEdtrSheet(
       const dayCell = columns.day >= 0 ? norm(row[columns.day] ?? '') : '';
       if (dayCell.includes('OUTSIDE')) continue;
       // Written means a digit somewhere: empty comb boxes alone are a blank day, not an unreadable one.
-      if (v3FillColumns(columns).every((c) => !/\d/.test(row[c] ?? ''))) continue;
+      if (!ticked && v3FillColumns(columns).every((c) => !/\d/.test(row[c] ?? ''))) continue;
     }
 
     const reportDate = resolveSheetDate(rawDate, captureDate);
@@ -396,7 +421,30 @@ export function parseEdtrSheet(
       : { ok: false, reason: 'no_dated_rows' };
   }
 
-  return { ok: true, days, unreadable: unreadableTotals };
+  return { ok: true, days, unreadable: unreadableTotals, weekSummary: readWeekSummary(tables ?? []) };
+}
+
+// The summary is a separate small table: label in one cell, the written figure in the last filled one.
+export function readWeekSummary(tables: ExtractedTable[]): EdtrWeekSummary {
+  const summary: EdtrWeekSummary = { billable: null, notBilled: null };
+  for (const table of tables) {
+    const grid = toGrid(table);
+    if (!grid) continue;
+    for (const row of grid.rows) {
+      const label = norm(row[0] ?? '');
+      const written = row.slice(1).filter((c) => /\d/.test(c)).at(-1) ?? '';
+      if (label.includes('BILLABLE HOURS')) summary.billable ??= parseWeekHours(written);
+      else if (label.includes('NOT BILLED')) summary.notBilled ??= parseWeekHours(written);
+    }
+  }
+  return summary;
+}
+
+// A week can pass 24 hours, so not parseHours.
+function parseWeekHours(raw: string): number | null {
+  const t = hoursText(raw);
+  const n = t === null ? NaN : Number(t);
+  return Number.isFinite(n) && n >= 0 && n <= 24 * 7 ? n : null;
 }
 
 // v3 rows add up: TOTAL = RUNNING + IDLE + BREAKDOWN + WEATHER + OTHER. One figure the reader lost is

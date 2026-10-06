@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { crossesLowBalance, depositForQuote, resolveDepositLedger, splitDeduction } from './deposit-ledger.js';
+import { coverAccruals, crossesLowBalance, depositForQuote, resolveDepositLedger, splitDeduction } from './deposit-ledger.js';
 import { customers, invoices, projectSites, rentals } from './schema/index.js';
 import { withTenantTx } from './with-tenant-tx.js';
 import postgres from 'postgres';
 
 describe('deposit rollover math', () => {
+  it('pays waiting hours from the deposit left before any weekly invoice, splitting the row it runs out on', () => {
+    const rows = [
+      { id: 'a', amount: 9000, hours: 7.5 },
+      { id: 'b', amount: 11400, hours: 9.5 },
+    ];
+    // Enough deposit: nothing to invoice.
+    const all = coverAccruals(201600, rows);
+    expect(all.remaining).toEqual([]);
+    expect(all.balanceAfter).toBe(181200);
+    // Runs out inside the second row: 3000 of it (2.5 h) from the deposit, 8400 (7 h) invoiced.
+    const part = coverAccruals(12000, rows);
+    expect(part.covered.map((c) => [c.row.id, c.amount, c.hours])).toEqual([['a', 9000, 7.5], ['b', 3000, 2.5]]);
+    expect(part.remaining.map((r) => [r.row.id, r.amount, r.hours])).toEqual([['b', 8400, 7]]);
+    // Nothing left: all invoiced.
+    expect(coverAccruals(0, rows).remaining).toHaveLength(2);
+  });
+
   it('takes the whole charge from a deposit that covers it', () => {
     expect(splitDeduction(5000, 3400)).toEqual({ deducted: 3400, accrued: 0, balanceAfter: 1600 });
   });

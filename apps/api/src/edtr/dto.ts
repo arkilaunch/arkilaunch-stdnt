@@ -8,6 +8,7 @@ import {
   EdtrRotationRequestSchema,
   EdtrRejectRequestSchema,
   EdtrReviewRequestSchema,
+  EdtrWeekBillRequestSchema,
 } from '@arkilaunch/shared';
 
 export class EdtrCaptureDto extends createZodDto(EdtrCaptureFieldsSchema) {}
@@ -18,3 +19,4 @@ export class EdtrRotationDto extends createZodDto(EdtrRotationRequestSchema) {}
 export class EdtrListQueryDto extends createZodDto(EdtrListQuerySchema) {}
 export class EdtrRejectDto extends createZodDto(EdtrRejectRequestSchema) {}
 export class EdtrReviewDto extends createZodDto(EdtrReviewRequestSchema) {}
+export class EdtrWeekBillDto extends createZodDto(EdtrWeekBillRequestSchema) {}

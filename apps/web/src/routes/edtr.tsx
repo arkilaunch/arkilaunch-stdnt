@@ -2,11 +2,11 @@ import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
-import { apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { useScanDeployments } from '../lib/use-scan-deployments.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
-import { EMPTY_HOURS, HourFields, toLineItems } from '../components/hour-fields.js';
-import { addDaysIso, formatDate, formatHours, formatLogSource, formatPeso, formatStatus, isUuid, shortCode, siteName } from '../lib/format.js';
+import { EMPTY_HOURS, HourFields, hourValuesFrom, toLineItems, type HourFieldValues } from '../components/hour-fields.js';
+import { addDaysIso, weekStart, formatDate, formatHours, formatLogSource, formatPeso, formatStatus, isUuid, shortCode, siteName } from '../lib/format.js';
 import { Button, buttonClass } from '../components/button.js';
 import { Input } from '../components/input.js';
 import { Select } from '../components/select.js';
@@ -27,6 +27,7 @@ import { useToast } from '../components/toast.js';
 import { ParsedColumns, ScanReview, type Rotation } from '../components/scan-review.js';
 import { WeatherCheck } from '../components/weather-check.js';
 import { edtrQueries, usersQueries } from '../lib/queries.js';
+import { WeekBillBar } from '../components/week-bill-bar.js';
 import type { EdtrBillPreviewQuery, EdtrBillPreviewResponse, EdtrDetailResponse } from '@arkilaunch/shared';
 
 const APPROVABLE = new Set(['matched', 'discrepancy']);
@@ -98,6 +99,7 @@ function EdtrPage() {
 
   const [captureOpen, setCaptureOpen] = useState(false);
   const [approving, setApproving] = useState<EdtrListItem | null>(null);
+  const [reviewing, setReviewing] = useState<EdtrListItem | null>(null);
   const [viewing, setViewing] = useState<EdtrListItem | null>(null);
 
   // A new filter starts from its first page, in the same render (no request at the old offset).
@@ -171,22 +173,8 @@ function EdtrPage() {
     return site ? siteName(site) : 'Unknown site';
   }
 
+  // The machine is the group heading, so the rows are its days.
   const columns: TableColumn<EdtrListItem>[] = [
-    {
-      header: 'Machine',
-      kind: 'text',
-      cell: (row) => (
-        <div className="flex min-w-0 flex-col">
-          <button
-            type="button"
-            onClick={() => setViewing(row)}
-            className="line-clamp-2 break-words text-left font-medium text-accent hover:underline"
-          >
-            {machineName(row.equipmentId)}
-          </button>
-        </div>
-      ),
-    },
     { header: 'Day worked', kind: 'date', cell: (row) => formatDate(row.reportDate) },
     {
       header: 'Status',
@@ -201,6 +189,11 @@ function EdtrPage() {
         row.reconciliation && APPROVABLE.has(row.reconciliation.status) ? (
           <Button variant="approve" size="field" onClick={() => setApproving(row)}>
             Review and bill
+          </Button>
+        ) : row.reconciliation?.status === 'pending' && row.status === 'review' ? (
+          // One log only: the office's approval is the second log (site hub approval flow).
+          <Button variant="approve" size="field" onClick={() => setReviewing(row)}>
+            Review and approve
           </Button>
         ) : null,
     },
@@ -312,18 +305,42 @@ function EdtrPage() {
           )
         ) : (
           <div className="flex flex-col gap-3">
-            {groupByRental(items).map(([rentalId, rows]) => (
-              <RentalGroup
-                key={rentalId}
-                rentalId={rentalId}
-                label={rentalName(rentalId)}
-                customer={customerName(rentalId)}
-                site={siteLabel(siteOf(rentalId))}
-                siteId={siteOf(rentalId)}
-                rows={rows}
-                columns={columns}
-                onOpen={setViewing}
-              />
+            {groupBySite(items, siteOf).map(([siteId, machines]) => (
+              <details key={siteId} open className="min-w-0 overflow-hidden rounded-md border border-border" data-testid="site-group">
+                <summary className="flex min-w-0 cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="min-w-0 break-words font-medium text-text">{siteLabel(siteId)}</span>
+                    {siteId && (
+                      <Link
+                        to="/app/deployment/$siteId"
+                        params={{ siteId }}
+                        search={{ tab: 'logs' }}
+                        className="text-sm font-medium text-accent hover:underline"
+                      >
+                        Open site
+                      </Link>
+                    )}
+                  </span>
+                  <span className="text-sm text-text-muted">
+                    {machines.length} machine{machines.length === 1 ? '' : 's'}
+                  </span>
+                </summary>
+                <div className="flex flex-col gap-2 border-t border-border p-2">
+                  {machines.map(([key, rows]) => (
+                    <MachineGroup
+                      key={key}
+                      rentalId={rows[0]!.rentalId}
+                      equipmentId={rows[0]!.equipmentId}
+                      machine={machineName(rows[0]!.equipmentId)}
+                      bookingCode={rentalName(rows[0]!.rentalId)}
+                      customer={customerName(rows[0]!.rentalId)}
+                      rows={rows}
+                      columns={columns}
+                      onOpen={setViewing}
+                    />
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         ))}
@@ -372,6 +389,18 @@ function EdtrPage() {
         />
       )}
 
+      {reviewing && (
+        <ReviewDayModal
+          item={reviewing}
+          machine={machineName(reviewing.equipmentId)}
+          onClose={() => setReviewing(null)}
+          onDone={() => {
+            setReviewing(null);
+            void queryClient.invalidateQueries({ queryKey: ['edtr'] });
+          }}
+        />
+      )}
+
       {approving && (
         <ApproveModal
           item={approving}
@@ -388,10 +417,20 @@ function EdtrPage() {
   );
 }
 
-function groupByRental(items: EdtrListItem[]): [string, EdtrListItem[]][] {
-  const groups = new Map<string, EdtrListItem[]>();
-  for (const item of items) groups.set(item.rentalId, [...(groups.get(item.rentalId) ?? []), item]);
-  return [...groups];
+// Site, then each deployed machine (one booking, one unit) on it. Sites keep the order of their newest log.
+function groupBySite(
+  items: EdtrListItem[],
+  siteOf: (rentalId: string) => string | undefined,
+): [string, [string, EdtrListItem[]][]][] {
+  const sites = new Map<string, Map<string, EdtrListItem[]>>();
+  for (const item of items) {
+    const site = siteOf(item.rentalId) ?? '';
+    const machines = sites.get(site) ?? new Map<string, EdtrListItem[]>();
+    const key = `${item.rentalId}|${item.equipmentId}`;
+    machines.set(key, [...(machines.get(key) ?? []), item]);
+    sites.set(site, machines);
+  }
+  return [...sites].map(([site, machines]) => [site, [...machines]]);
 }
 
 interface DepositSummary {
@@ -402,66 +441,82 @@ interface DepositSummary {
   hoursOrdered: number | null;
 }
 
-function RentalGroup({
+// One deployed machine: its days by Mon-Sun week, each week closed by its billing bar.
+function MachineGroup({
   rentalId,
-  label,
+  equipmentId,
+  machine,
+  bookingCode,
   customer,
-  site,
-  siteId,
   rows,
   columns,
   onOpen,
 }: {
   rentalId: string;
-  label: string;
+  equipmentId: string;
+  machine: string;
+  bookingCode: string;
   customer: string;
-  site: string;
-  siteId: string | undefined;
   rows: EdtrListItem[];
   columns: TableColumn<EdtrListItem>[];
   onOpen: (row: EdtrListItem) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const ledger = useQuery({
     queryKey: ['edtr', 'deposit', rentalId] as const,
     queryFn: () => apiGet<DepositSummary>(`/rentals/${rentalId}/deposit`),
+    enabled: open,
   });
   const d = ledger.data;
+  const weeks = new Map<string, EdtrListItem[]>();
+  for (const row of [...rows].sort((a, b) => b.reportDate.localeCompare(a.reportDate))) {
+    const week = weekStart(row.reportDate);
+    weeks.set(week, [...(weeks.get(week) ?? []), row]);
+  }
+  const toReview = rows.filter((r) => r.reconciliation && APPROVABLE.has(r.reconciliation.status)).length;
   return (
-    <details open className="min-w-0 overflow-hidden rounded-md border border-border" data-testid="rental-group">
+    <details
+      className="min-w-0 overflow-hidden rounded-md border border-border"
+      data-testid="machine-group"
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary className="flex min-w-0 cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
         <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="min-w-0 break-words font-medium text-text">{label} <span className="font-normal text-text-muted">· {site}</span></span>
-          {siteId && (
-            <Link
-              to="/app/deployment/$siteId"
-              params={{ siteId }}
-              search={{ tab: 'logs' }}
-              className="text-sm font-medium text-accent hover:underline"
-            >
-              Open site
-            </Link>
-          )}
+          <span className="min-w-0 break-words font-medium text-text">{machine}</span>
+          <span className="font-mono text-sm text-text-muted">{bookingCode}</span>
+          <span className="text-sm text-text-muted">{customer}</span>
         </span>
         <span className="flex shrink-0 flex-wrap gap-2 text-sm text-text-muted">
+          {toReview > 0 && <span className="text-accent">{toReview} to review</span>}
           <span>
             {rows.length} log{rows.length === 1 ? '' : 's'}
           </span>
         </span>
       </summary>
-      <p className="border-t border-border px-4 py-2 text-xs text-text-muted">Customer: {customer}</p>
-      {d && <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-border px-4 py-2 text-xs text-text-muted">
-        <span data-testid="rental-hours">{formatHours(d.hoursUsed)} used{d.hoursOrdered != null ? ` / ${formatHours(d.hoursOrdered)} ordered` : ''}</span>
-        <span data-testid="rental-deposit">Deposit left {formatPeso(d.balanceRemaining)}</span>
-        {d.unbilledAccrued > 0 && <span className="text-error">{formatPeso(d.unbilledAccrued)} on next invoice</span>}
-      </div>}
-      <Table
-        cardUntil={1279}
-        rows={rows}
-        rowKey={(row) => row.id}
-        columns={columns}
-        onRowClick={onOpen}
-        rowLabel={(row) => `Open field log ${shortCode('log', row.id)}`}
-      />
+      {d && (
+        <div className="flex flex-wrap gap-x-5 gap-y-1 border-t border-border px-4 py-2 text-xs text-text-muted">
+          <span data-testid="rental-hours">{formatHours(d.hoursUsed)} used{d.hoursOrdered != null ? ` / ${formatHours(d.hoursOrdered)} ordered` : ''}</span>
+          <span data-testid="rental-deposit">Deposit left {formatPeso(d.balanceRemaining)}</span>
+          {d.unbilledAccrued > 0 && <span className="text-error">{formatPeso(d.unbilledAccrued)} on next invoice</span>}
+        </div>
+      )}
+      {open &&
+        [...weeks].map(([week, weekRows]) => (
+          <section key={week} aria-label={`Week of ${formatDate(week)}`} className="border-t border-border">
+            <h3 className="px-4 pt-2 text-xs font-semibold text-text-muted">
+              Week of {formatDate(week)} – {formatDate(addDaysIso(week, 6))}
+            </h3>
+            <Table
+              cardUntil={1279}
+              rows={weekRows}
+              rowKey={(row) => row.id}
+              columns={columns}
+              onRowClick={onOpen}
+              rowLabel={(row) => `Open field log ${shortCode('log', row.id)}`}
+            />
+            <WeekBillBar rentalId={rentalId} equipmentId={equipmentId} weekStart={week} />
+          </section>
+        ))}
     </details>
   );
 }
@@ -563,6 +618,60 @@ function FieldLogDrawer({
           </>
         )}
       </div>
+    </Modal>
+  );
+}
+
+// A day with one log: the office checks the timekeeper's figures against the sheet and approves them as the
+// second log (POST /edtr/:id/review), the same path as the site hub. What is approved is what is billed.
+function ReviewDayModal({ item, machine, onClose, onDone }: { item: EdtrListItem; machine: string; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const detail = useQuery(edtrQueries.detail(item.id));
+  const [values, setValues] = useState<HourFieldValues | null>(null);
+  const [busy, setBusy] = useState(false);
+  const line = detail.data?.lineItems[0];
+  const shown = values ?? (line ? hourValuesFrom(line) : EMPTY_HOURS);
+  async function approve() {
+    const hours = toLineItems(shown);
+    if (!hours) {
+      toast.error('Check the hours', 'Enter the running hours, and only numbers of zero or more.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiPost(`/edtr/${item.id}/review`, { decision: 'approve', hours });
+      toast.success('Day approved', 'It now counts in the week billable total.');
+      onDone();
+    } catch (err) {
+      toast.error('Could not approve the day', apiErrorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      placement="right"
+      size="lg"
+      title={`${formatDate(item.reportDate)} · ${machine}`}
+      description="Check the figures against the sheet, then approve."
+      footer={
+        <Button variant="approve" loading={busy} disabled={!detail.data} onClick={() => void approve()}>
+          Approve
+        </Button>
+      }
+    >
+      {detail.isPending ? (
+        <p className="text-sm text-text-muted">Loading the sheet...</p>
+      ) : detail.isError ? (
+        <p className="text-sm text-error">The day could not be loaded.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <FieldLogEvidence detail={detail.data} />
+          <HourFields value={shown} onChange={setValues} idPrefix="review-day" />
+        </div>
+      )}
     </Modal>
   );
 }

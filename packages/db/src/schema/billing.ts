@@ -229,6 +229,10 @@ export const billingSettings = pgTable(
     demobilizationPhp: numeric('demobilization_php', { precision: 12, scale: 2 }).notNull().default('0'),
     minHours: numeric('min_hours', { precision: 8, scale: 2 }).notNull().default('0'),
     holdHours: integer('hold_hours').notNull().default(48),
+    // On: approved EDTR hours skip the deposit and wait for the weekly invoice (demo / office choice). Off by default.
+    skipDepositForEdtr: boolean('skip_deposit_for_edtr').notNull().default(false),
+    // Demo: approve scanned days with no attested OCR accuracy measurement; each such approval is audit-logged.
+    skipOcrAccuracyGate: boolean('skip_ocr_accuracy_gate').notNull().default(false),
     // TierPolicy; null means DEFAULT_TIER_POLICY.
     tierPolicy: jsonb('tier_policy'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

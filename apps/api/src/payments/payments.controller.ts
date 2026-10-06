@@ -2,7 +2,7 @@ import { Body, Controller, Param, Post, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { PaymentsService } from './payments.service.js';
-import { CheckoutRequestDto, CouponPreviewRequestDto, InvoiceAmountUpdateDto, OfficePaymentDto, RefundRequestDto } from './dto.js';
+import { CheckoutRequestDto, CouponPreviewRequestDto, InvoiceAmountUpdateDto, InvoiceVoidDto, OfficePaymentDto, RefundRequestDto } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
 @Controller('bookings')
@@ -79,6 +79,14 @@ export class TruckPaymentsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   adjustAmount(@Param('id') id: string, @Body() body: InvoiceAmountUpdateDto, @Req() req: CtxRequest) {
     return this.payments.adjustAmount(req.ctx, id, body);
+  }
+
+  // Unpaid weekly bills and deposit deductions only; the field-log hours go back to waiting for Approve & bill.
+  @Post('invoices/:id/void')
+  @RequirePermission('quote:approve')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  voidBill(@Param('id') id: string, @Body() body: InvoiceVoidDto, @Req() req: CtxRequest) {
+    return this.payments.voidBill(req.ctx, id, body);
   }
 
   @Post('invoices/:id/cash-payment')

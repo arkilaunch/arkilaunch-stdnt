@@ -69,6 +69,21 @@ export function notificationEmail(
             `Amount due: ${peso(inv.amountPhp)}\n${inv.dueDate ? `Due by: ${day(inv.dueDate)}\n` : ''}Invoice: ${inv.invoiceId}\n\n` +
             `View and pay invoice: ${base}/account/invoices/${inv.invoiceId}${SIGN}`,
         };
+      case 'weekly_statement': {
+        // Every billed week, even when the deposit paid for it all, so the customer sees each week's use.
+        const n = (k: string) => (typeof payload[k] === 'number' ? (payload[k] as number) : 0);
+        const due = n('due_php');
+        return {
+          subject: `Weekly statement for ${ref}: ${n('hours').toFixed(1)} h, ${due > 0 ? `${peso(due)} to pay` : 'nothing to pay'}`,
+          text:
+            `Here is this week's use on booking ${ref}${typeof payload.week_start === 'string' ? ` (week of ${payload.week_start})` : ''}.\n\n` +
+            `Billable hours: ${n('hours').toFixed(1)} h\n` +
+            `Paid from your deposit: ${peso(n('from_deposit_php'))}\n` +
+            `Deposit left: ${peso(n('deposit_left_php'))}\n` +
+            `To pay this week: ${peso(due)}\n\n` +
+            `View your statement: ${base}/account/bookings/${inv.rentalId}/statement${SIGN}`,
+        };
+      }
       default:
         return null;
     }

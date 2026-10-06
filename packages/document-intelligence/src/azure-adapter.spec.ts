@@ -227,6 +227,40 @@ describe('AzureDocumentIntelligenceAdapter', () => {
     ]);
   });
 
+  it("takes a tick cell's confidence from its selection marks, which carry no words", async () => {
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(
+        new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: 'succeeded',
+          analyzeResult: {
+            pages: [
+              {
+                words: [],
+                selectionMarks: [
+                  { state: 'selected', confidence: 0.98, span: { offset: 0, length: 10 } },
+                  { state: 'unselected', confidence: 0.94, span: { offset: 11, length: 12 } },
+                ],
+              },
+            ],
+            tables: [
+              {
+                rowCount: 1,
+                columnCount: 1,
+                cells: [{ rowIndex: 0, columnIndex: 0, content: ':selected: :unselected:', spans: [{ offset: 0, length: 23 }] }],
+              },
+            ],
+          },
+        }),
+      );
+
+    const adapter = new AzureDocumentIntelligenceAdapter({ endpoint: ENDPOINT, apiKey: 'k' });
+    const result = await adapter.analyze(EDTR_MODEL_ID, Buffer.from('x'));
+    expect(result.tables![0]!.cells[0]!.confidence).toBe(0.94);
+  });
+
   it('floors a cell to zero confidence when its words cannot be located', async () => {
     // Below the 0.90 gate, so the day routes to a human.
     (fetch as ReturnType<typeof vi.fn>)

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
 import { round2HalfUp } from './pricing.js';
 import { WEATHER_CODES } from './weather-attestation.js';
+import type { ApprovedDayHours } from './field-logs.js';
 
 // RFC-2: OCR output is data, never a command; validate before any use (AI-02).
 export const OcrFieldSchema = z.object({
@@ -32,11 +33,16 @@ export const OcrPayloadSchema = z.object({
       pmWindow: z.tuple([z.number(), z.number()]).nullable(),
     })
     .optional(),
+  // The sheet's handwritten WEEK SUMMARY, kept on every day of the sheet for the office's week cross-check.
+  week_summary: z.object({ billable: z.number().nullable(), not_billed: z.number().nullable() }).optional(),
 });
 export type OcrPayload = z.infer<typeof OcrPayloadSchema>;
 
 // Seed default only; the live tolerance is per-row on edtr_reconciliations.tolerance.
 export const CONFIDENCE_GATE = 0.9;
+// Tick boxes (weather, STD SHIFT) feed review flags and the TOTAL cross-check only, never the billed figure, and
+// Azure scores scanned selection marks lower than text (0.68-0.69 on EQR-2026-0013). Digits keep CONFIDENCE_GATE.
+export const TICK_CONFIDENCE_GATE = 0.6;
 export const DEFAULT_TOLERANCE_HOURS = 0.25;
 
 // Not a real model: marks hours a human read off the paper sheet.
@@ -477,3 +483,75 @@ export type EdtrReviewRequest = z.infer<typeof EdtrReviewRequestSchema>;
 
 export const FIELD_LOG_DAY_STATUSES = ['missing', 'pending', 'needs_correction', 'approved', 'rejected'] as const;
 export type FieldLogDayStatus = (typeof FIELD_LOG_DAY_STATUSES)[number];
+
+// ---- Week view and "Approve & bill" (cr-arkilaunch-edtr-site-hub-approval.md, week addendum) ----
+
+// open: a logged day is still undecided. ready: all decided, hours past the deposit wait to be invoiced.
+// billed: this week's hours are invoiced. covered: nothing to invoice (deposit paid for it, or no hours).
+export const WEEK_BILL_STATES = ['open', 'ready', 'billed', 'covered'] as const;
+export type WeekBillState = (typeof WEEK_BILL_STATES)[number];
+
+export interface EdtrWeekDay {
+  date: string;
+  status: FieldLogDayStatus;
+  edtrId: string | null;
+  // What the timekeeper or the scan wrote; prefills an undecided day.
+  reading: EdtrLineItemsInput | null;
+  // What the office decided (approved days only).
+  hours: ApprovedDayHours | null;
+  flags: string[];
+}
+
+export interface EdtrWeekResponse {
+  rentalId: string;
+  equipmentId: string;
+  weekStart: string;
+  unitName: string;
+  bookingCode: string;
+  days: EdtrWeekDay[];
+  // Approved days only, summed.
+  totals: ApprovedDayHours;
+  // The sheet's handwritten WEEK SUMMARY, if the scan read it.
+  sheetSummary: { billable: number | null; notBilled: number | null } | null;
+  billState: WeekBillState;
+  unbilledPhp: number;
+  lastBilledAt: string | null;
+}
+
+export const EdtrWeekBillRequestSchema = z.object({
+  weekBillableHours: z.number().finite().min(0).max(24 * 7),
+  sheetBillableHours: z.number().finite().min(0).max(24 * 7).nullable(),
+  mismatchNote: z.string().trim().max(500).optional(),
+});
+export type EdtrWeekBillRequest = z.infer<typeof EdtrWeekBillRequestSchema>;
+
+export interface EdtrWeekBillResponse {
+  invoiceId: string | null;
+  amountPhp: number;
+  soaEmailedTo: string | null;
+}
+
+export const WEEK_SUMMARY_TOLERANCE_HOURS = 0.1;
+
+// Why "Approve & bill" may not run, or null. Pure, so the screen and the server agree (RFC-2: a person
+// decides every day, and a week that disagrees with its own sheet needs a written reason).
+export function weekBillBlock(input: {
+  days: Pick<EdtrWeekDay, 'date' | 'status'>[];
+  billableHours: number;
+  request: EdtrWeekBillRequest;
+}): { error: 'week_not_reviewed'; dates: string[] } | { error: 'week_total_changed'; billableHours: number } | { error: 'week_summary_mismatch'; sheet: number; days: number } | null {
+  const undecided = input.days.filter((d) => d.status === 'pending' || d.status === 'needs_correction').map((d) => d.date);
+  if (undecided.length > 0) return { error: 'week_not_reviewed', dates: undecided };
+  if (Math.abs(input.billableHours - input.request.weekBillableHours) > 0.01) {
+    return { error: 'week_total_changed', billableHours: input.billableHours };
+  }
+  const sheet = input.request.sheetBillableHours;
+  if (
+    sheet !== null &&
+    Math.abs(sheet - input.billableHours) > WEEK_SUMMARY_TOLERANCE_HOURS &&
+    (input.request.mismatchNote ?? '').length < 3
+  ) {
+    return { error: 'week_summary_mismatch', sheet, days: input.billableHours };
+  }
+  return null;
+}

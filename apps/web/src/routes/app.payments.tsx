@@ -78,8 +78,67 @@ export function InvoiceDetail({ invoice, onDone }: { invoice: InvoiceSummaryResp
         {invoice.status === 'issued' && <RecordCash invoice={invoice} onDone={onDone} />}
         {invoice.status === 'issued' && ADJUSTABLE.has(invoice.invoiceType) && <ChangeAmount invoice={invoice} onDone={onDone} />}
         {invoice.status === 'paid' && invoice.invoiceType !== 'deposit_deduction' && <RefundPayment invoice={invoice} />}
+        {((invoice.invoiceType === 'weekly' && invoice.status === 'issued') ||
+          (invoice.invoiceType === 'deposit_deduction' && invoice.status !== 'void')) && <VoidBill invoice={invoice} onDone={onDone} />}
       </div>
     </div>
+  );
+}
+
+// Field-log bills only. The voided bill stays in history; its hours go back to waiting, and Approve & bill
+// in Field logs makes a new bill (new reference). Paid weekly bills are refunded instead.
+function VoidBill({ invoice, onDone }: { invoice: InvoiceSummaryResponse; onDone: () => void }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const close = () => {
+    setOpen(false);
+    setReason('');
+  };
+  const voidIt = useMutation({
+    mutationFn: () => apiPost(`/invoices/${invoice.id}/void`, { reason: reason.trim() }),
+    onSuccess: () => {
+      toast.success('Bill voided', 'Its hours are back in Field logs, ready for Approve & bill.');
+      close();
+      void queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      void queryClient.invalidateQueries({ queryKey: ['edtr'] });
+      onDone();
+    },
+    onError: (e) =>
+      toast.error(
+        'Not voided',
+        e instanceof ApiError && e.message === 'void_weekly_bill_first'
+          ? 'Part of these hours is on an unpaid weekly bill. Void that weekly bill first.'
+          : apiErrorText(e),
+      ),
+  });
+  return (
+    <>
+      <Button variant="destructive" onClick={() => setOpen(true)}>
+        Void bill
+      </Button>
+      <Modal
+        open={open}
+        onClose={voidIt.isPending ? () => undefined : close}
+        title={`Void ${shortCode('invoice', invoice.id)}?`}
+        description="The bill stays in history as Void. Its field-log hours go back to waiting, so Approve & bill in Field logs makes a new bill with a new reference."
+        size="sm"
+        dismissOnScrim={false}
+        footer={
+          <>
+            <Button variant="ghost" onClick={close} disabled={voidIt.isPending}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={reason.trim().length < 3} loading={voidIt.isPending} onClick={() => voidIt.mutate()}>
+              Void bill
+            </Button>
+          </>
+        }
+      >
+        <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} hint="Saved in the audit log." />
+      </Modal>
+    </>
   );
 }
 
