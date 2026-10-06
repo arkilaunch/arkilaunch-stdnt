@@ -45,6 +45,7 @@ export type DeploymentCreateRequest = z.infer<typeof DeploymentCreateRequestSche
 export const IncidentListQuerySchema = PaginationQuerySchema.extend({
   projectSiteId: z.string().uuid().optional(),
   kind: z.enum(['weather', 'discrepancy', 'used_despite_warning']).optional(),
+  edtrId: z.string().uuid().optional(),
 });
 
 export const SiteDeploymentFilterSchema = z.enum(['active', 'upcoming', 'idle']);
@@ -104,6 +105,9 @@ export const IncidentResponseSchema = z.object({
   occurredAt: z.coerce.date(),
   kind: z.enum(['weather', 'discrepancy', 'used_despite_warning']),
   detail: z.string().nullable(),
+  // Set on EDTR-born incidents (discrepancy, used despite warning), so the log can open the field log.
+  edtrId: z.string().uuid().nullable(),
+  half: z.enum(['am', 'pm', 'day']).nullable(),
 });
 export type IncidentResponse = z.infer<typeof IncidentResponseSchema>;
 

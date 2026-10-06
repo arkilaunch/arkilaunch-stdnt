@@ -51,6 +51,16 @@ function toOcrPayload(day: EdtrSheetDay): OcrPayload {
     fields,
     min_field_confidence: day.confidence,
     pages: 1,
+    ...(day.v2
+      ? {
+          weather: {
+            am: day.v2.weatherAm,
+            pm: day.v2.weatherPm,
+            amWindow: day.v2.amWindow,
+            pmWindow: day.v2.pmWindow,
+          },
+        }
+      : {}),
   });
 }
 
@@ -222,7 +232,10 @@ export async function runEdtrOcrWorker(
 
             // RFC-2 money gate: reconcile before anything can deduct.
             await reconcileEdtr(tx, row.tenantId, edtrId);
-            await flagUsedDespiteWarning(tx, row.tenantId, edtrId);
+            const usedHalves = await flagUsedDespiteWarning(tx, row.tenantId, edtrId, {
+              am: day.v2?.amWindow,
+              pm: day.v2?.pmWindow,
+            });
 
             if (day.totalMismatch) {
               // A self-contradicting sheet overrides a passing reconciliation.
@@ -253,6 +266,17 @@ export async function runEdtrOcrWorker(
                   })
                   .where(eq(edtr.id, edtrId));
               }
+            }
+
+            // Worked through a stop_work warning: a human decides, like D1/D2. Money is untouched (RFC-2).
+            if (usedHalves.length > 0) {
+              await tx
+                .update(edtr)
+                .set({
+                  status: 'review',
+                  lastError: sql`coalesce(${edtr.lastError} || ';', '') || ${`used_despite_stop_work:${usedHalves.join(',')}`}`,
+                })
+                .where(eq(edtr.id, edtrId));
             }
 
             // A sheet filed under the wrong booking or unit never bills on its own, however well it reconciles.

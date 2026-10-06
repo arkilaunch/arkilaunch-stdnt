@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Button } from './button.js';
 import { describeUploadProblem, prepareUpload, type PrepareUploadOptions } from '../lib/image-compression.js';
-import { analyzeDocument, analyzePickedDocument, loadDocumentScanner, steadyHold, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
+import { analyzeDocument, analyzePickedDocument, detectSheetMarks, loadDocumentScanner, steadyHold, straightenBySheetMarks, straightenDocument, type ScanCorners } from '../lib/document-scanner.js';
 
 // getUserMedia is missing on insecure origins and rejects without permission or a camera: always keep the file-input fallback.
 // KYC enables local edge detection; field sheets keep the lightweight manual frame.
@@ -19,12 +19,24 @@ export interface CaptureFieldProps {
   /** Omit for OCR/KYC: Azure DI depends on prepareUpload's defaults. */
   uploadOptions?: PrepareUploadOptions;
   scanner?: boolean;
+  /** Page ratios (long / short) the straightened scan snaps to, e.g. Letter and Legal for field sheets. */
+  snapAspect?: readonly number[] | undefined;
+  /** eDTR sheets: find the printed corner marks to crop, turn upright and even out the light. */
+  sheetMarks?: boolean;
   onAccepted?: ((file: File) => void) | undefined;
 }
 
 // TypeScript's DOM lib does not model torch.
 type TorchCapableTrack = Omit<MediaStreamTrack, 'getCapabilities'> & {
-  getCapabilities?: () => { torch?: boolean };
+  getCapabilities?: () => { torch?: boolean; focusMode?: string[] };
+};
+
+type PhotoIssue = 'dark' | 'glare' | 'blurry' | 'no_document';
+const ISSUE_TEXT: Record<PhotoIssue, string> = {
+  dark: 'The photo is too dark to read the handwriting reliably.',
+  glare: 'There is glare on the sheet that may hide numbers.',
+  blurry: 'The photo looks blurry; small numbers may not be read.',
+  no_document: 'The edges of the sheet were not found; part of it may be cut off.',
 };
 
 function formatBytes(bytes: number): string {
@@ -45,6 +57,8 @@ export function CaptureField({
   sessionData,
   uploadOptions,
   scanner = false,
+  snapAspect,
+  sheetMarks = false,
   onAccepted,
 }: CaptureFieldProps) {
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -78,6 +92,8 @@ export function CaptureField({
   const [adjusting, setAdjusting] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewPreview, setReviewPreview] = useState<string | null>(null);
+  // Same checks auto-capture waits for, applied to shutter taps and gallery picks too.
+  const [photoIssue, setPhotoIssue] = useState<PhotoIssue | null>(null);
 
   useEffect(() => {
     if (!scanner || value || pending) return;
@@ -222,9 +238,21 @@ export function CaptureField({
     setCorrected(null);
     setAdjusting(false);
     setReviewing(autoAccept);
+    // Printed marks beat the paper edge: a hand or a busy background breaks the edge, not the marks.
+    const marks = sheetMarks && source ? await detectSheetMarks(source).catch(() => null) : null;
+    if (marks && source) {
+      try {
+        const straightened = await straightenBySheetMarks(source, marks);
+        if (reviewId !== reviewIdRef.current) return;
+        setCorrected(straightened);
+        setPhotoIssue((issue) => (issue === 'no_document' ? null : issue));
+        if (autoAccept) await acceptReview(straightened);
+        return;
+      } catch { /* Fall back to the paper edge below. */ }
+    }
     if (source && detected) {
       try {
-        const straightened = await straightenDocument(source, detected);
+        const straightened = await straightenDocument(source, detected, { snapAspect });
         if (reviewId !== reviewIdRef.current) return;
         setCorrected(straightened);
         if (autoAccept) await acceptReview(straightened);
@@ -255,6 +283,7 @@ export function CaptureField({
           context.drawImage(bitmap, 0, 0, source.width, source.height);
           let detected: ScanCorners | undefined;
           let clear = false;
+          let issue: PhotoIssue | null = null;
           try {
             const cv = await loadDocumentScanner();
             const sample = document.createElement('canvas');
@@ -267,8 +296,25 @@ export function CaptureField({
             if (found) {
               detected = found.corners.map(({ x, y }) => ({ x: x / sampleScale, y: y / sampleScale })) as ScanCorners;
               clear = found.quality === 'ready';
+              issue = found.quality === 'ready' ? null : found.quality;
+            } else {
+              issue = 'no_document';
             }
           } catch { /* Manual correction stays available when vision fails. */ }
+          // Already a scan (a flatbed or scanner app gives exactly the paper's shape): keep the whole page.
+          // Hunting for an edge there finds the printed table border and crops off the header and QR.
+          const ratio = Math.max(source.width, source.height) / Math.min(source.width, source.height);
+          if (pickedFile && snapAspect?.some((target) => Math.abs(ratio - target) / target < 0.02)) {
+            detected = [
+              { x: 0, y: 0 },
+              { x: source.width, y: 0 },
+              { x: source.width, y: source.height },
+              { x: 0, y: source.height },
+            ];
+            clear = true;
+            issue = null;
+          }
+          setPhotoIssue(issue);
           await beginReview(picked, source, detected, clear);
         } finally { bitmap.close?.(); }
       } catch (error) {
@@ -295,6 +341,17 @@ export function CaptureField({
     if (fileRef.current) fileRef.current.value = '';
     if (!picked) return;
     await hand(picked, event.target === fileRef.current);
+  }
+
+  // Tap to refocus where the phone supports it; elsewhere a tap does nothing.
+  function focusAt(event: React.MouseEvent<HTMLVideoElement>) {
+    const track = streamRef.current?.getVideoTracks()[0] as unknown as (TorchCapableTrack & MediaStreamTrack) | undefined;
+    if (!track?.getCapabilities?.().focusMode?.includes('single-shot')) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const point = { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+    void track
+      .applyConstraints({ advanced: [{ focusMode: 'single-shot', pointsOfInterest: [point] } as MediaTrackConstraintSet] })
+      .catch(() => {});
   }
 
   // Full sensor resolution; prepareUpload downscales afterwards.
@@ -351,14 +408,14 @@ export function CaptureField({
   async function applyCorners() {
     if (!sourceRef.current || !corners) return;
     setReviewing(true);
-    try { setCorrected(await straightenDocument(sourceRef.current, corners)); setAdjusting(false); }
+    try { setCorrected(await straightenDocument(sourceRef.current, corners, { snapAspect })); setAdjusting(false); }
     catch { setProblem({ title: 'Could not straighten the photo', detail: 'Try again or use the original.' }); }
     finally { setReviewing(false); }
   }
 
   function cancelReview() {
     reviewIdRef.current++;
-    setPending(null); setCorrected(null); setCorners(null); sourceRef.current = null;
+    setPending(null); setCorrected(null); setCorners(null); setPhotoIssue(null); sourceRef.current = null;
     takingRef.current = false; setAdjusting(false); holdStartRef.current = null;
   }
 
@@ -467,12 +524,17 @@ export function CaptureField({
                   ))}
                 </div>
               )}
+              {photoIssue && !reviewing && (
+                <p role="alert" className="border-l-4 border-recon-review pl-2 text-sm text-text">
+                  {ISSUE_TEXT[photoIssue]} Retake for the best result, or use it anyway.
+                </p>
+              )}
               <p role="status" className="text-sm text-text-muted">{reviewing ? 'Preparing the scan automatically…' : adjusting ? 'Drag the four corners to the edges of the document, then apply them.' : corrected ? 'Check that the whole document is visible and the text is clear.' : 'No clear document edges were found. Adjust the corners or use the original photo.'}</p>
               <div className="flex flex-wrap gap-2">
                 {adjusting ? (
                   <Button variant="primary" disabled={busy} onClick={() => void applyCorners()}>Apply corners</Button>
                 ) : (
-                  <Button variant="primary" disabled={busy} onClick={() => void acceptReview(corrected ?? pending)}>{pending.type === 'application/pdf' ? 'Use file' : corrected ? 'Use scan' : 'Use original photo'}</Button>
+                  <Button variant="primary" disabled={busy} onClick={() => void acceptReview(corrected ?? pending)}>{pending.type === 'application/pdf' ? 'Use file' : photoIssue ? 'Use anyway' : corrected ? 'Use scan' : 'Use original photo'}</Button>
                 )}
                 {sourceRef.current && <Button variant="secondary" disabled={busy} onClick={() => setAdjusting(!adjusting)}>{adjusting ? 'Cancel adjustment' : 'Adjust corners'}</Button>}
                 {corrected && !adjusting && <Button variant="ghost" disabled={busy} onClick={() => void acceptReview(pending)}>Use original</Button>}
@@ -541,6 +603,7 @@ export function CaptureField({
                 autoPlay
                 playsInline
                 muted
+                onClick={focusAt}
                 className={scanner ? 'aspect-[4/3] w-full object-contain' : 'aspect-[3/4] w-full object-contain sm:aspect-[4/3]'}
               />
               {scanner && (

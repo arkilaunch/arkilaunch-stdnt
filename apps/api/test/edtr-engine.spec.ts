@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it, beforeAll } from 'vitest';
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import postgres from 'postgres';
@@ -190,10 +191,16 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     expect(polled.status).toBe('reconciled');
     expect(polled.reconciliation?.status).toBe('matched');
 
+    // The preview prices exactly what approve() then deducts.
+    const preview = await edtr.billPreview(adminCtx, digital.id, {});
     const approved = await edtr.approve(adminCtx, digital.id, { reconciliationId: polled.reconciliation!.id });
     expect(approved.reconciliation.status).toBe('approved');
     expect(approved.deposit.deducted).toBeGreaterThanOrEqual(0);
     expect(approved.invoiceLine.sourceLogs).toContain(digital.id);
+    expect(preview.deducted).toBe(approved.deposit.deducted);
+    expect(preview.balanceBefore).toBe(approved.deposit.balanceBefore);
+    expect(preview.accrued).toBe(approved.deposit.accrued ?? 0);
+    expect(preview.amount).toBeCloseTo(preview.billableHours * preview.hourlyRate, 2);
   });
 
   // The second side of an approved pair must 409, so one day's work yields one deduction and one accrual.
@@ -444,7 +451,7 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
   // QAD-T29 extended to reads: a timekeeper's queue excludes EDTRs on sites
   // they are not assigned to, even ones that already exist.
   it('QAD-T29 (read): a timekeeper only sees EDTRs tied to sites they are assigned to', async () => {
-    await withTenantTx(adminCtx, (tx) =>
+    const [hidden] = await withTenantTx(adminCtx, (tx) =>
       tx.insert(edtrTable).values({
         tenantId: adminCtx.tenantId,
         rentalId: unassignedRentalId,
@@ -452,8 +459,13 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
         source: 'digital_entry',
         reportDate: '2021-03-07',
         status: 'review',
-      }),
+      }).returning({ id: edtrTable.id }),
     );
+
+    // Detail and scan read as not found too, not only the list.
+    await expect(edtr.get(timekeeperCtx, hidden!.id)).rejects.toThrow();
+    await expect(edtr.rawFileKey(timekeeperCtx, hidden!.id)).rejects.toThrow();
+    expect((await edtr.get(adminCtx, hidden!.id)).id).toBe(hidden!.id);
 
     const { items } = await edtr.list(timekeeperCtx, { limit: 200, offset: 0 });
     expect(items.every((item) => item.rentalId !== unassignedRentalId)).toBe(true);
@@ -461,6 +473,54 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
 
     const adminView = await edtr.list(adminCtx, { rentalId: unassignedRentalId, limit: 10, offset: 0 });
     expect(adminView.total).toBeGreaterThan(0);
+  });
+
+  it('a retried capture with the same captureId returns the first log instead of a twin', async () => {
+    const captureId = randomUUID();
+    const body = {
+      source: 'digital_entry' as const,
+      rentalId,
+      equipmentId,
+      reportDate: '2021-03-05',
+      lineItems: { hoursActive: 5, hoursIdle: 0 },
+      captureId,
+    };
+    const first = await edtr.capture(adminCtx, body);
+    const retry = await edtr.capture(adminCtx, body);
+    expect(retry.id).toBe(first.id);
+  });
+
+  it('a sheet the worker could not read shows why, and an approver can type its hours once', async () => {
+    const [failed] = await withTenantTx(adminCtx, (tx) =>
+      tx
+        .insert(edtrTable)
+        .values({
+          tenantId: adminCtx.tenantId,
+          rentalId,
+          equipmentId,
+          source: 'paper_ocr',
+          reportDate: '2021-03-06',
+          rawFileUri: 'storage://fixtures/blurry.jpg',
+          status: 'hard_failed',
+          lastError: 'unreadable_total_hours:3',
+        })
+        .returning({ id: edtrTable.id }),
+    );
+    expect((await edtr.get(adminCtx, failed!.id)).failureReason).toBe('unreadable_total_hours:3');
+
+    const after = await edtr.transcribe(adminCtx, failed!.id, { hoursActive: 6, hoursIdle: 1 });
+    expect(after.status).not.toBe('hard_failed');
+    expect(after.failureReason).toBeNull();
+    expect(after.extraction?.isManualTranscription).toBe(true);
+    expect(after.lineItems[0]?.hoursActive).toBe(6);
+    // The reviewer's rotation is saved for everyone and changes nothing else.
+    expect(after.scanRotation).toBe(0);
+    await edtr.setRotation(adminCtx, failed!.id, 90);
+    const turned = await edtr.get(adminCtx, failed!.id);
+    expect(turned.scanRotation).toBe(90);
+    expect(turned.lineItems[0]?.hoursActive).toBe(6);
+    // Never twice: the row is no longer a failed sheet.
+    await expect(edtr.transcribe(adminCtx, failed!.id, { hoursActive: 7, hoursIdle: 0 })).rejects.toThrow();
   });
 
   // PRD §5.3 "Review -> Rejected -> Capture" (cr-arkilaunch-f9-read-surface.md).

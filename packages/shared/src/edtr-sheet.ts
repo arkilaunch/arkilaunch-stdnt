@@ -154,18 +154,27 @@ function findColumns(grid: Grid): Columns | null {
   };
 }
 
+// The v3 sheet prints a comb box per digit; the reader returns their outlines as L, J, |, _ and the like.
+// Only digits, the separator and the decimal point are handwriting.
+function handwriting(raw: string): string {
+  return norm(raw).replace(/[^0-9.:]/g, '');
+}
+
+// Times are 4 comb boxes around a printed colon; box edges can come back as extra dots or colons,
+// so the time is read from its digits alone: 0730, 730 -> 07:30.
 function parseTime(raw: string): number | null {
-  const m = /^(\d{1,2})[:.](\d{2})$/.exec(norm(raw));
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
+  const digits = handwriting(raw).replace(/[.:]/g, '');
+  if (digits.length < 3 || digits.length > 4) return null;
+  const h = Number(digits.slice(0, -2));
+  const min = Number(digits.slice(-2));
   if (h > 23 || min > 59) return null;
   return h * 60 + min;
 }
 
 function parseHours(raw: string): number | null {
-  const t = norm(raw).replace(/\s*(HRS?|HOURS?)$/, '');
-  if (t === '') return null;
+  // A box edge at either end can read as a dot; one inside is the decimal point. Two inside is ambiguous: refuse.
+  const t = handwriting(raw).replace(/:/g, '').replace(/^\.+|\.+$/g, '');
+  if (t === '' || (t.match(/\./g)?.length ?? 0) > 1) return null;
   const n = Number(t);
   return Number.isFinite(n) && n >= 0 && n <= 24 ? n : null;
 }
@@ -298,7 +307,8 @@ export function parseEdtrSheet(
     if (isV3) {
       const dayCell = columns.day >= 0 ? norm(row[columns.day] ?? '') : '';
       if (dayCell.includes('OUTSIDE')) continue;
-      if (v3FillColumns(columns).every((c) => norm(row[c] ?? '') === '')) continue;
+      // Written means a digit somewhere: empty comb boxes alone are a blank day, not an unreadable one.
+      if (v3FillColumns(columns).every((c) => !/\d/.test(row[c] ?? ''))) continue;
     }
 
     const reportDate = resolveSheetDate(rawDate, captureDate);

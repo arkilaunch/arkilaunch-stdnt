@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
 import { round2HalfUp } from './pricing.js';
+import { WEATHER_CODES } from './weather-attestation.js';
 
 // RFC-2: OCR output is data, never a command; validate before any use (AI-02).
 export const OcrFieldSchema = z.object({
@@ -22,6 +23,15 @@ export const OcrPayloadSchema = z.object({
   fields: z.array(OcrFieldSchema),
   min_field_confidence: z.number().min(0).max(1),
   pages: z.number().int().min(1),
+  // What the sheet said about weather, kept so a reviewer sees every half, not only the flagged ones.
+  weather: z
+    .object({
+      am: z.enum(WEATHER_CODES).nullable(),
+      pm: z.enum(WEATHER_CODES).nullable(),
+      amWindow: z.tuple([z.number(), z.number()]).nullable(),
+      pmWindow: z.tuple([z.number(), z.number()]).nullable(),
+    })
+    .optional(),
 });
 export type OcrPayload = z.infer<typeof OcrPayloadSchema>;
 
@@ -127,6 +137,8 @@ export const EdtrCaptureRequestSchema = z
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     rawFileUri: z.string().min(1).optional(),
+    // Client-made per capture: a retry after a lost response returns the first row, never a twin that could pair with it.
+    captureId: z.string().uuid().optional(),
     lineItems: EdtrLineItemsInputSchema.optional(),
   })
   .superRefine((data, ctx) => {
@@ -146,6 +158,7 @@ export const EdtrCaptureFieldsSchema = z
     rentalId: z.string().uuid(),
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    captureId: z.string().uuid().optional(),
     // Multipart carries every field as a string, so accept the JSON encoding.
     lineItems: z
       .preprocess((value) => {
@@ -172,6 +185,34 @@ const AdjustmentsSchema = z.object({
   hoursWeather: hours.nullable().optional(),
   hoursOtherDowntime: hours.nullable().optional(),
 });
+
+// PATCH /api/v1/edtr/:id/rotation: how the scan reads upright, saved for every reviewer.
+export const EdtrRotationRequestSchema = z.object({
+  degrees: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+});
+export type EdtrRotationRequest = z.infer<typeof EdtrRotationRequestSchema>;
+
+// GET /api/v1/edtr/:id/bill-preview: the same hours approve() would price; omitted = the stored reading.
+const queryHours = z.coerce.number().pipe(hours).optional();
+export const EdtrBillPreviewQuerySchema = z.object({
+  hoursActive: queryHours,
+  hoursIdle: queryHours,
+  hoursBreakdown: queryHours,
+  hoursWeather: queryHours,
+  hoursOtherDowntime: queryHours,
+});
+export type EdtrBillPreviewQuery = z.infer<typeof EdtrBillPreviewQuerySchema>;
+
+export const EdtrBillPreviewResponseSchema = z.object({
+  billableHours: z.number(),
+  hourlyRate: z.number(),
+  amount: z.number(),
+  balanceBefore: z.number(),
+  deducted: z.number(),
+  accrued: z.number(),
+  balanceAfter: z.number(),
+});
+export type EdtrBillPreviewResponse = z.infer<typeof EdtrBillPreviewResponseSchema>;
 
 export const EdtrApproveRequestSchema = z.object({
   reconciliationId: z.string().uuid(),
@@ -254,6 +295,11 @@ export const EdtrDetailResponseSchema = z.object({
   fields: z.array(EdtrFieldResponseSchema),
   reconciliation: EdtrReconciliationResponseSchema.nullable(),
   extraction: EdtrExtractionResponseSchema.nullable(),
+  // null: pre-weather rows, digital entries, or a sheet without the weather block.
+  weather: OcrPayloadSchema.shape.weather.unwrap().nullable(),
+  reportDate: z.string().nullable(),
+  failureReason: z.string().nullable(),
+  scanRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
 

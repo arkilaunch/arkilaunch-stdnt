@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api-client.js';
-import { explainEdtrError } from './edtr-error.js';
+import { explainEdtrError, failureText } from './edtr-error.js';
 
 describe('explainEdtrError', () => {
   it("shows our own validation message rather than hiding it", () => {
@@ -17,5 +17,16 @@ describe('explainEdtrError', () => {
 
   it('keeps a raw network failure off the screen', () => {
     expect(explainEdtrError(new TypeError('Failed to fetch')).detail).toBe('Try again in a moment.');
+  });
+});
+
+describe('failureText', () => {
+  it('names the rows the worker could not read, in words a timekeeper can act on', () => {
+    expect(failureText('unreadable_total_hours:2026-10-11,2026-10-12')).toBe(
+      'The hours could not be read clearly (for 10/11, 10/12). Retake in better light, or type the hours in.',
+    );
+    expect(failureText('no_timesheet_table')).toMatch(/No timesheet was found/);
+    expect(failureText('something_new')).toBe('The sheet could not be read.');
+    expect(failureText(null)).toBe('The sheet could not be read.');
   });
 });

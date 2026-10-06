@@ -28,6 +28,8 @@ import type {
   InvoiceDetailResponse,
   InvoiceListResponse,
   EdtrDetailResponse,
+  EdtrBillPreviewQuery,
+  EdtrBillPreviewResponse,
   SiteHubResponse,
   SiteDeploymentFilter,
   SiteListResponse,
@@ -238,6 +240,12 @@ export const incidentsQueries = {
       queryKey: ['incidents', limit, offset, kind ?? 'all'] as const,
       queryFn: () =>
         apiGet<IncidentListResponse>(withParams('/incidents', { limit, offset, kind })),
+    }),
+  // Weather flags and stop-work warnings raised by one field log, for the reviewer beside its scan.
+  forFieldLog: (edtrId: string) =>
+    queryOptions({
+      queryKey: ['incidents', 'edtr', edtrId] as const,
+      queryFn: () => apiGet<IncidentListResponse>(withParams('/incidents', { edtrId, limit: 50, offset: 0 })),
     }),
 };
 
@@ -455,6 +463,12 @@ export const weatherQueries = {
 };
 
 export const edtrQueries = {
+  billPreview: (id: string, hours: EdtrBillPreviewQuery) =>
+    queryOptions({
+      queryKey: ['edtr', 'bill-preview', id, hours] as const,
+      queryFn: () => apiGet<EdtrBillPreviewResponse>(withParams(`/edtr/${id}/bill-preview`, hours)),
+      retry: false,
+    }),
   settings: () =>
     queryOptions({ queryKey: ['edtr-settings'] as const, queryFn: () => apiGet<EdtrSettings>('/edtr-settings') }),
   fieldSheets: () =>

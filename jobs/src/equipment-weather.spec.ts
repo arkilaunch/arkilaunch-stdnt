@@ -101,15 +101,43 @@ describe('per-equipment weather (warning -> used despite warning)', () => {
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
       const [row] = await db.insert(edtr).values({ tenantId, rentalId, equipmentId: craneId, source: 'digital_entry', reportDate: today, status: 'extracted' }).returning();
       await db.insert(edtrLineItems).values({ tenantId, edtrId: row!.id, hoursActive: '6' });
-      expect(await flagUsedDespiteWarning(db, tenantId, row!.id)).toBe(true);
+      // Whole-day windows: the warning fired "now", whatever the hour the suite runs.
+      const allDay = { am: [0, 720] as [number, number], pm: [720, 1440] as [number, number] };
+      expect((await flagUsedDespiteWarning(db, tenantId, row!.id, allDay)).length).toBeGreaterThan(0);
       // Once per EDTR.
-      expect(await flagUsedDespiteWarning(db, tenantId, row!.id)).toBe(false);
+      expect(await flagUsedDespiteWarning(db, tenantId, row!.id, allDay)).toEqual([]);
       const [incident] = await db
         .select()
         .from(events)
         .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${row!.id}`))
         .limit(1);
       expect(incident?.properties).toMatchObject({ equipment_id: craneId, level: 'stop_work', hours_active: 6 });
+    } finally {
+      await client.end();
+    }
+  });
+
+  it('flags only the halves worked after a stop_work warning went up', async () => {
+    const { db, client } = makeJobDb();
+    try {
+      const flagFor = async (date: string, warnedAt: string) => {
+        await db.insert(events).values({
+          tenantId,
+          name: 'equipment_weather_warning',
+          occurredAt: new Date(`${date}T${warnedAt}:00+08:00`),
+          properties: { equipment_id: rollerId, level: 'stop_work', reasons: ['test'] },
+        });
+        const [row] = await db
+          .insert(edtr)
+          .values({ tenantId, rentalId, equipmentId: rollerId, source: 'digital_entry', reportDate: date, status: 'extracted' })
+          .returning();
+        await db.insert(edtrLineItems).values({ tenantId, edtrId: row!.id, hoursActive: '8' });
+        return flagUsedDespiteWarning(db, tenantId, row!.id);
+      };
+      expect(await flagFor('2021-03-01', '10:00')).toEqual(['am', 'pm']);
+      expect(await flagFor('2021-03-02', '14:00')).toEqual(['pm']);
+      // After the 17:00 knock-off: the machine had already stopped.
+      expect(await flagFor('2021-03-03', '18:00')).toEqual([]);
     } finally {
       await client.end();
     }

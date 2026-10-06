@@ -184,6 +184,24 @@ describe('CaptureField', () => {
     expect(onChange).toHaveBeenCalledWith(prepared);
   });
 
+  // A flatbed scan is already the page: the edge finder would lock onto the printed table and crop off the header.
+  it('keeps a picked scan that is exactly the sheet shape whole, instead of cropping to an inner border', async () => {
+    const prepared = photo('prepared.jpg');
+    prepareUpload.mockResolvedValue(prepared);
+    scanner.load.mockResolvedValue({});
+    scanner.picked.mockReturnValue({ quality: 'ready', corners: [{ x: 40, y: 450 }, { x: 2120, y: 450 }, { x: 2120, y: 1150 }, { x: 40, y: 1150 }] });
+    scanner.straighten.mockResolvedValue(photo('page.jpg'));
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 2200, height: 1700, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    const onAccepted = vi.fn();
+    renderField({ scanner: true, onAccepted, snapAspect: [279.4 / 215.9, 355.6 / 215.9] });
+
+    await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(prepared));
+    expect(scanner.straighten.mock.calls[0]![1]).toEqual([{ x: 0, y: 0 }, { x: 2200, y: 0 }, { x: 2200, y: 1700 }, { x: 0, y: 1700 }]);
+  });
+
   it('straightens and reads a clear selected KYC photo without a Use scan click', async () => {
     const corrected = photo('straightened.jpg');
     const prepared = photo('prepared.jpg');
@@ -205,7 +223,8 @@ describe('CaptureField', () => {
     expect(scanner.analyze).not.toHaveBeenCalled();
   });
 
-  it('keeps a blank picked image in manual review', async () => {
+  // A photo with no sheet found is never sent silently: the timekeeper is told, then may still use it.
+  it('keeps a blank picked image in manual review, warns, and offers it only as "Use anyway"', async () => {
     scanner.load.mockResolvedValue({}); scanner.picked.mockReturnValue(null);
     vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
@@ -213,7 +232,8 @@ describe('CaptureField', () => {
     renderField({ scanner: true, onAccepted });
     await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
     await screen.findByText(/No clear document edges/);
-    expect(screen.getByRole('button', { name: 'Use original photo' })).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/edges of the sheet were not found/);
+    expect(screen.getByRole('button', { name: 'Use anyway' })).toBeEnabled();
     expect(onAccepted).not.toHaveBeenCalled();
   });
 

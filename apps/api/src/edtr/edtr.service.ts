@@ -16,6 +16,7 @@ import {
   edtr,
   edtrLineItems,
   edtrReconciliations,
+  events,
   equipment,
   equipmentAssignments,
   invoiceLineItems,
@@ -46,6 +47,9 @@ import {
   validateDayEntry,
   WEATHER_CODES,
   type ApprovedDayHours,
+  type DayHours,
+  type EdtrBillPreviewQuery,
+  type EdtrBillPreviewResponse,
   type EdtrLineItemsInput,
   type EdtrReviewRequest,
   type EdtrApproveRequest,
@@ -147,12 +151,124 @@ function reportedWeatherDay(li: EdtrLineItemsInput): ReportedWeatherDay {
   };
 }
 
+// Typed hours (digital entry, paper without OCR, or an admin reading a failed sheet): one path, so they pair and flag alike.
+async function recordHours(
+  tx: Tx,
+  ctx: RequestContext,
+  edtrId: string,
+  rentalId: string,
+  equipmentId: string,
+  reportDate: string,
+  lineItems: EdtrLineItemsInput,
+) {
+  const flags = validateDayEntry({
+    ...lineItemsToDayHours(lineItems),
+    downtimeNote: lineItems.downtimeNote ?? null,
+    weatherAm: lineItems.weatherAm ?? null,
+    weatherPm: lineItems.weatherPm ?? null,
+    previousMeterEnd: await lastApprovedMeterEnd(tx, equipmentId, reportDate),
+  });
+  await insertLineItem(tx, ctx.tenantId, edtrId, lineItems, flags);
+  await reconcileEdtr(tx, ctx.tenantId, edtrId);
+  const usedHalves = await flagUsedDespiteWarning(tx, ctx.tenantId, edtrId);
+  // Weather discrepancies only flag for review; never status, approval or money.
+  const weatherFlags = await logWeatherDiscrepancies(tx, ctx.tenantId, edtrId, rentalId, reportDate, reportedWeatherDay(lineItems));
+  if (weatherFlags.length > 0 || usedHalves.length > 0) {
+    const added = [
+      ...new Set(weatherFlags.map((f) => `weather_${f.rule}`)),
+      ...usedHalves.map((half) => `used_despite_stop_work_${half}`),
+    ];
+    await tx
+      .update(edtrLineItems)
+      .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(added)}::jsonb` })
+      .where(eq(edtrLineItems.edtrId, edtrId));
+  }
+}
+
+// Same rule as list(): a timekeeper reads only field logs on an assigned site; others see it as not found.
+async function timekeeperMaySee(tx: Tx, ctx: RequestContext, rentalId: string): Promise<boolean> {
+  if (ctx.role !== 'timekeeper') return true;
+  const [hit] = await tx
+    .select({ id: rentals.id })
+    .from(rentals)
+    .innerJoin(
+      timekeeperSiteAssignments,
+      and(
+        eq(timekeeperSiteAssignments.projectSiteId, rentals.projectSiteId),
+        eq(timekeeperSiteAssignments.userId, ctx.userId),
+      ),
+    )
+    .where(eq(rentals.id, rentalId))
+    .limit(1);
+  return Boolean(hit);
+}
+
+// The one place approve() and the bill preview read hours from: an override wins, else the stored reading.
+function dayHoursFor(
+  lineItems: (typeof edtrLineItems.$inferSelect)[],
+  override: { [K in 'hoursActive' | 'hoursIdle' | 'hoursBreakdown' | 'hoursWeather' | 'hoursOtherDowntime']?: number | null | undefined } | null | undefined,
+): DayHours {
+  const stored = lineItems[0];
+  const pick = (key: 'hoursIdle' | 'hoursBreakdown' | 'hoursWeather' | 'hoursOtherDowntime') =>
+    override?.[key] !== undefined ? override[key] : stored ? num(stored[key]) : null;
+  return {
+    running: override?.hoursActive ?? lineItems.reduce((sum, item) => sum + Number(item.hoursActive), 0),
+    idle: pick('hoursIdle'),
+    breakdown: pick('hoursBreakdown'),
+    weather: pick('hoursWeather'),
+    otherDowntime: pick('hoursOtherDowntime'),
+  };
+}
+
+// RFC-2 fail closed: a deduction draws only on a paid deposit or booking invoice.
+async function depositSplit(tx: Tx, ctx: RequestContext, rentalId: string, amount: number) {
+  const [depositPaid] = await tx
+    .select({ id: invoices.id })
+    .from(invoices)
+    .where(
+      and(
+        eq(invoices.rentalId, rentalId),
+        inArray(invoices.invoiceType, ['deposit', 'booking']),
+        eq(invoices.status, 'paid'),
+      ),
+    )
+    .limit(1);
+  if (!depositPaid) throw new ConflictException({ error: 'deposit_not_paid' });
+  const ledger = await resolveDepositLedger(tx, rentalId, ctx.tenantId);
+  const balanceBefore = round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted));
+  return { ledger, balanceBefore, split: splitDeduction(balanceBefore, amount) };
+}
+
 @Injectable()
 export class EdtrService {
   constructor(private readonly events: EventsService) {}
 
   async capture(ctx: RequestContext, body: EdtrCaptureRequest): Promise<EdtrCaptureResponse> {
     return withTenantTx(ctx, async (tx) => {
+      if (body.captureId) {
+        const [seen] = await tx
+          .select({ edtrId: sql<string>`${events.properties} ->> 'edtr_id'` })
+          .from(events)
+          .where(
+            and(
+              eq(events.tenantId, ctx.tenantId),
+              eq(events.name, 'edtr_capture_received'),
+              sql`${events.properties} ->> 'capture_id' = ${body.captureId}`,
+            ),
+          )
+          .limit(1);
+        const [earlier] = seen ? await tx.select().from(edtr).where(eq(edtr.id, seen.edtrId)).limit(1) : [];
+        // A retry is the same person sending the same day again; anything else is not theirs to read back.
+        if (
+          earlier &&
+          earlier.submittedBy === ctx.userId &&
+          earlier.rentalId === body.rentalId &&
+          earlier.equipmentId === body.equipmentId &&
+          String(earlier.reportDate) === body.reportDate
+        ) {
+          return { id: earlier.id, status: earlier.status, source: earlier.source as 'paper_ocr' | 'digital_entry', pollUrl: `/api/v1/edtr/${earlier.id}` };
+        }
+      }
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, body.rentalId)).limit(1);
       if (!rental) throw new NotFoundException({ error: 'rental_not_found' });
 
@@ -259,35 +375,18 @@ export class EdtrService {
         })
         .returning();
       if (!created) throw new Error('edtr insert returned no row');
+      if (body.captureId) {
+        // Same transaction as the row: the marker exists exactly when the capture does.
+        await tx.insert(events).values({
+          tenantId: ctx.tenantId,
+          name: 'edtr_capture_received',
+          properties: { capture_id: body.captureId, edtr_id: created.id },
+        });
+      }
 
       let finalStatus: string = created.status;
       if (body.lineItems) {
-        const flags = validateDayEntry({
-          ...lineItemsToDayHours(body.lineItems),
-          downtimeNote: body.lineItems.downtimeNote ?? null,
-          weatherAm: body.lineItems.weatherAm ?? null,
-          weatherPm: body.lineItems.weatherPm ?? null,
-          previousMeterEnd: await lastApprovedMeterEnd(tx, body.equipmentId, body.reportDate),
-        });
-        await insertLineItem(tx, ctx.tenantId, created.id, body.lineItems, flags);
-        await reconcileEdtr(tx, ctx.tenantId, created.id);
-        await flagUsedDespiteWarning(tx, ctx.tenantId, created.id);
-        // Weather discrepancies only flag for review; never status, approval or money.
-        const weatherFlags = await logWeatherDiscrepancies(
-          tx,
-          ctx.tenantId,
-          created.id,
-          body.rentalId,
-          body.reportDate,
-          reportedWeatherDay(body.lineItems),
-        );
-        if (weatherFlags.length > 0) {
-          const added = [...new Set(weatherFlags.map((f) => `weather_${f.rule}`))];
-          await tx
-            .update(edtrLineItems)
-            .set({ reviewFlags: sql`${edtrLineItems.reviewFlags} || ${JSON.stringify(added)}::jsonb` })
-            .where(eq(edtrLineItems.edtrId, created.id));
-        }
+        await recordHours(tx, ctx, created.id, body.rentalId, body.equipmentId, body.reportDate, body.lineItems);
         // reconcileEdtr owns the status; re-read it rather than re-derive.
         const [refetched] = await tx.select().from(edtr).where(eq(edtr.id, created.id)).limit(1);
         finalStatus = refetched?.status ?? created.status;
@@ -380,7 +479,7 @@ export class EdtrService {
   async get(ctx: RequestContext, id: string): Promise<EdtrDetailResponse> {
     return withTenantTx(ctx, async (tx) => {
       const [row] = await tx.select().from(edtr).where(eq(edtr.id, id)).limit(1);
-      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      if (!row || !(await timekeeperMaySee(tx, ctx, row.rentalId))) throw new NotFoundException({ error: 'edtr_not_found' });
 
       const lineItems = await tx.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, id));
       const [reconciliation] = await tx
@@ -417,6 +516,11 @@ export class EdtrService {
           reviewFlags: item.reviewFlags,
         })),
         fields,
+        weather: payload?.weather ?? null,
+        // Why the worker gave up on the sheet; only meaningful while it is hard_failed.
+        failureReason: row.status === 'hard_failed' ? row.lastError : null,
+        scanRotation: row.scanRotation as 0 | 90 | 180 | 270,
+        reportDate: row.reportDate === null ? null : String(row.reportDate),
         // Provenance: a human transcription's 1.00 confidence must not read as model certainty.
         extraction: payload
           ? {
@@ -443,11 +547,11 @@ export class EdtrService {
   async rawFileKey(ctx: RequestContext, id: string): Promise<string> {
     return withTenantTx(ctx, async (tx) => {
       const [row] = await tx
-        .select({ rawFileUri: edtr.rawFileUri })
+        .select({ rawFileUri: edtr.rawFileUri, rentalId: edtr.rentalId })
         .from(edtr)
         .where(eq(edtr.id, id))
         .limit(1);
-      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      if (!row || !(await timekeeperMaySee(tx, ctx, row.rentalId))) throw new NotFoundException({ error: 'edtr_not_found' });
       if (!row.rawFileUri) throw new NotFoundException({ error: 'edtr_scan_not_found' });
       return row.rawFileUri;
     });
@@ -473,6 +577,113 @@ export class EdtrService {
 
   // RFC-2: the ONLY path that deducts, with no override edge. Runs in the caller's tx so a
   // refused gate also rolls back the site hub's office log.
+  // A sheet the worker could not read: an approver types its hours from the photo. Bills nothing (RFC-2):
+  // the day still has to reconcile with its second record, or be approved by a person.
+  async transcribe(ctx: RequestContext, edtrId: string, lineItems: EdtrLineItemsInput) {
+    await withTenantTx(ctx, async (tx) => {
+      const [record] = await tx.select().from(edtr).where(eq(edtr.id, edtrId)).limit(1).for('update');
+      if (!record) throw new NotFoundException({ error: 'edtr_not_found' });
+      if (record.status !== 'hard_failed' || !record.reportDate) {
+        throw new ConflictException({ error: 'not_failed', status: record.status });
+      }
+      await tx
+        .update(edtr)
+        .set({
+          status: 'extracted',
+          lastError: null,
+          ocrPayload: buildManualTranscriptionPayload({
+            hoursActive: lineItems.hoursActive,
+            hoursIdle: lineItems.hoursIdle,
+            analyzedAt: new Date().toISOString(),
+          }),
+        })
+        .where(eq(edtr.id, edtrId));
+      const reportDate = String(record.reportDate);
+      await recordHours(tx, ctx, edtrId, record.rentalId, record.equipmentId, reportDate, lineItems);
+      await this.events.emit(ctx, 'edtr_transcribed', { edtr_id: edtrId, failure_reason: record.lastError });
+    });
+    // Read after commit: get() opens its own transaction.
+    return this.get(ctx, edtrId);
+  }
+
+  // Display only: how reviewers see the scan. Never touches hours, status or money.
+  async setRotation(ctx: RequestContext, edtrId: string, degrees: 0 | 90 | 180 | 270) {
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx.update(edtr).set({ scanRotation: degrees }).where(eq(edtr.id, edtrId)).returning({ id: edtr.id });
+      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      return { id: row.id, scanRotation: degrees };
+    });
+  }
+
+  // Read-only twin of approve()'s pricing: same hours rule, rate card and deposit split, no lock, no writes.
+  async billPreview(ctx: RequestContext, edtrId: string, query: EdtrBillPreviewQuery): Promise<EdtrBillPreviewResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const [record] = await tx.select().from(edtr).where(eq(edtr.id, edtrId)).limit(1);
+      if (!record) throw new NotFoundException({ error: 'edtr_not_found' });
+      const lineItems = await tx.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, edtrId));
+      const { billable } = classifyHours(dayHoursFor(lineItems, query));
+      const { hourlyRate } = await this.hourlyRateFor(tx, ctx, record);
+      const amount = round2HalfUp(billable * hourlyRate);
+      const { balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, amount);
+      return {
+        billableHours: billable,
+        hourlyRate,
+        amount,
+        balanceBefore,
+        deducted: split.deducted,
+        accrued: split.accrued,
+        balanceAfter: split.balanceAfter,
+      };
+    });
+  }
+
+  private async hourlyRateFor(tx: Tx, ctx: RequestContext, record: typeof edtr.$inferSelect) {
+    // Priced at the hourly card in force on report_date (Manila calendar dates), never at `now`.
+    const [equipmentRow] = await tx.select().from(equipment).where(eq(equipment.id, record.equipmentId)).limit(1);
+    const [rateCard] = equipmentRow
+      ? await tx
+          .select()
+          .from(rateCards)
+          .where(
+            and(
+              eq(rateCards.tenantId, ctx.tenantId),
+              eq(rateCards.equipmentTypeId, equipmentRow.equipmentTypeId),
+              // A unit's own card overrides its type's.
+              or(eq(rateCards.equipmentId, record.equipmentId), isNull(rateCards.equipmentId)),
+              eq(rateCards.rateType, 'hourly'),
+              sql`(${rateCards.effectiveFrom} at time zone ${EDTR_TIME_ZONE})::date <= ${record.reportDate}::date`,
+              sql`(${rateCards.effectiveTo} is null or (${rateCards.effectiveTo} at time zone ${EDTR_TIME_ZONE})::date > ${record.reportDate}::date)`,
+            ),
+          )
+          .orderBy(sql`${rateCards.equipmentId} is null`, desc(rateCards.effectiveFrom))
+          .limit(1)
+      : [];
+    // RFC-2 fail closed: a type with any card (even a retired non-hourly one) but no in-force hourly card must never post a 0 deduction.
+    if (equipmentRow && !rateCard) {
+      const [anyCard] = await tx
+        .select({ id: rateCards.id })
+        .from(rateCards)
+        .where(
+          and(
+            eq(rateCards.tenantId, ctx.tenantId),
+            eq(rateCards.equipmentTypeId, equipmentRow.equipmentTypeId),
+          ),
+        )
+        .limit(1);
+      if (anyCard) {
+        throw new UnprocessableEntityException({
+          error: 'rate_card_not_effective',
+          equipmentTypeId: equipmentRow.equipmentTypeId,
+          reportDate: record.reportDate,
+          message:
+            'No hourly rate card was in force on this EDTR report date; fix the rate card before approving.',
+        });
+      }
+    }
+
+    return { hourlyRate: rateCard ? Number(rateCard.rateValue) : 0, equipmentRow };
+  }
+
   private async approveInTx(tx: Tx, ctx: RequestContext, edtrId: string, body: EdtrApproveRequest) {
     const [record] = await tx.select().from(edtr).where(eq(edtr.id, edtrId)).limit(1);
     if (!record) throw new NotFoundException({ error: 'edtr_not_found' });
@@ -573,7 +784,6 @@ export class EdtrService {
 
     const lineItems = await tx.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, edtrId));
     // classifyHours is the one billing rule: downtime never billed, idle only on a categorised (v3) row.
-    const stored = lineItems[0];
     const adj = body.adjustments;
     const {
       running: runningHours,
@@ -582,14 +792,7 @@ export class EdtrService {
       breakdown,
       weather,
       otherDowntime,
-    } = classifyHours({
-      running: adj?.hoursActive ?? lineItems.reduce((sum, item) => sum + Number(item.hoursActive), 0),
-      idle: adj ? adj.hoursIdle : stored ? num(stored.hoursIdle) : null,
-      breakdown: adj?.hoursBreakdown !== undefined ? adj.hoursBreakdown : stored ? num(stored.hoursBreakdown) : null,
-      weather: adj?.hoursWeather !== undefined ? adj.hoursWeather : stored ? num(stored.hoursWeather) : null,
-      otherDowntime:
-        adj?.hoursOtherDowntime !== undefined ? adj.hoursOtherDowntime : stored ? num(stored.hoursOtherDowntime) : null,
-    });
+    } = classifyHours(dayHoursFor(lineItems, adj));
     const billed: ApprovedDayHours = { running: runningHours, billable: billableHoursActive, idle, breakdown, weather, otherDowntime };
 
     // Overrides rewrite the line items too; the original extraction stays in ocr_payload.
@@ -608,50 +811,7 @@ export class EdtrService {
         .where(eq(edtrLineItems.edtrId, edtrId));
     }
 
-    // Priced at the hourly card in force on report_date (Manila calendar dates), never at `now`.
-    const [equipmentRow] = await tx.select().from(equipment).where(eq(equipment.id, record.equipmentId)).limit(1);
-    const [rateCard] = equipmentRow
-      ? await tx
-          .select()
-          .from(rateCards)
-          .where(
-            and(
-              eq(rateCards.tenantId, ctx.tenantId),
-              eq(rateCards.equipmentTypeId, equipmentRow.equipmentTypeId),
-              // A unit's own card overrides its type's.
-              or(eq(rateCards.equipmentId, record.equipmentId), isNull(rateCards.equipmentId)),
-              eq(rateCards.rateType, 'hourly'),
-              sql`(${rateCards.effectiveFrom} at time zone ${EDTR_TIME_ZONE})::date <= ${record.reportDate}::date`,
-              sql`(${rateCards.effectiveTo} is null or (${rateCards.effectiveTo} at time zone ${EDTR_TIME_ZONE})::date > ${record.reportDate}::date)`,
-            ),
-          )
-          .orderBy(sql`${rateCards.equipmentId} is null`, desc(rateCards.effectiveFrom))
-          .limit(1)
-      : [];
-    // RFC-2 fail closed: a type with any card (even a retired non-hourly one) but no in-force hourly card must never post a 0 deduction.
-    if (equipmentRow && !rateCard) {
-      const [anyCard] = await tx
-        .select({ id: rateCards.id })
-        .from(rateCards)
-        .where(
-          and(
-            eq(rateCards.tenantId, ctx.tenantId),
-            eq(rateCards.equipmentTypeId, equipmentRow.equipmentTypeId),
-          ),
-        )
-        .limit(1);
-      if (anyCard) {
-        throw new UnprocessableEntityException({
-          error: 'rate_card_not_effective',
-          equipmentTypeId: equipmentRow.equipmentTypeId,
-          reportDate: record.reportDate,
-          message:
-            'No hourly rate card was in force on this EDTR report date; fix the rate card before approving.',
-        });
-      }
-    }
-
-    const hourlyRate = rateCard ? Number(rateCard.rateValue) : 0;
+    const { hourlyRate, equipmentRow } = await this.hourlyRateFor(tx, ctx, record);
     const deductedAmount = round2HalfUp(billableHoursActive * hourlyRate);
 
     // Past the deposit balance, the remainder becomes an unbilled accrual invoiced later.
@@ -662,22 +822,7 @@ export class EdtrService {
       .where(eq(rentals.id, record.rentalId))
       .for('update');
     const bookingCode = lockedRental?.code ?? null;
-    // RFC-2 fail closed: a deduction draws only on a paid deposit or booking invoice.
-    const [depositPaid] = await tx
-      .select({ id: invoices.id })
-      .from(invoices)
-      .where(
-        and(
-          eq(invoices.rentalId, record.rentalId),
-          inArray(invoices.invoiceType, ['deposit', 'booking']),
-          eq(invoices.status, 'paid'),
-        ),
-      )
-      .limit(1);
-    if (!depositPaid) throw new ConflictException({ error: 'deposit_not_paid' });
-    const ledger = await resolveDepositLedger(tx, record.rentalId, ctx.tenantId);
-    const balanceBefore = round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted));
-    const split = splitDeduction(balanceBefore, deductedAmount);
+    const { ledger, balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, deductedAmount);
     const balanceAfter = split.balanceAfter;
     // Hours split in the same ratio, so hours-used adds up across both.
     const deductedHours =

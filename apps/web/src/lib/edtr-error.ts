@@ -95,3 +95,28 @@ export function explainEdtrError(error: unknown): EdtrErrorExplanation {
       };
   }
 }
+
+// The worker's reason for giving up on a sheet (edtr.last_error), in words a timekeeper can act on.
+export function failureText(reason: string | null | undefined): string {
+  if (!reason) return 'The sheet could not be read.';
+  const [code, rows] = reason.split(':');
+  // The worker names days by date (2026-10-11); a timekeeper reads them as the sheet prints them (10/11).
+  const days = rows?.split(',').map((d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(5, 7)}/${d.slice(8, 10)}` : d));
+  const where = days ? ` (for ${days.join(', ')})` : '';
+  switch (code) {
+    case 'missing_raw_file_uri':
+      return 'The photo never finished uploading. Take it again.';
+    case 'no_timesheet_table':
+      return 'No timesheet was found in the photo. Take it again flat and straight, with the whole sheet in the frame.';
+    case 'unreadable_date':
+      return `A date could not be read clearly${where}. Write it clearly and retake, or type the hours in.`;
+    case 'unreadable_total_hours':
+      return `The hours could not be read clearly${where}. Retake in better light, or type the hours in.`;
+    case 'duplicate_date':
+      return `The same date is written twice${days ? ` (${days.join(', ')})` : ''}. Correct the sheet and retake.`;
+    case 'no_dated_rows':
+      return 'No filled-in days were found on the sheet.';
+    default:
+      return 'The sheet could not be read.';
+  }
+}

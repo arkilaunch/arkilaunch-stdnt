@@ -1,7 +1,9 @@
-import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, lt, sql } from 'drizzle-orm';
 import type { Executor } from './with-tenant-tx.js';
 import {
   compareReportedWeather,
+  DEFAULT_AM_WINDOW,
+  DEFAULT_PM_WINDOW,
   estimatePagasa,
   evaluateEquipmentWeather,
   heatIndexC,
@@ -103,21 +105,33 @@ function manilaDay(date: string): { from: Date; to: Date } {
   return { from, to: new Date(from.getTime() + 86_400_000) };
 }
 
-// Evidence only: never touches money or the EDTR's status (RFC-2). Logged once per EDTR.
-export async function flagUsedDespiteWarning(ex: Executor, tenantId: string, edtrId: string): Promise<boolean> {
+export type WorkHalf = 'am' | 'pm';
+export interface WorkWindows {
+  am?: [number, number] | null | undefined;
+  pm?: [number, number] | null | undefined;
+}
+
+// Evidence only: never touches money or the EDTR's status (RFC-2); the caller decides whether to hold the day.
+// Logged once per EDTR. Returns the halves the machine worked while a stop_work warning was up.
+export async function flagUsedDespiteWarning(
+  ex: Executor,
+  tenantId: string,
+  edtrId: string,
+  windows: WorkWindows = {},
+): Promise<WorkHalf[]> {
   const [row] = await ex
     .select({ id: edtr.id, rentalId: edtr.rentalId, equipmentId: edtr.equipmentId, reportDate: edtr.reportDate, siteId: rentals.projectSiteId })
     .from(edtr)
     .innerJoin(rentals, eq(rentals.id, edtr.rentalId))
     .where(and(eq(edtr.id, edtrId), eq(edtr.tenantId, tenantId)))
     .limit(1);
-  if (!row?.reportDate) return false;
+  if (!row?.reportDate) return [];
   const [hours] = await ex
     .select({ active: sql<string>`coalesce(sum(${edtrLineItems.hoursActive}), 0)` })
     .from(edtrLineItems)
-    .where(eq(edtrLineItems.edtrId, edtrId));
+    .where(and(eq(edtrLineItems.edtrId, edtrId), eq(edtrLineItems.tenantId, tenantId)));
   const hoursActive = Number(hours?.active ?? 0);
-  if (hoursActive <= 0) return false;
+  if (hoursActive <= 0) return [];
 
   const { from, to } = manilaDay(String(row.reportDate));
   const warnings = await ex
@@ -128,22 +142,31 @@ export async function flagUsedDespiteWarning(ex: Executor, tenantId: string, edt
         eq(events.tenantId, tenantId),
         eq(events.name, 'equipment_weather_warning'),
         sql`${events.properties} ->> 'equipment_id' = ${row.equipmentId}`,
+        sql`${events.properties} ->> 'level' = 'stop_work'`,
         gte(events.occurredAt, from),
         lt(events.occurredAt, to),
       ),
     )
-    .orderBy(desc(events.occurredAt));
-  const worst = warnings
-    .map((w) => ({ at: w.occurredAt, ...(w.properties as { level: WeatherLevel; reasons?: string[] }) }))
-    .sort((a, b) => LEVEL_RANK[b.level] - LEVEL_RANK[a.level])[0];
-  if (!worst || worst.level !== 'stop_work') return false;
+    .orderBy(events.occurredAt)
+    .limit(1);
+  const first = warnings[0];
+  if (!first) return [];
+  // ponytail: a stop_work counts as up from its event to end of day; the poller logs rises, not clears. Log clears if half-day false positives show up.
+  const warnedMinute = Math.floor((first.occurredAt.getTime() - from.getTime()) / 60_000);
+  const worked: [WorkHalf, [number, number]][] = [
+    ['am', windows.am ?? DEFAULT_AM_WINDOW],
+    ['pm', windows.pm ?? DEFAULT_PM_WINDOW],
+  ];
+  const halves = worked.filter(([, [, end]]) => warnedMinute < end).map(([half]) => half);
+  if (halves.length === 0) return [];
 
   const [already] = await ex
     .select({ id: events.id })
     .from(events)
     .where(and(eq(events.tenantId, tenantId), eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${edtrId}`))
     .limit(1);
-  if (already) return false;
+  if (already) return [];
+  const properties = first.properties as { reasons?: string[] };
   await ex.insert(events).values({
     tenantId,
     name: 'equipment_used_despite_warning',
@@ -154,12 +177,14 @@ export async function flagUsedDespiteWarning(ex: Executor, tenantId: string, edt
       equipment_id: row.equipmentId,
       date: String(row.reportDate),
       hours_active: hoursActive,
-      level: worst.level,
-      reasons: worst.reasons ?? [],
-      warned_at: worst.at.toISOString(),
+      level: 'stop_work',
+      reasons: properties.reasons ?? [],
+      warned_at: first.occurredAt.toISOString(),
+      half: halves.length === 2 ? 'day' : halves[0],
+      halves,
     },
   });
-  return true;
+  return halves;
 }
 
 // A level that stays up does not re-notify every poll.

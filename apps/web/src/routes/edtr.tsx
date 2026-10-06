@@ -2,9 +2,10 @@ import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
-import { apiGet, apiPost } from '../lib/api-client.js';
+import { apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { useScanDeployments } from '../lib/use-scan-deployments.js';
-import { explainEdtrError } from '../lib/edtr-error.js';
+import { explainEdtrError, failureText } from '../lib/edtr-error.js';
+import { EMPTY_HOURS, HourFields, toLineItems } from '../components/hour-fields.js';
 import { addDaysIso, formatDate, formatHours, formatLogSource, formatPeso, formatStatus, isUuid, shortCode, siteName } from '../lib/format.js';
 import { Button, buttonClass } from '../components/button.js';
 import { Input } from '../components/input.js';
@@ -23,6 +24,10 @@ import { Check, CircleX, Clock, TriangleAlert } from 'lucide-react';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { useToast } from '../components/toast.js';
+import { ParsedColumns, ScanReview, type Rotation } from '../components/scan-review.js';
+import { WeatherCheck } from '../components/weather-check.js';
+import { edtrQueries, usersQueries } from '../lib/queries.js';
+import type { EdtrBillPreviewQuery, EdtrBillPreviewResponse, EdtrDetailResponse } from '@arkilaunch/shared';
 
 const APPROVABLE = new Set(['matched', 'discrepancy']);
 
@@ -356,6 +361,17 @@ function EdtrPage() {
         />
       )}
 
+      {search.log && (
+        <FieldLogModal
+          id={search.log}
+          onClose={() => {
+            const rest = { ...search };
+            delete rest.log;
+            void navigate({ to: '/app/ocr', search: rest });
+          }}
+        />
+      )}
+
       {approving && (
         <ApproveModal
           item={approving}
@@ -473,6 +489,10 @@ function FieldLogDrawer({
 }) {
   const pill = statusPill(item.status);
   const canBill = !!item.reconciliation && APPROVABLE.has(item.reconciliation.status);
+  // The log itself, whatever its status: a lone timekeeper sheet has no Approve button yet.
+  const detail = useQuery(edtrQueries.detail(item.id));
+  const me = useQuery(usersQueries.me());
+  const canApprove = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
   const rows: [string, ReactNode][] = [
     ['Machine', serialNo ? `${machine} · SN ${serialNo}` : machine],
     ['Day worked', formatDate(item.reportDate)],
@@ -506,7 +526,7 @@ function FieldLogDrawer({
       open
       onClose={onClose}
       placement="right"
-      size="md"
+      size="xl"
       title={`Field log ${shortCode('log', item.id)}`}
       description={machine}
       footer={
@@ -530,6 +550,19 @@ function FieldLogDrawer({
           </div>
         ))}
       </dl>
+      <div className="mt-5">
+        {detail.isPending ? (
+          <p className="text-sm text-text-muted">Loading the sheet and its readings...</p>
+        ) : detail.isError ? (
+          <p className="text-sm text-text-muted">The sheet could not be loaded.</p>
+        ) : (
+          <>
+            <FieldLogEvidence detail={detail.data} />
+            {/* Approvers only (edtr:approve); the owner reads without editing. */}
+            {detail.data.status === 'hard_failed' && canApprove && <TranscribeForm edtrId={item.id} />}
+          </>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -546,9 +579,125 @@ interface ApproveResult {
   deposit?: { balanceBefore: number; deducted: number; accrued?: number; balanceAfter: number };
 }
 
+// What the reviewer decides on: the sheet itself, every column read from it, and its weather check.
+function FieldLogEvidence({ detail }: { detail: EdtrDetailResponse }) {
+  const queryClient = useQueryClient();
+  const me = useQuery(usersQueries.me());
+  // Approvers save how the sheet reads upright, for everyone; others turn it on their screen only.
+  const canSave = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
+  const saveRotation = (degrees: Rotation) =>
+    void apiPatch(`/edtr/${detail.id}/rotation`, { degrees })
+      .then(() => queryClient.invalidateQueries({ queryKey: edtrQueries.detail(detail.id).queryKey }))
+      .catch(() => {});
+  return (
+    <div className="flex flex-col gap-4">
+      {detail.status === 'hard_failed' && (
+        <Surface radius="md" elevation="sm" className="border-error p-3">
+          <p className="text-sm font-semibold text-error">This sheet could not be read</p>
+          <p className="mt-1 text-sm text-text">{failureText(detail.failureReason)}</p>
+        </Surface>
+      )}
+      {/* The photo whenever there is one: a failed sheet has no fields, and is exactly when a person must look. */}
+      {detail.source === 'paper_ocr' ? (
+        <ScanReview detail={detail} onRotate={canSave ? saveRotation : undefined} />
+      ) : (
+        detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />
+      )}
+      <WeatherCheck detail={detail} />
+    </div>
+  );
+}
+
+// Read-only view of one field log, opened from an incident; billing stays in the Approve flow.
+export function FieldLogModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const detail = useQuery(edtrQueries.detail(id));
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      title="Field log"
+      {...(detail.data?.reportDate ? { description: formatDate(detail.data.reportDate) } : {})}
+    >
+      {detail.isPending ? (
+        <p className="text-sm text-text-muted">Loading the field log...</p>
+      ) : detail.isError ? (
+        <p className="text-sm text-text-muted">This field log could not be loaded.</p>
+      ) : (
+        <FieldLogEvidence detail={detail.data} />
+      )}
+    </Modal>
+  );
+}
+
+// Hours typed from the photo of a sheet the worker gave up on. Bills nothing: the day still reconciles first.
+function TranscribeForm({ edtrId }: { edtrId: string }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [hours, setHours] = useState(EMPTY_HOURS);
+  const [saving, setSaving] = useState(false);
+  const lineItems = toLineItems(hours);
+
+  async function save() {
+    if (!lineItems) return;
+    setSaving(true);
+    try {
+      await apiPost(`/edtr/${edtrId}/transcribe`, lineItems);
+      toast.success('Hours saved', 'They will be matched against the second record of this day before anything is billed.');
+      await queryClient.invalidateQueries({ queryKey: ['edtr'] });
+    } catch (err) {
+      const { title, detail } = explainEdtrError(err);
+      toast.error(title, detail);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Surface radius="md" elevation="sm" className="mt-4 flex flex-col gap-3 p-3">
+      <p className="text-sm font-semibold text-text">Type the hours from the photo</p>
+      <HourFields value={hours} onChange={setHours} idPrefix="transcribe" />
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={() => void save()} disabled={!lineItems || saving}>
+          {saving ? 'Saving...' : 'Save hours'}
+        </Button>
+      </div>
+    </Surface>
+  );
+}
+
+// An estimate from the same pricing approve() uses; the approve response stays the source of truth.
+function BillPreview({ query }: { query: { data?: EdtrBillPreviewResponse | undefined; isPending: boolean; error: unknown } }) {
+  if (query.error) {
+    const { title, detail } = explainEdtrError(query.error);
+    return (
+      <Surface radius="md" elevation="sm" className="border-error p-3">
+        <p className="text-sm font-semibold text-error">Cannot price this day yet: {title}</p>
+        <p className="mt-1 text-sm text-text">{detail}</p>
+      </Surface>
+    );
+  }
+  if (query.isPending || !query.data) return <p className="text-sm text-text-muted">Working out the charge...</p>;
+  const { billableHours, hourlyRate, amount, balanceBefore, deducted, accrued, balanceAfter } = query.data;
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col gap-1 p-3" aria-live="polite">
+      <p className="text-sm font-semibold text-text">What the customer will be charged</p>
+      <p className="font-mono text-sm tabular-nums text-text">
+        {formatHours(billableHours)} x {formatPeso(hourlyRate)}/h = {formatPeso(amount)}
+      </p>
+      <p className="text-sm text-text-muted">
+        {formatPeso(deducted)} from the deposit ({formatPeso(balanceBefore)} to {formatPeso(balanceAfter)})
+        {accrued > 0 ? `; ${formatPeso(accrued)} past the deposit goes on the weekly invoice` : ''}.
+      </p>
+      <p className="text-xs text-text-muted">An estimate until you confirm; downtime hours are never billed.</p>
+    </Surface>
+  );
+}
+
 function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModalProps) {
   const [adjActive, setAdjActive] = useState('');
   const [adjIdle, setAdjIdle] = useState('');
+  const [adjWeather, setAdjWeather] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -556,6 +705,16 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
   const recon = item.reconciliation!;
   const disagrees = recon.status === 'discrepancy';
   const adjusted = adjActive !== '' && adjIdle !== '';
+  const detail = useQuery(edtrQueries.detail(item.id));
+  const stored = detail.data?.lineItems[0];
+  // Weather hours are excused from the bill; the reviewer may lower them when the site record disagrees.
+  const weatherClaimed = (stored?.hoursWeather ?? 0) > 0;
+  const weatherAdjusted = weatherClaimed && adjWeather !== '';
+  const hours: EdtrBillPreviewQuery = {
+    ...(adjusted ? { hoursActive: Number(adjActive), hoursIdle: Number(adjIdle) } : {}),
+    ...(weatherAdjusted ? { hoursWeather: Number(adjWeather) } : {}),
+  };
+  const preview = useQuery(edtrQueries.billPreview(item.id, hours));
 
   async function submit() {
     setPending(true);
@@ -563,9 +722,14 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
     try {
       const res = await apiPost<ApproveResult>(`/edtr/reconciliations/${recon.id}/approve`, {
         reconciliationId: recon.id,
-        adjustments: adjusted
-          ? { hoursActive: Number(adjActive), hoursIdle: Number(adjIdle) }
-          : null,
+        adjustments:
+          adjusted || weatherAdjusted
+            ? {
+                hoursActive: adjusted ? Number(adjActive) : (stored?.hoursActive ?? 0),
+                hoursIdle: adjusted ? Number(adjIdle) : (stored?.hoursIdle ?? 0),
+                ...(weatherAdjusted ? { hoursWeather: Number(adjWeather) } : {}),
+              }
+            : null,
       });
       const deducted = res.deposit?.deducted;
       toast.success(
@@ -597,7 +761,7 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
         onClose={onClose}
         title="Review and bill"
         description={`${machine} - ${formatDate(item.reportDate)}`}
-        size="md"
+        size="xl"
         footer={
           <>
             <Button variant="ghost" onClick={onClose}>
@@ -606,7 +770,7 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
             <Button
               variant="approve"
               onClick={() => setConfirming(true)}
-              disabled={disagrees && !adjusted}
+              disabled={(disagrees && !adjusted) || (weatherAdjusted && !stored)}
             >
               Bill these hours
             </Button>
@@ -657,6 +821,27 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
             </>
           )}
 
+          {detail.data && <FieldLogEvidence detail={detail.data} />}
+          {detail.isPending && <p className="text-sm text-text-muted">Loading the sheet and its readings...</p>}
+          {detail.isError && (
+            <p className="text-sm text-text-muted">The sheet could not be loaded; you can still decide on the hours above.</p>
+          )}
+
+          {weatherClaimed && (
+            <Input
+              numeric
+              id="adjWeather"
+              label={`Weather hours to excuse (sheet says ${formatHours(stored?.hoursWeather ?? 0)})`}
+              type="number"
+              step="0.25"
+              min="0"
+              value={adjWeather}
+              onChange={(e) => setAdjWeather(e.target.value)}
+            />
+          )}
+
+          <BillPreview query={preview} />
+
           {explained && (
             <Surface radius="md" elevation="sm" className="border-error p-3">
               <p className="text-sm font-semibold text-error">{explained.title}</p>
@@ -685,6 +870,14 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
                 idle, as you entered.
               </p>
             )}
+            {weatherAdjusted && (
+              <p className="mt-2">Weather downtime set to {formatHours(Number(adjWeather))}, as you entered.</p>
+            )}
+            {preview.data && (
+              <p className="mt-2">
+                About <strong>{formatPeso(preview.data.amount)}</strong> for {formatHours(preview.data.billableHours)}.
+              </p>
+            )}
             <p className="mt-2 text-text-muted">
               It is recorded against your name and cannot be undone here.
             </p>
@@ -703,11 +896,13 @@ export const edtrRoute = createRoute({
   // Anything that is not a uuid or YYYY-MM-DD is dropped rather than sent as a 400.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { site?: string; equipment?: string; week?: string; status?: 'review' } => ({
+  ): { site?: string; equipment?: string; week?: string; status?: 'review'; log?: string } => ({
     ...(isUuid(search.site) ? { site: search.site } : {}),
     ...(isUuid(search.equipment) ? { equipment: search.equipment } : {}),
     ...(typeof search.week === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.week) ? { week: search.week } : {}),
     ...(search.status === 'review' ? { status: 'review' as const } : {}),
+    // One field log opened read-only, e.g. from an incident.
+    ...(isUuid(search.log) ? { log: search.log } : {}),
   }),
   component: EdtrPage,
 });

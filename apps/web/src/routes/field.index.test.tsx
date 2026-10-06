@@ -65,7 +65,8 @@ describe('Field dashboard: EDTR capture entry point', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
-  it('offers the camera and the file picker as separate actions once a paper sheet is chosen', async () => {
+  // The sheet goes through the edge-detecting scanner; jsdom has no camera, so its file-picker fallback shows.
+  it('offers the sheet scanner, with the file picker as a fallback, once a paper sheet is chosen', async () => {
     stubFetch();
     await renderRoute('/field');
 
@@ -75,7 +76,7 @@ describe('Field dashboard: EDTR capture entry point', () => {
 
     await userEvent.click(await screen.findByRole('radio', { name: /photo of the paper sheet/i }));
 
-    expect(await screen.findByRole('button', { name: 'Take photo' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Try camera again' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Choose a file' })).toBeInTheDocument();
   });
 

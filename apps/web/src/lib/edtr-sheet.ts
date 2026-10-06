@@ -5,13 +5,11 @@ import { WEATHER_CODES, edtrSheetQrPayload, manilaDate, type EdtrSheetContext } 
 // The layout is the OCR contract (parseEdtrSheet in packages/shared): keep the header labels, only a date in DATE
 // cells, no totals row in the table, open comb underlines (DI reads closed boxes as ticks), black-ink grid.
 
-export type PageSize = 'letter' | 'legal';
+import { MARK_MM, PAGE_MM, markCentresMm, qrBoxMm, type PageSize } from './sheet-marks.js';
 
-// One constant drives SVG, PNG and PDF sizes; changing one alone stretches the scan.
-export const PAGE: Record<PageSize, { w: number; h: number; label: string }> = {
-  letter: { w: 279.4, h: 215.9, label: 'Letter 11 x 8.5 in' },
-  legal: { w: 355.6, h: 215.9, label: 'Legal 14 x 8.5 in' },
-};
+export type { PageSize };
+// One constant drives SVG, PNG and PDF sizes, and the scanner's page geometry.
+export const PAGE = PAGE_MM;
 
 const MM_TO_PT = 72 / 25.4;
 
@@ -164,7 +162,8 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
   if (context?.tenant?.contact) out.push(text(lx, 21.5, context.tenant.contact, 2.5, { fill: MUTED, maxW: tenantW }));
   if (input.tin) out.push(text(lx, 25.5, `TIN ${input.tin}`, 2.5, { fill: MUTED, maxW: tenantW }));
   out.push(text(W / 2, 17, heading, 5.2, { bold: true, anchor: 'middle' }));
-  const qx = W - M - 24;
+  // Clear of the top-right registration mark, so the QR keeps its quiet zone.
+  const qx = qrBoxMm(input.page ?? 'legal').x;
   if (context && machine && weekStart) {
     out.push(qrPath(edtrSheetQrPayload(context.rentalId, machine.id, weekStart), qx, 5, 24));
     const codeW = qx - 3 - (W / 2 + titleHalf + 3);
@@ -368,6 +367,10 @@ export function buildEdtrSheetSvg(input: EdtrSheetInput): string {
   out.push(text(M, H - 3.5, footer, 2, { fill: MUTED }));
   out.push(text(W - M, H - 3.5, `Page: ${page.label}`, 2, { anchor: 'end', fill: MUTED }));
 
+  // Registration marks: the scanner crops and turns the page by these four squares.
+  for (const [cx, cy] of markCentresMm(input.page ?? 'legal')) {
+    out.push(`<rect x="${cx - MARK_MM / 2}" y="${cy - MARK_MM / 2}" width="${MARK_MM}" height="${MARK_MM}" fill="${INK}"/>`);
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#ffffff"/>${out.join('')}</svg>`;
 }
 
