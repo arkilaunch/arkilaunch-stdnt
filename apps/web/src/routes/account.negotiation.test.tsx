@@ -21,6 +21,7 @@ const BOOKING = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   setAccessToken(null);
 });
 
@@ -52,6 +53,7 @@ describe('Negotiation finalised', () => {
 });
 
 it('keeps the pending quote ahead of an available conversation', async () => {
+  vi.stubEnv('VITE_ENABLE_IN_APP_NEGOTIATION', 'true');
   setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     const body = String(url).includes('/messages') ? [] : String(url).includes(`/bookings/${BOOKING_ID}`)
@@ -66,6 +68,7 @@ it('keeps the pending quote ahead of an available conversation', async () => {
 });
 
 it('Negotiate focuses the thread message and the quote leads on mobile', async () => {
+  vi.stubEnv('VITE_ENABLE_IN_APP_NEGOTIATION', 'true');
   setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     const u = String(url);
@@ -79,5 +82,18 @@ it('Negotiate focuses the thread message and the quote leads on mobile', async (
   expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus();
   expect(screen.getByRole('button', { name: 'Accept quote' }).closest('.order-1')).toHaveClass('lg:order-2');
   expect(screen.getByRole('heading', { name: 'Conversation' }).closest('.order-2')).toHaveClass('lg:order-1');
+  unmount();
+});
+
+it('with in-app chat off, offers Messenger instead of the thread', async () => {
+  setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    const body = String(url).includes(`/bookings/${BOOKING_ID}`) ? { ...BOOKING, quotation: null } : [];
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  }));
+  const { unmount } = await renderRoute(`/account/negotiation/${BOOKING_ID}`);
+  expect(await screen.findByRole('heading', { name: 'Talk to the rental team' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Message us on Messenger' })).toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: 'Message' })).not.toBeInTheDocument();
   unmount();
 });

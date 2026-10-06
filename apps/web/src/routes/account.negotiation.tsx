@@ -2,7 +2,7 @@ import { createRoute, Link, useNavigate, useParams } from '@tanstack/react-route
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { quoteExpiresAt, type BookingDetailResponse } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
-import { useTenant } from '../lib/tenant.js';
+import { useTenant, useTenantName } from '../lib/tenant.js';
 import { bookingsQueries, quotesQueries, tierQueries } from '../lib/queries.js';
 import { ApiError, apiErrorText, apiPost } from '../lib/api-client.js';
 import { formatDate, formatPeso, shortCode } from '../lib/format.js';
@@ -13,7 +13,9 @@ import { Button, buttonClass } from '../components/button.js';
 import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
 import { Check, Clock } from 'lucide-react';
-import { NegotiationThread, negotiationMessageId } from '../components/negotiation-thread.js';
+import { NegotiationThread, inAppNegotiation, negotiationMessageId } from '../components/negotiation-thread.js';
+import { NegotiateChoice } from '../components/negotiate-choice.js';
+import { bookingMessage } from '../lib/messenger-message.js';
 import { TierNote } from '../components/tier-cap.js';
 import { QuoteLines } from '../components/quote-lines.js';
 import { PrintFrame } from '../components/print-frame.js';
@@ -90,9 +92,13 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
             >
               Accept quote
             </Button>
-            <Button variant="secondary" onClick={() => document.getElementById(negotiationMessageId(`/bookings/${booking.id}`))?.focus()}>
-              Negotiate
-            </Button>
+            {inAppNegotiation() ? (
+              <Button variant="secondary" onClick={() => document.getElementById(negotiationMessageId(`/bookings/${booking.id}`))?.focus()}>
+                Negotiate
+              </Button>
+            ) : (
+              <MessengerNegotiate booking={booking} variant="secondary">Negotiate</MessengerNegotiate>
+            )}
             <Button
               variant="ghost"
               loading={decide.isPending && decide.variables === 'decline'}
@@ -125,6 +131,37 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
       >
         Rather talk it through on the phone?
       </Link>
+    </Surface>
+  );
+}
+
+// In-app chat is off: the button copies the booking and opens the tenant's Messenger.
+function MessengerNegotiate({ booking, variant, children }: { booking: BookingDetailResponse; variant: 'primary' | 'secondary'; children: string }) {
+  const navigate = useNavigate();
+  const tenantName = useTenantName();
+  return (
+    <NegotiateChoice
+      variant={variant}
+      message={bookingMessage(tenantName, booking)}
+      onInApp={() => undefined}
+      fallback={() => void navigate({ to: '/account/negotiation/$bookingId/call', params: { bookingId: booking.id } })}
+    >
+      {children}
+    </NegotiateChoice>
+  );
+}
+
+function MessengerCard({ booking }: { booking: BookingDetailResponse }) {
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col items-start gap-3 p-5">
+      <h2 className={heading}>Talk to the rental team</h2>
+      <p className="text-sm text-text-muted">
+        Ask questions or counter-offer on Messenger. We copy your booking details so you only need
+        to paste them. Whatever you agree comes back here as a revised quote for you to accept.
+      </p>
+      {booking.status !== 'cancelled' && (
+        <MessengerNegotiate booking={booking} variant="primary">Message us on Messenger</MessengerNegotiate>
+      )}
     </Surface>
   );
 }
@@ -173,7 +210,11 @@ function NegotiationPage({ bookingId }: { bookingId: string }) {
         <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
           <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1">
             <TierNote customerId={booking.data.customerId} audience="customer" />
-            <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
+            {inAppNegotiation() ? (
+              <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
+            ) : (
+              <MessengerCard booking={booking.data} />
+            )}
           </div>
           <div className="order-1 min-w-0 lg:order-2">
             <QuoteCard booking={booking.data} />
