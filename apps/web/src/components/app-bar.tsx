@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { describeNotification, feedAreaOf, NotificationKindLabel, notificationRowClass, UnreadBadge } from './notification-feed.js';
 import { apiPatch } from '../lib/api-client.js';
 import { formatStatus } from '../lib/format.js';
-import { Bell, LogOut, Menu, ShoppingCart, TriangleAlert } from 'lucide-react';
+import { Bell, LogOut, Menu, ShoppingCart, TriangleAlert, X } from 'lucide-react';
 import { clearTokens } from '../lib/auth-client.js';
 import { useCart } from '../lib/cart-client.js';
 import { getCurrentRole, homeHref } from '../lib/guards.js';
@@ -16,6 +16,10 @@ const TILE = 'hover:bg-current/10';
 export interface AppBarProps {
   tenantLabel: string;
   onMenuClick?: () => void;
+  /** Phone nav that drops under the bar while `menuOpen`. */
+  menu?: ReactNode;
+  menuOpen?: boolean;
+  onMenuClose?: () => void;
 }
 
 // A disclosure button, not <details>: <details> has an implicit `group` role, which card lists find cards by.
@@ -141,7 +145,7 @@ function NotificationBell({
   );
 }
 
-export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
+export function AppBar({ tenantLabel, onMenuClick, menu, menuOpen = false, onMenuClose }: AppBarProps) {
   const role = getCurrentRole();
   const isCustomer = role === 'customer';
   const notificationsPath = isCustomer
@@ -175,21 +179,32 @@ export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
   const bar = useHeaderColor();
   const tenant = useTenant();
   const mark = tenant?.iconUrl ?? tenant?.logoUrl;
+  const barColour = bar ? '' : 'bg-nav text-text-inverse';
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   return (
     <header
       style={bar ?? undefined}
-      className={`sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 ${bar ? '' : 'bg-nav text-text-inverse'}`}
+      className={`sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 ${barColour}`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && menuOpen) {
+          onMenuClose?.();
+          menuButton.current?.focus();
+        }
+      }}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {onMenuClick && (
           <button
+            ref={menuButton}
             type="button"
             onClick={onMenuClick}
             aria-label="Toggle navigation"
+            aria-expanded={menuOpen}
+            aria-controls="app-mobile-nav"
             className={`flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-sm lg:hidden ${TILE}`}
           >
-            <Menu className="h-5 w-5" />
+            {menuOpen ? <X aria-hidden className="h-5 w-5" /> : <Menu aria-hidden className="h-5 w-5" />}
           </button>
         )}
         <Link
@@ -207,7 +222,8 @@ export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
               {tenantLabel.trim().charAt(0).toUpperCase() || 'A'}
             </span>
           )}
-          <span className="truncate">{tenantLabel}</span>
+          {/* Phones show the mark alone; the link's aria-label still names the tenant. */}
+          <span className="hidden truncate sm:inline">{tenantLabel}</span>
         </Link>
       </div>
 
@@ -255,6 +271,19 @@ export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
           <span className="hidden sm:inline">Sign out</span>
         </button>
       </div>
+
+      {menuOpen && menu && (
+        <>
+          <div aria-hidden="true" onClick={onMenuClose} className="fixed inset-x-0 bottom-0 top-14 bg-black/40 lg:hidden" />
+          <div
+            id="app-mobile-nav"
+            style={bar ?? undefined}
+            className={`absolute inset-x-0 top-full max-h-[calc(100dvh-3.5rem)] overflow-y-auto border-t border-current/15 px-4 pb-6 shadow-lg motion-safe:animate-rise lg:hidden ${barColour}`}
+          >
+            {menu}
+          </div>
+        </>
+      )}
     </header>
   );
 }

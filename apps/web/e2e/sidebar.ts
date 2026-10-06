@@ -1,10 +1,10 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-// Below lg the sidebar is a drawer and the hidden desktop <aside> stays in the DOM (strict mode counts both),
+// Below lg the sidebar is a dropdown under the app bar and the hidden desktop <aside> stays in the DOM (strict mode counts both),
 // so every query is filtered to the visible copy.
 export function sidebarLink(page: Page, name: string): Locator {
   return page
-    .locator('aside[aria-label="Sidebar"], [role="dialog"]')
+    .locator('aside[aria-label="Sidebar"], #app-mobile-nav')
     .getByRole('link', { name, exact: true })
     .filter({ visible: true });
 }

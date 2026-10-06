@@ -3,7 +3,6 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Menu, X } from 'lucide-react';
 import type { NavGroup } from '../lib/nav-config.js';
 import { AppBar } from './app-bar.js';
-import { Modal } from './modal.js';
 import { NavGroupList } from './nav-group.js';
 import { SkipLink } from './skip-link.js';
 import { FlashbarSlot } from './toast.js';
@@ -53,7 +52,17 @@ export function SidebarShell({ navGroups, navTitle, tenantLabel, children, hideN
     <ShellNavContext.Provider value={{ navGroups, tenantLabel }}>
       <div className="flex min-h-screen flex-col bg-bg">
         <SkipLink />
-        <AppBar tenantLabel={tenantLabel} {...(!hideNav ? { onMenuClick: () => setDrawerOpen((v) => !v) } : {})} />
+        <AppBar
+          tenantLabel={tenantLabel}
+          {...(!hideNav
+            ? {
+                onMenuClick: () => setDrawerOpen((v) => !v),
+                onMenuClose: () => setDrawerOpen(false),
+                menuOpen: drawerOpen,
+                menu: <NavGroupList groups={navGroups} pathname={pathname} onNavigate={() => setDrawerOpen(false)} dropdown />,
+              }
+            : {})}
+        />
         <div className="flex flex-1">
           {/* Named: the catalog renders a second complementary landmark. */}
           {hideNav ? null : collapsed ? (
@@ -77,10 +86,6 @@ export function SidebarShell({ navGroups, navTitle, tenantLabel, children, hideN
               <NavGroupList groups={navGroups} pathname={pathname} />
             </aside>
           )}
-
-          <Modal open={!hideNav && drawerOpen} onClose={() => setDrawerOpen(false)} title={navTitle} placement="right" size="sm">
-            <NavGroupList groups={navGroups} pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
-          </Modal>
 
           <main id="main" className="min-w-0 flex-1 px-4 pb-10 pt-4 sm:px-8 sm:pt-6">
             <div className="mx-auto w-full max-w-[1440px]">
