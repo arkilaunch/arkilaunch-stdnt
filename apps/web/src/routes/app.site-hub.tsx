@@ -213,7 +213,7 @@ function ReviewPanel({
         onClose();
       }}
       placement="right"
-      size="lg"
+      size={detail.data?.source === 'paper_ocr' ? 'xl' : 'lg'}
       title={day ? `${formatDate(day.date)} · ${unit?.name ?? 'Machine'}` : 'Field log'}
       description={day ? `${STATUS_META[day.status].label}${unit ? ` · ${unit.bookingCode}` : ''}` : ''}
       footer={
@@ -249,15 +249,17 @@ function ReviewPanel({
       )}
       {detail.isError && <Alert type="error">{apiErrorText(detail.error)}</Alert>}
       {day?.edtrId && detail.data && (
-        <div className="flex flex-col gap-4">
+        // Paper: the photo on the left, what was read from it on the right.
+        <div className={detail.data.source === 'paper_ocr' ? 'grid items-start gap-4 md:grid-cols-2' : 'flex flex-col gap-4'}>
           {detail.data.source === 'paper_ocr' &&
             (image.data ? (
-              <a href={image.data.url} target="_blank" rel="noreferrer">
-                <img src={image.data.url} alt="Scanned field sheet" className="max-h-96 w-full rounded-md border border-border object-contain" />
+              <a href={image.data.url} target="_blank" rel="noreferrer" className="md:sticky md:top-0">
+                <img src={image.data.url} alt="Scanned field sheet" className="max-h-[75vh] w-full rounded-md border border-border object-contain" />
               </a>
             ) : (
               <p className="text-sm text-text-muted">{image.isError ? 'The scan could not be loaded.' : 'Loading the scan...'}</p>
             ))}
+          <div className="flex flex-col gap-4">
           {day.submittedBy && <p className="text-sm text-text-muted">Submitted by {day.submittedBy}</p>}
           {day.flags.length > 0 && (
             <Alert type="warning" header="Check before approving">
@@ -295,6 +297,7 @@ function ReviewPanel({
               </p>
             )
           )}
+          </div>
         </div>
       )}
     </Modal>

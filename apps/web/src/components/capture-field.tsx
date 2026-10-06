@@ -248,7 +248,15 @@ export function CaptureField({
         setPhotoIssue((issue) => (issue === 'no_document' ? null : issue));
         if (autoAccept) await acceptReview(straightened);
         return;
-      } catch { /* Fall back to the paper edge below. */ }
+      } catch { /* Fall back to the whole photo below. */ }
+    }
+    // A sheet without its marks found: the paper edge finds the printed table border and crops off the
+    // header and QR, so the whole photo is kept instead.
+    if (sheetMarks) {
+      if (reviewId !== reviewIdRef.current) return;
+      setReviewing(false);
+      if (autoAccept) await acceptReview(file);
+      return;
     }
     if (source && detected) {
       try {
@@ -488,15 +496,15 @@ export function CaptureField({
         onChange={onPicked}
       />
 
-      <div className="flex flex-col gap-4 lg:flex-row">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
         <div className="flex-1">
           {pending ? (
             <div className="flex flex-col gap-3">
               {pending.type === 'application/pdf' ? (
                 <p className="text-sm text-text-muted">{pending.name} ready to read.</p>
               ) : (
-                <div className="relative mx-auto w-full max-w-4xl overflow-hidden rounded-md bg-black" style={{ aspectRatio: sourceRef.current ? `${sourceRef.current.width} / ${sourceRef.current.height}` : undefined }}>
-                  {reviewPreview && <img src={reviewPreview} alt={adjusting ? 'Adjust the document corners' : 'Document scan to review'} className="h-full w-full object-contain" />}
+                <div className="relative mx-auto w-full max-w-4xl overflow-hidden rounded-md bg-black" style={{ aspectRatio: sourceRef.current && (adjusting || !corrected) ? `${sourceRef.current.width} / ${sourceRef.current.height}` : undefined }}>
+                  {reviewPreview && <img src={reviewPreview} alt={adjusting ? 'Adjust the document corners' : 'Document scan to review'} className="block h-full w-full object-contain" />}
                   {adjusting && corners && sourceRef.current && corners.map((corner, index) => (
                     <button
                       key={index}
@@ -547,7 +555,7 @@ export function CaptureField({
                 <img
                   src={preview}
                   alt="The sheet you captured"
-                  className="max-h-96 w-full rounded-sm border border-border object-contain"
+                  className="max-h-[75vh] w-full rounded-sm border border-border object-contain"
                 />
               ) : (
                 <p className="text-sm text-text-muted">
