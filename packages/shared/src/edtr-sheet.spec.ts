@@ -262,6 +262,22 @@ describe('parseEdtrSheet v3', () => {
     });
   });
 
+  it('reads hour meter combs like the other number cells: box edges, comma, dropped dot', () => {
+    const day = (date: string, start: string, end: string) =>
+      [date, 'MON', '07:00', '12:00', '13:00', '17:00', '', '', '9', '9', '', '', '', '', start, end, 'JR'];
+    const result = parseEdtrSheet(
+      [v3Table([day('03/02', 'L0123 4 5J', '|1|2|3|4|6|.|5|'), day('03/03', '123456', '12346,6'), day('03/04', '.12345.6.', '')])],
+      CAPTURE,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.days.map((d) => [d.v3!.meterStart, d.v3!.meterEnd])).toEqual([
+      [1234.5, 12346.5],
+      [12345.6, 12346.6],
+      [12345.6, null],
+    ]);
+  });
+
   it('skips a day marked outside the rental and a day left blank, instead of failing the sheet', () => {
     const blank = ['', '', '', '', '', '', '', '', '', '', '', '', '', '', ''];
     const result = parseEdtrSheet(

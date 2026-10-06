@@ -159,8 +159,9 @@ function findColumns(grid: Grid): Columns | null {
     breakdown: at('BREAKDOWN HRS'),
     weatherHrs: at('WEATHER HRS'),
     other: at('OTHER HRS'),
-    meterStart: at('METER START'),
-    meterEnd: at('METER END'),
+    // The reader can prefix the meter headers (HOUR METER START), so these two match on the label inside.
+    meterStart: row0.findIndex((c) => norm(c).includes('METER START')),
+    meterEnd: row0.findIndex((c) => norm(c).includes('METER END')),
     headerRows: 2,
   };
 }
@@ -260,10 +261,12 @@ function readV2(row: string[], confidences: number[], columns: Columns): EdtrShe
   };
 }
 
+// v3 meter comb: 5 boxes, a printed dot, 1 decimal box. Cleaned like the hours, and the reader drops
+// the printed dot there too: six digits are 12345.6, not 123456.
 function parseMeter(raw: string): number | null {
-  const t = norm(raw);
-  if (t === '') return null;
-  const n = Number(t);
+  const t = hoursText(raw);
+  if (t === null) return null;
+  const n = !t.includes('.') && t.length === 6 ? Number(t) / 10 : Number(t);
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
