@@ -50,8 +50,57 @@ export interface ReportedWeatherDay {
   idleHours: number | null;
   idleReason: IdleReason | null;
   hoursActive: number;
+  weatherHours?: number | null;
   amWindow?: [number, number] | null;
   pmWindow?: [number, number] | null;
+}
+
+const asCode = (v: string | null | undefined): WeatherCode | null =>
+  v && (WEATHER_CODES as readonly string[]).includes(v) ? (v as WeatherCode) : null;
+
+// One reading of a day for the OCR worker and typed entries alike: v3 weather hours stand in for a weather idle reason.
+export function reportedWeatherDay(input: {
+  weatherAm?: string | null;
+  weatherPm?: string | null;
+  hoursActive: number;
+  weatherHours?: number | null;
+  idleHours?: number | null;
+  idleReason?: IdleReason | null;
+  amWindow?: [number, number] | null;
+  pmWindow?: [number, number] | null;
+}): ReportedWeatherDay {
+  const weatherHours = input.weatherHours ?? null;
+  const weatherIdle = (weatherHours ?? 0) > 0;
+  return {
+    weatherAm: asCode(input.weatherAm),
+    weatherPm: asCode(input.weatherPm),
+    idleHours: weatherIdle ? weatherHours : (input.idleHours ?? null),
+    idleReason: weatherIdle ? 'weather' : (input.idleReason ?? null),
+    hoursActive: input.hoursActive,
+    weatherHours,
+    amWindow: input.amWindow ?? null,
+    pmWindow: input.pmWindow ?? null,
+  };
+}
+
+// Ticks that mean work should have stopped. LR is printed as "light rain, work continued".
+export const BAD_WEATHER_CODES: readonly WeatherCode[] = ['HR', 'W', 'T'];
+
+// The sheet's own word against its own hours: running hours in a half the timekeeper ticked HR, W or T.
+// Evidence for a person (RFC-2), never money.
+export function workedInReportedWeather(day: ReportedWeatherDay): ('am' | 'pm' | 'day')[] {
+  if (!(day.hoursActive > 0)) return [];
+  const bad = (['am', 'pm'] as const).filter((half) =>
+    BAD_WEATHER_CODES.includes((half === 'am' ? day.weatherAm : day.weatherPm) as WeatherCode),
+  );
+  if (bad.length === 0) return [];
+  // A v2 sheet writes each half's time in/out: a filled window is proof the machine ran that half.
+  if (day.amWindow || day.pmWindow) {
+    return bad.filter((half) => (half === 'am' ? day.amWindow : day.pmWindow));
+  }
+  // ponytail: day-total heuristic without time windows; read per-half hours if false positives show up.
+  if (bad.length === 2) return ['day'];
+  return (day.weatherHours ?? 0) > 0 ? [] : bad;
 }
 
 export type WeatherDiscrepancyRule = 'D1' | 'D2';
