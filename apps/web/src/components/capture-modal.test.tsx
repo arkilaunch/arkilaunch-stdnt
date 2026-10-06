@@ -6,6 +6,18 @@ import { useState } from 'react';
 import { CaptureModal, sheetWeeks } from './capture-modal.js';
 import { ToastProvider } from './toast.js';
 
+// The scanner pipeline needs a camera and canvas: hand the modal a photo directly, and read its QR as the sheet's.
+vi.mock('./capture-field.js', () => ({
+  CaptureField: ({ onChange }: { onChange: (f: File) => void }) => (
+    <button type="button" onClick={() => onChange(new File(['x'], 'sheet.jpg', { type: 'image/jpeg' }))}>
+      pick photo
+    </button>
+  ),
+}));
+vi.mock('../lib/sheet-qr.js', () => ({
+  readSheetQr: async () => 'ARKI-EDTR3:22222222-2222-4222-8222-222222222222:33333333-3333-4333-8333-333333333333:2026-07-27',
+}));
+
 const LOG_ID = '11111111-1111-4111-8111-111111111111';
 const unit = (equipmentId: string, serialNo: string) => ({ equipmentId, name: 'Excavator · CAT 320D', serialNo, onSite: true });
 const TARGET = {
@@ -78,6 +90,55 @@ describe('CaptureModal', () => {
 
     fireEvent.submit(screen.getByRole('button', { name: /day worked/i }).closest('form')!);
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('shows a timekeeper the sheet header, then only "sent" or a retake prompt after submit', async () => {
+    const RENTAL = '22222222-2222-4222-8222-222222222222';
+    const UNIT = '33333333-3333-4333-8333-333333333333';
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const json = (v: unknown) => Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
+      if (url.includes('/reference/capabilities')) return json({ ocrPipeline: true });
+      if (url.includes('/field/scan-targets')) return json({ items: [{ ...TARGET, rentalId: RENTAL, units: [unit(UNIT, 'SN-7')] }] });
+      if (url.includes('/edtr-sheet')) {
+        return json({
+          rentalId: RENTAL, chargeTo: 'Almara', projectLocation: 'Taytay, Rizal', bookingCode: 'EQR-1', siteRep: 'Ana Reyes',
+          rentalStart: '2026-08-01T00:00:00.000Z', rentalEnd: null,
+          equipment: [{ id: UNIT, type: 'Excavator', model: 'CAT 320D', serialNo: 'SN-7', start: '2026-08-01T00:00:00.000Z', end: null, operatorName: 'Juan Cruz', lastHourMeter: 1234.5 }],
+        });
+      }
+      if (init?.method === 'POST') return json({ id: LOG_ID, pollUrl: `/api/v1/edtr/${LOG_ID}` });
+      if (url.includes(`/edtr/${LOG_ID}`)) {
+        return json({ id: LOG_ID, source: 'paper_ocr', status: polls++ ? 'hard_failed' : 'extracted', failureReason: null,
+          lineItems: [{ hoursActive: 8 }], fields: [{ name: 'running', value: 8, confidence: 0.5 }], reconciliation: { status: 'single_source' } });
+      }
+      return json({});
+    });
+    let polls = 0;
+    vi.stubGlobal('fetch', fetchMock);
+    const onClose = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <CaptureModal open onClose={onClose} onCaptured={() => {}} initialSource="paper_ocr" submitOnly />
+        </ToastProvider>
+      </QueryClientProvider>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'pick photo' }));
+    await screen.findByText(/matched from the sheet/i);
+    fireEvent.change(document.querySelector('select[aria-hidden] option[value="2026-07-27"]')!.parentElement!, {
+      target: { value: '2026-07-27' },
+    });
+    expect(await screen.findByText('Juan Cruz')).toBeInTheDocument();
+    expect(screen.getByText('Ana Reyes')).toBeInTheDocument();
+    expect(screen.getByText('1234.5')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Record log' }));
+    expect(await screen.findByText(/sent to the office\. you can close this/i)).toBeInTheDocument();
+    expect(screen.queryByText(/reading the sheet|recorded as|second record/i)).not.toBeInTheDocument();
+    // The worker gives up on the photo: only then does the timekeeper hear back, to retake it.
+    expect(await screen.findByRole('button', { name: 'Retake the photo' }, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.queryByText(/recorded as/i)).not.toBeInTheDocument();
   });
 
   it('picks the only machine on the only site, and offers nothing that is not on site', async () => {
