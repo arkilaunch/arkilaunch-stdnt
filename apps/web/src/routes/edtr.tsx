@@ -488,6 +488,8 @@ function FieldLogDrawer({
 }) {
   const pill = statusPill(item.status);
   const canBill = !!item.reconciliation && APPROVABLE.has(item.reconciliation.status);
+  // The log itself, whatever its status: a lone timekeeper sheet has no Approve button yet.
+  const detail = useQuery(edtrQueries.detail(item.id));
   const rows: [string, ReactNode][] = [
     ['Machine', serialNo ? `${machine} · SN ${serialNo}` : machine],
     ['Day worked', formatDate(item.reportDate)],
@@ -521,7 +523,7 @@ function FieldLogDrawer({
       open
       onClose={onClose}
       placement="right"
-      size="md"
+      size="xl"
       title={`Field log ${shortCode('log', item.id)}`}
       description={machine}
       footer={
@@ -545,6 +547,15 @@ function FieldLogDrawer({
           </div>
         ))}
       </dl>
+      <div className="mt-5">
+        {detail.isPending ? (
+          <p className="text-sm text-text-muted">Loading the sheet and its readings...</p>
+        ) : detail.isError ? (
+          <p className="text-sm text-text-muted">The sheet could not be loaded.</p>
+        ) : (
+          <FieldLogEvidence detail={detail.data} />
+        )}
+      </div>
     </Modal>
   );
 }
