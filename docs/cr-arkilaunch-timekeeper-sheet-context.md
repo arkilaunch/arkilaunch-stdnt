@@ -28,7 +28,7 @@ Now the timekeeper sees every header field of the sheet before sending it. Once 
   - rental period
   - date covered (Mon–Sun)
   - hour meter at start of week
-- **After submit (timekeeper).** A "Sent to the office" toast. A typed log closes the modal. A paper sheet leaves the modal open with "Sent to the office. You can close this." It polls `/edtr/:id` quietly and surfaces only one outcome: if the worker cannot read the photo (`hard_failed`), it shows why and offers "Retake the photo", since a retake is cheapest while on site. No status, OCR readout, confidence chips or reconciliation state is ever shown.
+- **After submit (timekeeper).** *(Amended by [cr-arkilaunch-edtr-demo-fixes.md](cr-arkilaunch-edtr-demo-fixes.md): a paper sheet now closes like a typed log; no polling or retake prompt.)* A "Sent to the office" toast. A typed log closes the modal. A paper sheet leaves the modal open with "Sent to the office. You can close this." It polls `/edtr/:id` quietly and surfaces only one outcome: if the worker cannot read the photo (`hard_failed`), it shows why and offers "Retake the photo", since a retake is cheapest while on site. No status, OCR readout, confidence chips or reconciliation state is ever shown.
 - **Unchanged.**
   - Notifications to the timekeeper: `edtr_approved`, `edtr_needs_correction`, `edtr_rejected` and `edtr_review` are kept.
   - The offline upload queue.
