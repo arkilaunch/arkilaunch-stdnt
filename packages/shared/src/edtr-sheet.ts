@@ -193,7 +193,9 @@ function hoursText(raw: string): string | null {
 
 function parseHours(raw: string): number | null {
   const t = hoursText(raw);
-  const n = t === null ? NaN : Number(t);
+  // The comb prints its decimal point (_ _ . _), so DI drops it: "75" is 7.5. Only an impossible day (>24) is re-read.
+  // ponytail: a dotless "15" (1.5) still reads 15; the IN/OUT reconciliation catches it and routes to a human.
+  const n = t === null ? NaN : /^\d{2,3}$/.test(t) && Number(t) > 24 ? Number(t) / 10 : Number(t);
   return Number.isFinite(n) && n >= 0 && n <= 24 ? n : null;
 }
 

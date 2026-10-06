@@ -60,6 +60,20 @@ describe('parseEdtrSheet', () => {
     expect(result.days[0]!.totalMismatch).toBe(true);
   });
 
+  it('reads a comb total whose printed decimal point DI dropped ("75" is 7.5)', () => {
+    const result = parseEdtrSheet(
+      [
+        table([
+          ['03/01', '07:00', '11:30', '13:00', '16:00', '', '', '75', ''],
+          ['03/02', '07:00', '12:00', '13:00', '18:30', '', '', '105', ''],
+        ]),
+      ],
+      CAPTURE,
+    );
+
+    expect(result.ok && result.days.map((d) => d.hoursActive)).toEqual([7.5, 10.5]);
+  });
+
   it('names a dated row with an unreadable total for a human, and still reads the other days', () => {
     // Load-bearing: the unreadable day is never silently dropped, and never holds the sheet back.
     const result = parseEdtrSheet(
