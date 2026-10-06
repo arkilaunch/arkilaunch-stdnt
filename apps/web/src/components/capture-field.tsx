@@ -301,6 +301,19 @@ export function CaptureField({
               issue = 'no_document';
             }
           } catch { /* Manual correction stays available when vision fails. */ }
+          // Already a scan (a flatbed or scanner app gives exactly the paper's shape): keep the whole page.
+          // Hunting for an edge there finds the printed table border and crops off the header and QR.
+          const ratio = Math.max(source.width, source.height) / Math.min(source.width, source.height);
+          if (pickedFile && snapAspect?.some((target) => Math.abs(ratio - target) / target < 0.02)) {
+            detected = [
+              { x: 0, y: 0 },
+              { x: source.width, y: 0 },
+              { x: source.width, y: source.height },
+              { x: 0, y: source.height },
+            ];
+            clear = true;
+            issue = null;
+          }
           setPhotoIssue(issue);
           await beginReview(picked, source, detected, clear);
         } finally { bitmap.close?.(); }

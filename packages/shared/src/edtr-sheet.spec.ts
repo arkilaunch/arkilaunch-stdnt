@@ -273,6 +273,20 @@ describe('parseEdtrSheet v3', () => {
     expect(result.days.map((d) => [d.reportDate, d.hoursActive])).toEqual([['2026-03-02', 4.5]]);
   });
 
+  it('reads times and hours through comb-box edges returned as dots and colons, and refuses an ambiguous figure', () => {
+    const read = (running: string) =>
+      parseEdtrSheet(
+        [v3Table([['03/02', 'MON', '.0.7:3.0', '1.2::0.0.', '', '', '', '', '4.5', running, '', '', '', '', '', '', '']])],
+        CAPTURE,
+      );
+    const clean = read('.4.5.');
+    expect(clean.ok).toBe(true);
+    if (!clean.ok) return;
+    expect(clean.days[0]!.hoursActive).toBe(4.5);
+    expect(clean.days[0]!.computedHours).toBe(4.5);
+    expect(read('4..5')).toEqual({ ok: false, reason: 'unreadable_total_hours:2026-03-02' });
+  });
+
   it('still refuses a filled v3 row whose running hours cannot be read', () => {
     const result = parseEdtrSheet(
       [v3Table([['03/02', 'MON', '07:00', '11:00', '', '', '', '', '4', '?!', '', '', '', '', '', '', '']])],
