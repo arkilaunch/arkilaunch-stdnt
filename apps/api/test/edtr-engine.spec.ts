@@ -62,7 +62,7 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     equipmentId = (equipment as { id: string }).id;
 
     // Fixed dates, so a prior run's rows would pair as stale counterparts.
-    const testDates = ['2021-03-01', '2021-03-02', '2021-03-03', '2021-03-04', '2021-03-05', '2021-03-06'];
+    const testDates = ['2021-03-01', '2021-03-02', '2021-03-03', '2021-03-04', '2021-03-05', '2021-03-06', '2021-03-13', '2021-03-14'];
     const staleIds = await sql`
       select id from edtr where equipment_id = ${equipmentId} and report_date = any(${testDates})
     `;
@@ -653,5 +653,40 @@ describe('EdtrService: capture, poll, and the approve/deduct gate', () => {
     const polled = await edtr.get(adminCtx, digital.id);
     expect(polled.reconciliation?.status).toBe('pending');
     expect(polled.reconciliation?.counterpartEdtrId ?? null).toBeNull();
+  });
+
+  it('DELETE /edtr/:id removes an unbilled log and frees its counterpart, and refuses a billed one', async () => {
+    const paperId = await insertExtractedPaperCounterpart('2021-03-13', 6, 0);
+    const digital = await edtr.capture(adminCtx, {
+      source: 'digital_entry',
+      rentalId,
+      equipmentId,
+      reportDate: '2021-03-13',
+      lineItems: { hoursActive: 6, hoursIdle: 0 },
+    });
+    expect((await edtr.get(adminCtx, digital.id)).reconciliation?.status).toBe('matched');
+
+    await edtr.remove(adminCtx, digital.id);
+    await expect(edtr.get(adminCtx, digital.id)).rejects.toThrow(NotFoundException);
+    const paperRecons = await withTenantTx(adminCtx, (tx) =>
+      tx.select().from(edtrReconciliations).where(eq(edtrReconciliations.edtrId, paperId)),
+    );
+    for (const recon of paperRecons) {
+      expect(recon.status).toBe('pending');
+      expect(recon.counterpartEdtrId).toBeNull();
+    }
+
+    const billedPaperId = await insertExtractedPaperCounterpart('2021-03-14', 5, 0);
+    const billed = await edtr.capture(adminCtx, {
+      source: 'digital_entry',
+      rentalId,
+      equipmentId,
+      reportDate: '2021-03-14',
+      lineItems: { hoursActive: 5, hoursIdle: 0 },
+    });
+    const polled = await edtr.get(adminCtx, billed.id);
+    await edtr.approve(adminCtx, billed.id, { reconciliationId: polled.reconciliation!.id });
+    await expect(edtr.remove(adminCtx, billed.id)).rejects.toThrow(ConflictException);
+    await expect(edtr.remove(adminCtx, billedPaperId)).rejects.toThrow(ConflictException);
   });
 });

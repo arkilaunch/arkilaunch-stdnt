@@ -2,7 +2,7 @@ import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { apiDelete, apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { useScanDeployments } from '../lib/use-scan-deployments.js';
 import { explainEdtrError, failureText } from '../lib/edtr-error.js';
 import { EMPTY_HOURS, HourFields, hourValuesFrom, toLineItems, type HourFieldValues } from '../components/hour-fields.js';
@@ -101,6 +101,9 @@ function EdtrPage() {
   const [approving, setApproving] = useState<EdtrListItem | null>(null);
   const [reviewing, setReviewing] = useState<EdtrListItem | null>(null);
   const [viewing, setViewing] = useState<EdtrListItem | null>(null);
+  const [removing, setRemoving] = useState<EdtrListItem | null>(null);
+  const me = useQuery(usersQueries.me());
+  const canRemove = me.data?.role === 'admin' || me.data?.role === 'platform_admin';
 
   // A new filter starts from its first page, in the same render (no request at the old offset).
   const filterKey = [search.site, search.equipment, search.week, search.status].join('|');
@@ -185,17 +188,25 @@ function EdtrPage() {
     {
       header: 'Actions',
       kind: 'action',
-      cell: (row) =>
-        row.reconciliation && APPROVABLE.has(row.reconciliation.status) ? (
-          <Button variant="approve" size="field" onClick={() => setApproving(row)}>
-            Review and bill
-          </Button>
-        ) : row.reconciliation?.status === 'pending' && row.status === 'review' ? (
-          // One log only: the office's approval is the second log (site hub approval flow).
-          <Button variant="approve" size="field" onClick={() => setReviewing(row)}>
-            Review and approve
-          </Button>
-        ) : null,
+      cell: (row) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {row.reconciliation && APPROVABLE.has(row.reconciliation.status) ? (
+            <Button variant="approve" size="field" onClick={() => setApproving(row)}>
+              Review and bill
+            </Button>
+          ) : row.reconciliation?.status === 'pending' && row.status === 'review' ? (
+            // One log only: the office's approval is the second log (site hub approval flow).
+            <Button variant="approve" size="field" onClick={() => setReviewing(row)}>
+              Review and approve
+            </Button>
+          ) : null}
+          {canRemove && (
+            <Button variant="ghost" size="field" onClick={() => setRemoving(row)}>
+              Remove
+            </Button>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -360,6 +371,33 @@ function EdtrPage() {
         open={captureOpen}
         onClose={() => setCaptureOpen(false)}
         onCaptured={onCaptured}
+      />
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="Remove this field log?"
+        tone="danger"
+        confirmLabel="Remove log"
+        body={
+          removing && (
+            <p>
+              Remove the log for {machineName(removing.equipmentId)} on{' '}
+              {formatDate(removing.reportDate)}? Its hours and match are deleted. A log already billed cannot be removed.
+            </p>
+          )
+        }
+        onConfirm={async () => {
+          if (!removing) return;
+          try {
+            await apiDelete(`/edtr/${removing.id}`);
+            toast.success('Field log removed', `${formatDate(removing.reportDate)} is no longer in the list.`);
+            onCaptured();
+            setRemoving(null);
+          } catch (err) {
+            toast.error('Could not remove the log', apiErrorText(err));
+          }
+        }}
+        onCancel={() => setRemoving(null)}
       />
 
       {viewing && (

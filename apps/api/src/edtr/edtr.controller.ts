@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -141,6 +142,13 @@ export class EdtrController {
   @RequirePermission('edtr:approve')
   review(@Param('id') id: string, @Body() body: EdtrReviewDto, @Req() req: CtxRequest) {
     return this.edtr.review(req.ctx, id, body);
+  }
+
+  // Admins only: takes an unbilled log out entirely; a billed one is refused (409 already_billed).
+  @Delete(':id')
+  @RequirePermission('edtr:approve')
+  remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.edtr.remove(req.ctx, id);
   }
 
   @Post(':id/reject')
