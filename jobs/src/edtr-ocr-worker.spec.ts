@@ -3,19 +3,12 @@ import postgres from 'postgres';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { edtr, edtrLineItems, edtrReconciliations, events, rentals, weatherAlerts } from '@arkilaunch/db';
 import { FixtureDocumentIntelligenceAdapter } from '@arkilaunch/shared/testing';
-import type { DocumentExtractionResult } from '@arkilaunch/shared';
+import { edtrSheetQrPayload, type DocumentExtractionResult } from '@arkilaunch/shared';
 import { runEdtrOcrWorker } from './edtr-ocr-worker.js';
 import { makeJobDb } from './db-client.js';
 
-// RFC-2 §2/§3 (RFC2-02/RFC2-03): the worker's claim/extract/fan-out/
-// reconcile loop, run against the stub-equivalent
-// FixtureDocumentIntelligenceAdapter so it is fully exercisable offline (no
-// live Azure DI resource).
-//
-// Fixtures are TABLES, not document-level fields: the real Almara EDTR is a
-// multi-day timesheet grid and the worker reads prebuilt-layout's table
-// output (docs/cr-arkilaunch-edtr-real-form.md). The header shape below is
-// the one the live resource actually returned for that form.
+// RFC2-02/RFC2-03. Fixtures are prebuilt-layout TABLES; the header shape is
+// what the live resource returned for the real form.
 describe('edtr-ocr-worker', () => {
   let tenantId: string;
   let rentalId: string;
@@ -34,19 +27,14 @@ describe('edtr-ocr-worker', () => {
     await sql.end();
   });
 
-  // The worker gates on ENABLE_OCR_PIPELINE before anything else (see
-  // edtr-ocr-worker.ts); these tests exercise the loop itself, so they
-  // always run with the flag on.
   beforeEach(() => {
     process.env.ENABLE_OCR_PIPELINE = 'true';
   });
 
   const stubFetchBytes = async () => Buffer.from('fixture-bytes');
 
-  // Every date in this file sits in 2022, a year no other spec uses. The
-  // worker pairs on (equipment_id, report_date) against the shared seeded
-  // tenant, so a date another suite -- or an older run of this one -- also
-  // touches makes a test reconcile against a row it never created.
+  // Dates sit in 2022, a year no other spec uses, so pairing on
+  // (equipment_id, report_date) never hits another suite's row.
 
   const HEADER = [
     ['DATE', 'AM', '', 'PM', '', 'OVERTIME', '', 'TOTAL HOURS', 'SIGNATURE'],
@@ -76,10 +64,7 @@ describe('edtr-ocr-worker', () => {
     };
   }
 
-  // Dates are written in full ISO form so no test depends on the
-  // capture-date year resolution, which has its own unit tests in
-  // packages/shared/src/edtr-sheet.spec.ts. 07:00-11:30 plus 13:00-17:00 is
-  // 8.5 hours, so a total of '8.5' is self-consistent.
+  // 07:00-11:30 plus 13:00-17:00 is 8.5 hours, so a total of '8.5' is self-consistent.
   function day(date: string, total: string): string[] {
     return [date, '07:00', '11:30', '13:00', '17:00', '', '', total, ''];
   }
@@ -130,10 +115,7 @@ describe('edtr-ocr-worker', () => {
   });
 
   it('fans one multi-day sheet out into one edtr row per dated line', async () => {
-    // The load-bearing case for the real form: a single photograph carries a
-    // week of equipment-days, and each has to reconcile against its own
-    // counterpart separately. Keeping them in one row would let a +2h error
-    // on Monday cancel a -2h error on Tuesday inside a summed total.
+    // One row per day, so a +2h error on Monday cannot cancel a -2h on Tuesday.
     const row = await insertQueuedPaperEdtr('2022-04-01');
     const dates = ['2022-04-01', '2022-04-02', '2022-04-03'];
 
@@ -194,10 +176,7 @@ describe('edtr-ocr-worker', () => {
   });
 
   it('auto-accepts against a digital counterpart even though the paper log has no idle hours', async () => {
-    // The paper form records no idle time at all, so the idle dimension is
-    // not comparable and the gate decides on active hours -- the figure the
-    // deduction is priced on. Before migration 0017 this pair could only
-    // match by fabricating a 0 for the paper side.
+    // No idle on paper: the gate decides on active hours alone.
     const reportDate = '2022-02-03';
     const paperRow = await insertQueuedPaperEdtr(reportDate);
 
@@ -229,6 +208,56 @@ describe('edtr-ocr-worker', () => {
     expect(Number(reconciliation!.deltaHours)).toBe(0);
 
     await cleanup([paperRow.id, digitalRow!.id]);
+  });
+
+  // QA 32: the sheet's QR is checked against the booking and unit it was filed under.
+  it('holds a sheet whose QR names another unit for review, even when its hours match', async () => {
+    const reportDate = '2022-06-01';
+    const paperRow = await insertQueuedPaperEdtr(reportDate);
+    const { db, client } = makeJobDb();
+    const [digitalRow] = await db
+      .insert(edtr)
+      .values({ tenantId, rentalId, equipmentId, source: 'digital_entry', reportDate, status: 'extracted' })
+      .returning();
+    await db.insert(edtrLineItems).values({ tenantId, edtrId: digitalRow!.id, hoursActive: '8.5', hoursIdle: '0.0' });
+    await client.end();
+
+    const swapped = { ...sheet([day(reportDate, '8.5')]), barcodes: [
+      { kind: 'QRCode', value: edtrSheetQrPayload(rentalId, '99999999-9999-4999-8999-999999999999', '2022-05-30'), confidence: 0.99 },
+    ] };
+    await runEdtrOcrWorker(new FixtureDocumentIntelligenceAdapter(swapped), stubFetchBytes);
+
+    const { db: db2, client: c2 } = makeJobDb();
+    const [updated] = await db2.select().from(edtr).where(eq(edtr.id, paperRow.id));
+    const [line] = await db2.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, paperRow.id));
+    await c2.end();
+    expect(updated!.status).toBe('review');
+    expect(updated!.lastError).toContain('sheet_qr_mismatch');
+    expect(line!.reviewFlags).toContain('sheet_qr_mismatch');
+    await cleanup([paperRow.id, digitalRow!.id]);
+  });
+
+  it("passes its own QR cleanly, and flags a sheet with no QR for a person to identify", async () => {
+    const own = '2022-06-02';
+    const blank = '2022-06-03';
+    const ownRow = await insertQueuedPaperEdtr(own);
+    await runEdtrOcrWorker(
+      new FixtureDocumentIntelligenceAdapter({ ...sheet([day(own, '8.5')]), barcodes: [
+        { kind: 'QRCode', value: edtrSheetQrPayload(rentalId, equipmentId, '2022-05-30'), confidence: 0.99 },
+      ] }),
+      stubFetchBytes,
+    );
+    const blankRow = await insertQueuedPaperEdtr(blank);
+    await runEdtrOcrWorker(new FixtureDocumentIntelligenceAdapter(sheet([day(blank, '8.5')])), stubFetchBytes);
+
+    const { db, client } = makeJobDb();
+    const [ownLine] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, ownRow.id));
+    const [blankLine] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, blankRow.id));
+    await client.end();
+    expect(ownLine!.reviewFlags).not.toContain('sheet_unidentified');
+    expect(ownLine!.reviewFlags).not.toContain('sheet_qr_mismatch');
+    expect(blankLine!.reviewFlags).toContain('sheet_unidentified');
+    await cleanup([ownRow.id, blankRow.id]);
   });
 
   it('two logs diverging beyond tolerance route to review, never auto-accepting', async () => {
@@ -315,10 +344,7 @@ describe('edtr-ocr-worker', () => {
     expect(items).toHaveLength(0);
   });
 
-  it('a dated row with an unreadable total fails the whole sheet, naming the lost day', async () => {
-    // The dangerous shape: the sheet reads fine except for one total. Taking
-    // the readable days and dropping the rest would lose a billable day with
-    // nothing downstream able to tell it ever existed.
+  it('keeps the readable days and hands an unreadable day to a person, never dropping it', async () => {
     const row = await insertQueuedPaperEdtr('2022-02-06');
 
     await runEdtrOcrWorker(
@@ -328,23 +354,26 @@ describe('edtr-ocr-worker', () => {
 
     const { db, client } = makeJobDb();
     const [updated] = await db.select().from(edtr).where(eq(edtr.id, row.id));
-    const items = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
+    const [lost] = await db
+      .select()
+      .from(edtr)
+      .where(and(eq(edtr.equipmentId, equipmentId), eq(edtr.reportDate, '2022-02-07')));
+    const lostItems = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, lost!.id));
     await client.end();
 
-    expect(updated!.status).toBe('hard_failed');
-    expect(updated!.lastError).toBe('unreadable_total_hours:2022-02-07');
-    // Nothing partial was persisted: it is all days or none.
-    expect(items).toHaveLength(0);
+    expect(updated!.reportDate).toBe('2022-02-06');
+    expect(updated!.status).not.toBe('hard_failed');
+    expect(lost!.status).toBe('hard_failed');
+    expect(lost!.lastError).toBe('unreadable_total_hours:2022-02-07');
+    // No figure is invented for the lost day.
+    expect(lostItems).toHaveLength(0);
+
+    await cleanup([row.id, lost!.id]);
   });
 
   // Placed last: both leave rows behind that a subsequent worker run in this
   // file would claim, so each cleans up after itself.
   it('claims at most CLAIM_BATCH_SIZE rows and leaves the rest queued, never stranded in extracting', async () => {
-    // The regression: the claim UPDATE matched every queued row and the
-    // batch limit was applied to its RESULT, so rows 11..n were flipped to
-    // 'extracting' with locked_at set and then never processed by anyone --
-    // the claim predicate only looks at 'queued'. On any backlog over ten,
-    // captures were silently lost.
     const dates = Array.from({ length: 12 }, (_, i) => `2022-03-${String(i + 1).padStart(2, '0')}`);
     const rows = [];
     for (const date of dates) rows.push(await insertQueuedPaperEdtr(date));
@@ -380,8 +409,7 @@ describe('edtr-ocr-worker', () => {
   it('reclaims a row abandoned in extracting by a dead worker, burning one attempt', async () => {
     const row = await insertQueuedPaperEdtr('2022-03-20');
     const { db, client } = makeJobDb();
-    // What a crash between the claim UPDATE and the terminal write leaves
-    // behind. Before the reaper this row was unreachable forever.
+    // What a crash between the claim UPDATE and the terminal write leaves behind.
     await db
       .update(edtr)
       .set({ status: 'extracting', lockedAt: new Date(Date.now() - 60 * 60 * 1000) })
@@ -446,6 +474,7 @@ describe('edtr-ocr-worker', () => {
 
     const { db: db2, client: c2 } = makeJobDb();
     const [updated] = await db2.select().from(edtr).where(eq(edtr.id, row.id));
+    const [line] = await db2.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
     const logged = await db2
       .select()
       .from(events)
@@ -455,9 +484,56 @@ describe('edtr-ocr-worker', () => {
     await c2.end();
 
     expect(updated!.status).toBe('review');
-    expect(updated!.lastError).toBe('weather_D1:day');
+    expect(updated!.lastError).toBe('weather_D1');
+    // The reviewer sees the same flag the typed path raises.
+    expect(line!.reviewFlags).toContain('weather_D1');
+    // PM is ticked HR, but its time window is blank: the machine did not run then.
+    expect(line!.reviewFlags.filter((f) => f.startsWith('worked_in_reported_weather'))).toEqual([]);
+    expect([line!.weatherAm, line!.weatherPm]).toEqual(['C', 'HR']);
     expect(logged).toHaveLength(1);
     expect((logged[0]!.properties as { rule: string }).rule).toBe('D1');
+
+    await cleanup([row.id]);
+  });
+
+  it("holds a day run through the sheet's own heavy-rain tick and logs it as used despite warning, no weather feed needed", async () => {
+    const reportDate = '2022-06-02';
+    const row = await insertQueuedPaperEdtr(reportDate);
+    const tick = (n: number, at: number) => Array.from({ length: n }, (_, i) => (i === at ? ':selected:' : ':unselected:')).join(' ');
+    const rows = [
+      ['DATE', 'AM', '', 'PM', '', 'OVERTIME', '', 'TOTAL HOURS', 'IDLE HRS', 'IDLE REASON', 'WEATHER AM', 'WEATHER PM', 'INITIAL'],
+      ['', 'IN', 'OUT', 'IN', 'OUT', 'IN', 'OUT', '', '', '', '', '', ''],
+      [reportDate, '07:00', '12:00', '13:00', '17:00', '', '', '9', '', '', tick(6, 3), tick(6, 0), ''],
+    ];
+    await runEdtrOcrWorker(
+      new FixtureDocumentIntelligenceAdapter({
+        fields: {},
+        tables: [
+          {
+            rowCount: rows.length,
+            columnCount: 13,
+            cells: rows.flatMap((r, rowIndex) => r.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: 0.97 }))),
+          },
+        ],
+      }),
+      stubFetchBytes,
+    );
+
+    const { db, client } = makeJobDb();
+    const [updated] = await db.select().from(edtr).where(eq(edtr.id, row.id));
+    const [line] = await db.select().from(edtrLineItems).where(eq(edtrLineItems.edtrId, row.id));
+    const incidents = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${events.properties} ->> 'edtr_id' = ${row.id}`));
+    await db.delete(events).where(inArray(events.id, incidents.map((e) => e.id)));
+    await client.end();
+
+    expect(updated!.status).toBe('review');
+    expect(updated!.lastError).toContain('worked_in_reported_weather_am');
+    expect(line!.reviewFlags).toContain('worked_in_reported_weather_am');
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]!.properties).toMatchObject({ source: 'sheet', half: 'am', reported: { am: 'HR', pm: 'C' }, rental_id: rentalId });
 
     await cleanup([row.id]);
   });

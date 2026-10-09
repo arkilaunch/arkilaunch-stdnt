@@ -1,8 +1,5 @@
-// Canonical port + stub adapter live in packages/shared so a browser bundle
-// (apps/web) can share the contract without pulling Node builtins (same
-// convention as document-intelligence.port.ts). The real adapter lives
-// here: it needs `fetch` against a live endpoint and an env-scoped secret,
-// which have no place in a browser-shared package.
+// The real adapter lives here, not in packages/shared: it needs fetch and an env secret, no place in a browser bundle.
+import { BadGatewayException } from '@nestjs/common';
 import {
   CHECKOUT_METHODS,
   StubPaymentsAdapter,
@@ -15,14 +12,7 @@ import {
 
 const PAYMONGO_API_BASE = 'https://api.paymongo.com/v1';
 
-// Real PayMongo Hosted Checkout adapter (PRD-F2). Every request/response
-// shape below was exercised against the live test-mode API on 2026-09-26
-// (cr-arkilaunch-paymongo-linked-accounts.md §Findings): the
-// {data:{attributes}} envelope, the five channel codes, metadata copied
-// onto the payment intent and payment, GET returning `payments[]`, and
-// POST /v1/refunds. ArkiLaunch's key is the PayMongo *parent*; each
-// session routes its net amount to the tenant's child account with
-// split_payment.transfer_to.
+// ArkiLaunch's key is the PayMongo parent; each session routes its net amount to the tenant's child account.
 export class PayMongoAdapter implements PaymentsPort {
   constructor(private readonly secretKey: string) {}
 
@@ -36,31 +26,35 @@ export class PayMongoAdapter implements PaymentsPort {
       ...(attributes ? { body: JSON.stringify({ data: { attributes } }) } : {}),
     });
     if (!response.ok) {
-      throw new Error(`PayMongo ${method} ${path} failed: ${response.status} ${await response.text()}`);
+      throw new BadGatewayException({
+        error: response.status < 500 ? 'payment_provider_rejected' : 'payment_provider_unavailable',
+        message: response.status < 500
+          ? 'The payment provider could not start this payment. Please try QR Ph again or contact support.'
+          : 'The payment provider is unavailable. Please try again later.',
+      });
     }
     return (await response.json()) as T;
   }
 
   async createCheckoutSession(amountPhp: number, invoiceId: string, options: CheckoutOptions): Promise<CheckoutSession> {
     const label = options.label ?? 'Rental deposit';
+    const name = options.bookingCode ? `${options.bookingCode} · ${label}` : label;
     const body = await this.call<{ data: { id: string; attributes: { checkout_url: string } } }>('POST', '/checkout_sessions', {
       line_items: [
         {
           amount: Math.round(amountPhp * 100),
           currency: 'PHP',
-          description: `${label} (invoice ${invoiceId})`,
-          name: label,
+          description: `${name} (invoice ${invoiceId})`,
+          name,
           quantity: 1,
         },
       ],
-      // The customer's pick from our method screen, else every channel.
       payment_method_types: options.methods ?? [...CHECKOUT_METHODS],
       success_url: options.successUrl,
       cancel_url: options.cancelUrl,
-      description: `${label} for invoice ${invoiceId}`,
-      // Rides onto the payment PayMongo creates, so payment.* webhooks
-      // resolve our invoice (verified on a live test payment).
-      metadata: { invoice_id: invoiceId },
+      description: `${name} for invoice ${invoiceId}`,
+      // Rides onto the payment PayMongo creates, so payment.* webhooks resolve our invoice.
+      metadata: { invoice_id: invoiceId, ...(options.bookingCode ? { booking_code: options.bookingCode } : {}) },
       ...(options.transferTo ? { split_payment: { transfer_to: options.transferTo } } : {}),
     });
     return { id: body.data.id, checkoutUrl: body.data.attributes.checkout_url };
@@ -74,6 +68,10 @@ export class PayMongoAdapter implements PaymentsPort {
     return paid ? { paid: true, paymentId: paid.id, amountCentavos: paid.attributes.amount } : { paid: false };
   }
 
+  async expireCheckoutSession(sessionId: string): Promise<void> {
+    await this.call('POST', `/checkout_sessions/${encodeURIComponent(sessionId)}/expire`);
+  }
+
   async refund(paymentId: string, amountPhp: number, reason: RefundReason): Promise<{ id: string }> {
     const body = await this.call<{ data: { id: string } }>('POST', '/refunds', {
       amount: Math.round(amountPhp * 100),
@@ -84,9 +82,7 @@ export class PayMongoAdapter implements PaymentsPort {
   }
 }
 
-// ENABLE_PAYMENTS defaults off (stub). On, it refuses to boot without both
-// secrets -- same posture as the OCR flags: a half-configured payment path
-// would take a customer to a checkout whose webhook can never be verified.
+// On, it refuses to boot without both secrets: a half-configured path would take customers to an unverifiable checkout.
 export function createPaymentsAdapter(): PaymentsPort {
   if (process.env.ENABLE_PAYMENTS !== 'true') return new StubPaymentsAdapter();
   const secretKey = process.env.PAYMONGO_SECRET_KEY;

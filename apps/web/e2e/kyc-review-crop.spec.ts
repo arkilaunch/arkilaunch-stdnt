@@ -1,14 +1,9 @@
-import { test, expect, type Browser, type Page } from '@playwright/test';
+import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { signIn, TENANT_HEADERS } from './sign-in.js';
+import { choose } from './select.js';
 
-// Customer feedback round: crop the National ID, check what it says before
-// upload, company fields that follow the uploaded papers, and an admin card
-// that opens already read, with SEC/BIR/DTI registry links gating Verify.
-//
-// The documents are rendered here as clearly marked SPECIMEN papers with
-// made-up numbers, so the spec runs against whatever OCR the API has: with
-// extraction on, the fields arrive filled; with it off, they are typed.
-// Needs the seeded anchor tenant and the API.
+// SPECIMEN papers with made-up numbers, so this runs with OCR on (fields arrive filled) or off (typed).
+// Needs the seeded anchor tenant (`pnpm db:seed`) and the API running.
 
 const PCN = '1234-5678-9012-3456';
 const SEC = 'CS201912345';
@@ -52,7 +47,7 @@ async function render(browser: Browser, html: string, width: number, height: num
 }
 
 // Letters only: a trailing timestamp reads as a separate low-confidence
-// token and bounces the certificate as illegible.
+// token and drags the certificate's legibility score down.
 const runTag = Date.now().toString(36).replace(/\d/g, (d) => 'abcdefghij'[Number(d)]!).toUpperCase();
 const STORAGE_UNAVAILABLE = Boolean(process.env.CI);
 const companyName = `E2E Specimen Builders ${runTag}`;
@@ -67,7 +62,7 @@ let idRead = false;
 
 async function signUpCustomer(page: Page) {
   const res = await page.request.post('/api/v1/auth/register-customer', {
-    data: { email: customerEmail, password: customerPassword, acceptedTerms: true },
+    data: { firstName: 'Juan', lastName: 'Dela Cruz', mobileNumber: '+639170001234', jobTitle: 'Engineer', email: customerEmail, password: customerPassword, acceptedTerms: true },
     headers: TENANT_HEADERS,
   });
   expect(res.ok(), `register-customer answered ${res.status()}`).toBe(true);
@@ -86,10 +81,25 @@ async function logInCustomer(page: Page) {
   await page.waitForLoadState('networkidle');
 }
 
+async function finishScan(page: Page, next: Locator, adjustCorners = false) {
+  const use = page.getByRole('button', { name: /Use scan|Use original photo/ });
+  const reviewReady = async () => (await use.isVisible()) && (await use.isEnabled());
+  await expect.poll(async () => (await next.isVisible()) || (await reviewReady()), { timeout: 60_000 }).toBe(true);
+  if (await reviewReady()) {
+    if (adjustCorners) {
+      await page.getByRole('button', { name: 'Adjust corners' }).click();
+      await expect(page.getByRole('button', { name: 'Document corner 1' })).toBeVisible();
+      await page.getByRole('button', { name: 'Apply corners' }).click();
+    }
+    await use.click();
+  }
+  await expect(next).toBeVisible({ timeout: 60_000 });
+}
+
 test.describe.serial('KYC review: crop, ID check, per-document fields, registry-gated verify', () => {
   test.setTimeout(180_000);
 
-  test('customer crops the ID, checks its details, and sees only the fields their papers carry', async ({
+  test('customer scans the ID, checks its details, and sees only the fields their papers carry', async ({
     page,
     browser,
   }) => {
@@ -118,37 +128,16 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
 
     await signUpCustomer(page);
     await page.goto('/account/companies/new');
-    await expect(page.getByText(/Step 1 of 3/)).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Add a company' })).toBeVisible();
+    await expect(page.getByText('Step 1 of 7')).toBeVisible();
+    await choose(page.getByLabel('ID type'), 'philsys');
+    await page.getByRole('button', { name: 'Continue' }).click();
 
-    // Step 1: the photo opens the cropper, free size first, then the card
-    // shape and square on toggle.
+    // A clear image reads automatically; uncertain edges keep corner adjustment available.
     await page.getByTestId('doc-government_id-file').setInputFiles(file('id.png', idPng));
-    const dialog = page.getByRole('dialog', { name: 'Crop your document' });
-    await expect(dialog).toBeVisible();
-    const shape = dialog.getByRole('radiogroup', { name: 'Crop shape' });
-    await expect(shape.getByRole('radio', { name: 'Free' })).toHaveAttribute('aria-checked', 'true');
-    const cropArea = dialog.locator('[data-testid="cropper"]');
-    const ratio = async () => {
-      const box = (await cropArea.boundingBox())!;
-      return box.width / box.height;
-    };
-    // Free starts on the whole photo (1400 x 900) and resizes each side.
-    await expect.poll(ratio).toBeCloseTo(1400 / 900, 1);
-    await dialog.getByLabel('Height').fill('0.5');
-    await expect.poll(ratio).toBeCloseTo(1400 / 450, 1);
-    await shape.getByRole('radio', { name: 'ID card' }).click();
-    await expect.poll(ratio).toBeCloseTo(85.6 / 54, 1);
-    await shape.getByRole('radio', { name: 'Square' }).click();
-    await expect.poll(ratio).toBeCloseTo(1, 1);
-    await shape.getByRole('radio', { name: 'ID card' }).click();
-    await expect.poll(ratio).toBeCloseTo(85.6 / 54, 1);
-    await dialog.getByRole('button', { name: 'Use this crop' }).click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Crop again' })).toBeVisible();
+    await finishScan(page, page.getByText('Step 3 of 7'), true);
 
     // Step 2: the customer checks the ID details before going on.
-    await page.getByRole('button', { name: 'Next: check your ID details' }).click();
-    await expect(page.getByText(/Step 2 of 3/)).toBeVisible({ timeout: 60_000 });
     const pcn = page.getByLabel(/PCN/);
     const first = page.getByLabel('First name');
     const last = page.getByLabel('Last name');
@@ -163,26 +152,25 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
     await last.fill('Dela Cruz');
     // A malformed PCN never gets past this step.
     await pcn.fill('1234');
-    await page.getByRole('button', { name: 'Next: company registration' }).click();
-    await expect(page.getByText(/Step 2 of 3/)).toBeVisible();
+    await page.getByRole('button', { name: 'Next: registration type' }).click();
+    await expect(page.getByText('Step 3 of 7')).toBeVisible();
     expect(await pcn.evaluate((el: HTMLInputElement) => el.validity.valid)).toBe(false);
     // Spaces are re-dashed on blur. One digit off the card, so the admin
     // card shows a customer edit when OCR is on.
     await pcn.fill('1234 5678 9012 3457');
     await pcn.blur();
     await expect(pcn).toHaveValue('1234-5678-9012-3457');
-    await page.getByRole('button', { name: 'Next: company registration' }).click();
+    await page.getByRole('button', { name: 'Next: registration type' }).click();
 
-    // Step 3: SEC as the primary paper, DTI as the secondary.
-    await expect(page.getByText(/Step 3 of 3/)).toBeVisible();
-    await page.getByLabel('Document type').selectOption('sec_certificate');
-    // Every photo opens the cropper, certificates included.
+    // SEC is the primary paper; DTI is offered on the following screen.
+    await expect(page.getByText('Step 4 of 7')).toBeVisible();
+    await choose(page.getByLabel('Registration type'), 'sec_certificate');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    // Company papers also advance automatically when the scan is clear.
     await page.getByTestId('doc-company_registration-file').setInputFiles(file('sec.png', secPng));
-    await page.getByRole('dialog', { name: 'Crop your document' }).getByRole('button', { name: 'Use this crop' }).click();
+    await finishScan(page, page.getByText('Step 6 of 7'));
     await page.getByTestId('doc-dti_certificate-file').setInputFiles(file('dti.png', dtiPng));
-    await page.getByRole('dialog', { name: 'Crop your document' }).getByRole('button', { name: 'Use this crop' }).click();
-    await expect(page.getByRole('button', { name: 'Crop again' })).toHaveCount(2);
-    await page.getByRole('button', { name: 'Next: check the details' }).click();
+    await finishScan(page, page.getByLabel('Company name'));
 
     // Only the numbers these papers print: no TIN without a 2303.
     await expect(page.getByLabel('Company name')).toBeVisible({ timeout: 60_000 });
@@ -228,8 +216,10 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await signIn(page);
     await page.goto('/app/registration/pending');
+    // The queue is a table; the review opens in a drawer.
+    await page.getByRole('row', { name: companyName }).click({ timeout: 30_000 });
     const card = page.getByRole('group', { name: companyName });
-    await expect(card.getByRole('heading', { name: companyName })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('dialog', { name: companyName })).toBeVisible({ timeout: 30_000 });
 
     // Prefilled from what the customer confirmed; no Read click needed.
     await expect(card.getByLabel('First name')).toHaveValue('Juan');
@@ -244,7 +234,7 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
     // The PCN was typed one digit off the card: where the scan read it, the
     // card shows the edit and the scan's value instead of a read %.
     if (idRead) {
-      const idButton = card.getByRole('button', { name: /Philippine National ID/ });
+      const idButton = card.getByRole('button', { name: /Government-issued ID/ });
       await expect(idButton).toContainText('Edited by customer');
       await expect(idButton).not.toContainText('%');
       await expect(card.getByText('scan read "1234-5678-9012-3456"')).toBeVisible();
@@ -298,6 +288,8 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
     test.skip(STORAGE_UNAVAILABLE, 'needs the uploaded documents; CI has no storage behind the API');
     await signIn(page);
     await page.goto('/app/registration/pending');
+    // The queue is a table; the review opens in a drawer.
+    await page.getByRole('row', { name: companyName }).click({ timeout: 30_000 });
     const card = page.getByRole('group', { name: companyName });
     await expect(card.getByRole('textbox', { name: 'SEC registration number' })).toHaveValue('CS201912346', {
       timeout: 30_000,
@@ -312,6 +304,7 @@ test.describe.serial('KYC review: crop, ID check, per-document fields, registry-
     await card.getByLabel('I checked this on the DTI registry').check();
     await expect(verify).toBeEnabled();
     await verify.click();
+    await page.getByRole('alertdialog', { name: 'Verify this company?' }).getByRole('button', { name: 'Verify company' }).click();
     await expect(page.getByText('Company verified')).toBeVisible({ timeout: 30_000 });
   });
 });

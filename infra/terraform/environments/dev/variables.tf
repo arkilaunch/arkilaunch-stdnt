@@ -1,8 +1,6 @@
-# Non-secret config (defaults live in terraform.tfvars, committed).
-
 variable "location" {
   type    = string
-  default = "southeastasia" # PH data-residency intent, docs/clr-arkilaunch.md gap E1. Azure DI model/region availability confirmed (docs/cr-arkilaunch-azure-di-provisioning.md); the RA 10173 cross-border transfer basis (AIA-R7) is the remaining open item, not region availability.
+  default = "southeastasia" # PH data residency; RA 10173 cross-border basis still open
 }
 
 variable "image_tag" {
@@ -12,13 +10,13 @@ variable "image_tag" {
 
 variable "web_origin" {
   type        = string
-  description = "CORS origin for the dev frontend (Vercel preview URL)."
+  description = "CORS origin for the dev frontend (the Cloudflare Worker at the apex, https://arkilaunch.app)."
 }
 
 variable "platform_domain" {
   type        = string
   description = "Root domain; tenant storefronts at https://{slug}.<domain> are allowed by the API's CORS."
-  default     = "arkilaunch.tech"
+  default     = "arkilaunch.app"
 }
 
 variable "supabase_url" {
@@ -60,26 +58,49 @@ variable "enable_payments" {
   default = false
 }
 
-variable "jwt_access_token_ttl" {
-  type    = string
-  default = "600" # seconds; see apps/api/src/auth/auth.service.ts's JWT_ACCESS_TOKEN_TTL read
+# Turnstile CR: on, the API refuses to boot without turnstile_secret_key.
+variable "enable_turnstile" {
+  type    = bool
+  default = false
 }
 
-# Cron cadences: only weather-poll's is stated in ops-arkilaunch.md (SLO-8,
-# every 30 min). The other three are this plan's inferred defaults, not a
-# settled spec -- confirm with product/ops before relying on them.
+variable "jwt_access_token_ttl" {
+  type    = string
+  default = "600" # seconds
+}
+
 variable "weather_poll_cron" {
   type    = string
   default = "*/30 * * * *"
 }
 
-# Open-Meteo free tier caps at 10,000 calls/day
-# (docs/cr-arkilaunch-open-meteo-free-tier.md). At the 30-min cadence above
-# that is 48 calls/site/day, so this ceiling supports ~200 active sites; a
-# poll cycle over the ceiling truncates loudly rather than over-calling.
+# Open-Meteo free tier: 10k calls/day, ~200 sites at 30-min cadence; over the ceiling truncates loudly.
 variable "weather_poll_max_sites" {
   type    = number
   default = 200
+}
+
+# 05:30 Asia/Manila = 21:30 UTC the day before.
+variable "weather_briefing_cron" {
+  type    = string
+  default = "30 21 * * *"
+}
+
+# Generate once with `npx web-push generate-vapid-keys`; empty skips push.
+variable "vapid_public_key" {
+  type    = string
+  default = ""
+}
+
+variable "vapid_private_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "vapid_subject" {
+  type    = string
+  default = "mailto:support@arkilaunch.app"
 }
 
 variable "edtr_ocr_worker_cron" {
@@ -97,8 +118,12 @@ variable "maintenance_notify_cron" {
   default = "0 7 * * *"
 }
 
-# --- Secrets: sourced from GitHub encrypted secrets via TF_VAR_* in CI,
-# never committed to terraform.tfvars. ---
+variable "hold_expiry_cron" {
+  type    = string
+  default = "5 * * * *"
+}
+
+# --- Secrets: TF_VAR_* from GitHub encrypted secrets, never committed. ---
 
 variable "database_url_direct" {
   type      = string
@@ -142,3 +167,25 @@ variable "paymongo_webhook_secret" {
   default   = ""
 }
 
+variable "ors_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "turnstile_secret_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+
+variable "weekly_billing_cron" {
+  type    = string
+  default = "0 23 * * 0" # weekly, Monday 07:00 PHT (UTC cron), after the diesel run
+}
+
+variable "tier_recompute_cron" {
+  type    = string
+  default = "30 16 * * *" # 00:30 Asia/Manila
+}

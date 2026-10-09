@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { signIn } from './sign-in.js';
+import { choose } from './select.js';
 
-// Phase 2: an "Others" machine carries a free-text category, and logging a
-// service resets that task's hours since service. The retire at the end is
-// the cleanup, as in inventory-crud.spec.ts.
+// The retire at the end is the cleanup.
 test('admin adds an Others machine, corrects its meter and logs a service that resets the hours', async ({
   page,
 }) => {
@@ -14,7 +13,7 @@ test('admin adds an Others machine, corrects its meter and logs a service that r
   await page.getByRole('button', { name: 'Add equipment' }).click();
   const add = page.getByRole('dialog');
   await add.getByLabel('Equipment name').fill('E2E Paver');
-  await add.getByLabel('Category').selectOption({ label: 'Others' });
+  await choose(add.getByLabel('Category'), { label: 'Others' });
   // Required once "Others" is picked.
   await expect(add.getByRole('button', { name: 'Add equipment' })).toBeDisabled();
   await add.getByLabel('Describe the category').fill('Asphalt paver');
@@ -22,9 +21,15 @@ test('admin adds an Others machine, corrects its meter and logs a service that r
   await add.getByRole('button', { name: 'Add equipment' }).click();
   await expect(add).toBeHidden();
 
+  // The fleet is paged and sorted by category: once other specs have added
+  // units, a new "Others" machine can land past page one. Find it by serial.
+  await page.getByLabel('Search').fill(serial);
   const card = page.getByRole('group', { name: serial });
-  await card.getByRole('button', { name: 'Maintenance' }).click();
-  const dialog = page.getByRole('dialog');
+  await card.getByRole('button', { name: 'Report & maintenance' }).click();
+  const dialog = page.getByRole('dialog', { name: 'E2E Paver' });
+  // Opens on the unit's report; schedules are the second tab.
+  await expect(dialog.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
+  await dialog.getByRole('tab', { name: /^Schedules/ }).click();
   await expect(dialog.getByText('No schedules yet.')).toBeVisible();
 
   // The Engine oil 250 h preset is the default.
@@ -32,9 +37,12 @@ test('admin adds an Others machine, corrects its meter and logs a service that r
   const oil = dialog.getByRole('listitem', { name: 'Engine oil' });
   await expect(oil.getByTestId('hours-since')).toHaveText('0');
 
-  await dialog.getByLabel('Meter reading (hours)').fill('120');
-  await dialog.getByLabel('Reason').fill('Meter read on site');
-  await dialog.getByRole('button', { name: 'Save reading' }).click();
+  await dialog.getByRole('button', { name: 'Correct hour meter' }).click();
+  const meter = page.getByRole('dialog', { name: 'Correct hour meter' });
+  await meter.getByLabel('Meter reading (hours)').fill('120');
+  await meter.getByLabel('Reason').fill('Meter read on site');
+  await meter.getByRole('button', { name: 'Save reading' }).click();
+  await expect(meter).toBeHidden();
   await expect(oil.getByTestId('hours-since')).toHaveText('120');
 
   await oil.getByRole('button', { name: 'Log service' }).click();
@@ -42,7 +50,8 @@ test('admin adds an Others machine, corrects its meter and logs a service that r
   await expect(oil).toContainText('next due at 370 h');
 
   await dialog.getByRole('button', { name: 'Close' }).click();
-  await card.getByRole('button', { name: 'Delete' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Delete asset' }).click();
+  await card.getByRole('button', { name: /more actions for/i }).click();
+  await page.getByRole('menuitem', { name: 'Retire equipment' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Retire equipment' }).click();
   await expect(page.getByRole('group', { name: serial })).toBeHidden();
 });

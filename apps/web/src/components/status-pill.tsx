@@ -1,8 +1,5 @@
 import type { ReactNode } from 'react';
 
-// The two named semantic scales from DESIGN.md §2.1: reconciliation/OCR-confidence
-// (PRD-F3/F6) and PAGASA weather-risk (PRD-F5). A pill is always icon + label + color
-// (never color-only, DESIGN.md §6).
 export type StatusTone =
   | 'recon-match'
   | 'recon-review'
@@ -46,7 +43,7 @@ export function StatusPill({ tone, label, icon, value, className = '' }: StatusP
   return (
     <span
       className={[
-        'inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-sm font-medium',
+'inline-flex items-center gap-1.5 rounded-xs px-2 py-1 text-sm font-medium',
         TONE_CLASSES[tone],
         className,
       ].join(' ')}

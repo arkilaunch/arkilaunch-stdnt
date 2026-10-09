@@ -20,10 +20,14 @@ import {
 } from '@arkilaunch/db';
 import { eq } from 'drizzle-orm';
 import { notifyStaff } from '../common/notify-customer.js';
+import { verifyTurnstile } from '../common/turnstile.js';
+import { PLATFORM_TENANT_SLUG, tenantWebOrigin } from '@arkilaunch/shared';
+import { recoveryEmail, revokeRecovery, sendRecoveryEmail } from './supabase-recovery.js';
 import type {
   CustomerSignup,
   AuthTokens,
   ForgotPasswordRequest,
+  ResetPasswordRequest,
   Enroll2faConfirmRequest,
   LoginRequest,
   RefreshRequest,
@@ -35,31 +39,22 @@ import type {
 import { RefreshTokenService } from './refresh-token.service.js';
 import { TotpService } from './totp.service.js';
 
-// ~10 min default, RFC-1 §3; overridable via JWT_ACCESS_TOKEN_TTL (seconds).
+// Overridable via JWT_ACCESS_TOKEN_TTL (seconds).
 const ACCESS_TOKEN_TTL_SECONDS = Number(process.env.JWT_ACCESS_TOKEN_TTL) || 600;
 const TWO_FA_CHALLENGE_TTL_SECONDS = 300; // 5 min
 const TWO_FA_CHALLENGE_PURPOSE = '2fa_challenge';
 const ACTIVATION_TOKEN_TTL_SECONDS = 72 * 60 * 60; // 72h, S19
 const ACTIVATION_TOKEN_PURPOSE = 'user_activation';
-// System GUC placeholder for the pre-login lookup this shares with
-// RefreshTokenService.BOOTSTRAP_ROLE -- RLS filters on tenant_id only, role
-// is informational.
+// Pre-login lookup GUC role: RLS filters on tenant_id only, the role is informational.
 const BOOTSTRAP_ROLE = 'system';
-// Only the timekeeper role is gated behind 2FA (PRD US-02, US-07); other
-// roles are unaffected by this slice.
 const TWO_FA_ENFORCED_ROLE = 'timekeeper';
 
-// QAD-T22 (credential stuffing / brute force on /auth/login). In-process
-// only (no Redis in V1, BUILD §3; resets on restart) -- keyed by the
-// lowercased email rather than tenant_id, since login runs before any
-// tenant context exists (the same "same error for bad email, bad
-// password" no-enumeration posture this file already has). users.email is
-// only unique per-tenant, so two different tenants' users sharing an
-// email string would share a lockout window; accepted as a rare,
-// non-security-weakening edge case rather than a reason to add a
-// per-tenant lockout table.
+// Keyed by lowercased email: login runs before any tenant context, and users.email is unique platform-wide.
 const LOGIN_LOCKOUT_THRESHOLD = 5;
 const LOGIN_LOCKOUT_WINDOW_MS = 15 * 60_000;
+// From this many failures (per email OR per IP) a login must carry a Turnstile token.
+// ponytail: in-process per replica, like the lockout; move both to Postgres if replicas stop being a handful.
+const LOGIN_CAPTCHA_THRESHOLD = 2;
 
 interface LoginAttemptState {
   failCount: number;
@@ -76,6 +71,8 @@ interface TwoFaChallengePayload {
 @Injectable()
 export class AuthService {
   private readonly loginAttempts = new Map<string, LoginAttemptState>();
+  private readonly ipLoginAttempts = new Map<string, LoginAttemptState>();
+  private readonly twoFaAttempts = new Map<string, LoginAttemptState>();
 
   constructor(
     private readonly jwtService: JwtService,
@@ -83,24 +80,32 @@ export class AuthService {
     private readonly totp: TotpService,
   ) {}
 
-  // Scoped to the request host's tenant (tenant-slug.decorator.ts): an
-  // Almara admin signs in on almara.<domain>, the platform_admin on the bare
-  // domain. The wrong host gets the same invalid_credentials as a bad
-  // password, so a host reveals nothing about which tenants an email is in.
-  async login({ email, password }: LoginRequest, tenantSlug: string): Promise<AuthTokens | TwoFaChallenge> {
+  // Scoped to the request host's tenant; the wrong host gets the same invalid_credentials as a bad password.
+  async login(
+    { email, password }: LoginRequest,
+    tenantSlug: string,
+    ip?: string,
+    turnstileToken?: string,
+  ): Promise<AuthTokens | TwoFaChallenge> {
     const normalizedEmail = email.toLowerCase();
-    this.assertNotLockedOut(normalizedEmail);
+    this.assertNotLockedOut(this.loginAttempts, normalizedEmail);
+    if (
+      this.failCount(this.loginAttempts, normalizedEmail) >= LOGIN_CAPTCHA_THRESHOLD ||
+      (ip && this.failCount(this.ipLoginAttempts, ip) >= LOGIN_CAPTCHA_THRESHOLD)
+    ) {
+      await verifyTurnstile(turnstileToken, ip);
+    }
 
     const user = await findUserByEmailForAuth(normalizedEmail, tenantSlug);
-    // Same error for bad email, bad password (RFC-1 §3): no user-enumeration signal.
+    // Same error for bad email and bad password: no user-enumeration signal.
     if (!user || user.status !== 'active') {
-      this.recordLoginFailure(normalizedEmail);
+      this.recordLoginFailure(normalizedEmail, ip);
       throw new UnauthorizedException('invalid_credentials');
     }
 
     const passwordOk = await verify(user.passwordHash, password);
     if (!passwordOk) {
-      this.recordLoginFailure(normalizedEmail);
+      this.recordLoginFailure(normalizedEmail, ip);
       throw new UnauthorizedException('invalid_credentials');
     }
 
@@ -114,38 +119,29 @@ export class AuthService {
           twoFaToken: this.signTwoFaChallenge(user.tenantId, user.id, user.roleName),
         };
       }
-      // Not yet enrolled: let them in so they can reach the enroll
-      // endpoints. PRD: "Timekeeper onboarding requires 2FA enrollment
-      // before first EDTR submission" -- enforced at EDTR capture (RFC-2),
-      // not at login, so an unenrolled timekeeper is not locked out entirely.
+      // Not enrolled: let them in to reach the enroll endpoints. 2FA is NOT enforced anywhere else yet.
     }
 
     return this.issueTokens(user.tenantId, user.id, user.roleName);
   }
 
-  // POST /auth/register-customer (customer prerequisites CR): self-signup
-  // on a tenant's storefront. The customer lands in the tenant of the host
-  // they signed up on; customer_register (0048) refuses a tenant that is not
-  // active. Signed straight in, the same as a login. 'email_taken' does
-  // reveal that an address has an account, which every signup form does;
-  // login keeps its no-enumeration posture.
-  async registerCustomer({ email, password }: CustomerSignup, tenantSlug: string): Promise<AuthTokens> {
+  // 'email_taken' does reveal an address has an account, as every signup does; login stays non-enumerating.
+  async registerCustomer({ email, password, ...contact }: CustomerSignup, tenantSlug: string): Promise<AuthTokens> {
     const passwordHash = await hash(password);
     try {
-      const created = await registerCustomerUser(tenantSlug, email.toLowerCase(), passwordHash);
+      const created = await registerCustomerUser(tenantSlug, email.toLowerCase(), passwordHash, contact);
       return this.issueTokens(created.tenantId, created.userId, 'customer');
     } catch (err) {
-      if (err instanceof EmailTakenError) throw new ConflictException({ error: 'email_taken' });
+      if (err instanceof EmailTakenError) {
+        const existing = await findUserByEmailForAuth(email.toLowerCase(), tenantSlug);
+        throw new ConflictException({ error: existing?.status === 'disabled' ? 'email_disabled' : 'email_taken' });
+      }
       if (err instanceof StorefrontNotFoundError) throw new NotFoundException({ error: 'tenant_not_found' });
       throw err;
     }
   }
 
-  // POST /auth/forgot-password (@Public). There is no email provider, so a
-  // request only tells the account's tenant admins, who reset it from
-  // /app/users (UsersService.resetPassword) and hand over the /activate
-  // link. The answer is the same for every email, known or not, so it
-  // reveals nothing about which addresses have an account.
+  // Emails a Supabase reset link and tells the tenant's admins; the same answer for every email, so nothing is revealed.
   async forgotPassword({ email }: ForgotPasswordRequest, tenantSlug: string): Promise<{ ok: true }> {
     const normalizedEmail = email.toLowerCase();
     const user = await findUserByEmailForAuth(normalizedEmail, tenantSlug);
@@ -153,25 +149,47 @@ export class AuthService {
       await withTenantTx({ tenantId: user.tenantId, userId: user.id, role: BOOTSTRAP_ROLE }, (tx) =>
         notifyStaff(tx, user.tenantId, 'password_reset_requested', { email: normalizedEmail, user_id: user.id }),
       );
+      const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:5173';
+      // Platform admins sign in on the bare host, which sends no tenant slug.
+      const origin =
+        tenantSlug === PLATFORM_TENANT_SLUG
+          ? webOrigin.replace(/\/$/, '')
+          : tenantWebOrigin(tenantSlug, webOrigin, process.env.PLATFORM_DOMAIN);
+      await sendRecoveryEmail(normalizedEmail, `${origin}/reset-password`);
     }
     return { ok: true };
   }
 
-  // POST /auth/2fa/verify: completes the challenge from login() and issues
-  // the real access/refresh tokens, exactly like a normal login would.
+  // The Supabase token only proves inbox control; the account is still looked up on the request host's tenant.
+  async resetPassword({ accessToken, password }: ResetPasswordRequest, tenantSlug: string): Promise<{ ok: true }> {
+    const email = await recoveryEmail(accessToken);
+    const user = email ? await findUserByEmailForAuth(email, tenantSlug) : null;
+    if (!user || user.status !== 'active') throw new UnauthorizedException('invalid_reset_token');
+
+    const passwordHash = await hash(password);
+    const ctx = { tenantId: user.tenantId, userId: user.id, role: BOOTSTRAP_ROLE };
+    await withTenantTx(ctx, (tx) => tx.update(users).set({ passwordHash }).where(eq(users.id, user.id)));
+    // A session hijacked before the reset must not survive it.
+    await this.refreshTokens.revokeAllForUser(ctx, user.id);
+    await revokeRecovery(accessToken);
+    return { ok: true };
+  }
+
   async verifyTwoFa({ twoFaToken, code }: Verify2faRequest): Promise<AuthTokens> {
     const payload = this.verifyTwoFaChallenge(twoFaToken);
+    // Keyed by user, not IP: a fresh login mints a fresh challenge, so only a per-account count bounds guessing.
+    this.assertNotLockedOut(this.twoFaAttempts, payload.sub);
+    // Counted before any await, so parallel guesses can't all pass the check; a correct code clears it.
+    this.bump(this.twoFaAttempts, payload.sub);
     const secret = await this.getTotpSecret(payload.tenantId, payload.sub, payload.r);
     if (!secret || !(await this.totp.verify(code, secret))) {
       throw new UnauthorizedException('invalid_totp_code');
     }
+    this.twoFaAttempts.delete(payload.sub);
     return this.issueTokens(payload.tenantId, payload.sub, payload.r);
   }
 
-  // POST /auth/2fa/enroll (authenticated): generates a secret but does NOT
-  // persist it yet -- the client must prove it can generate a valid code
-  // (enrollConfirm) before it is written to users.totp_secret, so a
-  // dropped/garbled QR scan can never silently lock a timekeeper out.
+  // Not persisted until enrollConfirm proves a valid code, so a garbled QR scan can't lock a timekeeper out.
   enroll(accountLabel: string): { secret: string; otpauthUrl: string } {
     const secret = this.totp.generateSecret();
     return { secret, otpauthUrl: this.totp.keyUri(accountLabel, secret) };
@@ -187,19 +205,9 @@ export class AuthService {
     return { enrolled: true };
   }
 
-  // POST /auth/activate (@Public, S19): completes an invite. There is no
-  // email provider anywhere in the pinned stack (BUILD §3), so
-  // UsersService.invite() returns a stateless activation token in its
-  // response for the admin to relay out-of-band, rather than persisting an
-  // invitation row. Single-use falls out of binding the token to the
-  // invited user's own (unusable, random) password hash: activation
-  // changes that hash, so the token's `pwv` no longer matches and it dies.
+  // Single use: the token is bound to the invited user's password hash, which activation changes.
   async activate({ activationToken, password }: UserActivateRequest): Promise<void> {
-    // No JWT on this route (it is @Public -- the caller is not
-    // authenticated yet). The activation token itself carries the only
-    // tenant/user context available; withTenantTx still runs with a real
-    // GUC so RLS is enforced, it is just sourced from the token's own
-    // signed claims rather than a verified access token.
+    // @Public: tenant context comes from the activation token's signed claims; RLS still runs on a real GUC.
     const payload = this.verifyActivationToken(activationToken);
 
     await withTenantTx({ tenantId: payload.tenantId, userId: payload.sub, role: BOOTSTRAP_ROLE }, async (tx) => {
@@ -208,22 +216,18 @@ export class AuthService {
         throw new UnauthorizedException('invalid_activation_token');
       }
       if (this.hashForActivation(user.passwordHash) !== payload.pwv) {
-        // Either already activated (hash changed) or re-invited (hash
-        // rerolled) since this token was issued -- dead either way.
+        // Already activated or re-invited since issue: dead either way.
         throw new UnauthorizedException('invalid_activation_token');
       }
 
       const passwordHash = await hash(password);
       await tx.update(users).set({ passwordHash, status: 'active' }).where(eq(users.id, payload.sub));
     });
-    // A self-registered company goes live when its owner activates
-    // (migration 0051); a no-op for staff invites and legacy applications.
+    // A self-registered company goes live when its owner activates.
     await activateOnboardingTenant(payload.tenantId);
   }
 
-  // Binds the token to the CURRENT password hash so activation (which
-  // changes it) and re-invite (which rerolls it) both invalidate every
-  // outstanding token for that user with no extra state to track.
+  // Bound to the CURRENT password hash: activation and re-invite both invalidate outstanding tokens.
   signActivationToken(tenantId: string, userId: string, passwordHash: string): string {
     return this.jwtService.sign(
       { sub: userId, tenantId, pwv: this.hashForActivation(passwordHash), purpose: ACTIVATION_TOKEN_PURPOSE },
@@ -271,16 +275,13 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
   }
 
-  // Rejects an attempt outright once the threshold is hit within the
-  // window, before password verification even runs (QAD-T22: "attempts
-  // logged" -- rejecting pre-verify avoids spending an argon2 hash on an
-  // attempt already known to be locked out).
-  private assertNotLockedOut(email: string): void {
-    const state = this.loginAttempts.get(email);
+  // Rejects before password verification, so a locked-out attempt never costs an argon2 hash.
+  private assertNotLockedOut(attempts: Map<string, LoginAttemptState>, key: string): void {
+    const state = attempts.get(key);
     if (!state) return;
     const elapsedMs = Date.now() - state.windowStart;
     if (elapsedMs > LOGIN_LOCKOUT_WINDOW_MS) {
-      this.loginAttempts.delete(email);
+      attempts.delete(key);
       return;
     }
     if (state.failCount >= LOGIN_LOCKOUT_THRESHOLD) {
@@ -291,14 +292,24 @@ export class AuthService {
     }
   }
 
-  private recordLoginFailure(email: string): void {
+  private recordLoginFailure(email: string, ip: string | undefined): void {
+    this.bump(this.loginAttempts, email);
+    if (ip) this.bump(this.ipLoginAttempts, ip);
+  }
+
+  private bump(attempts: Map<string, LoginAttemptState>, key: string): void {
     const now = Date.now();
-    const state = this.loginAttempts.get(email);
+    const state = attempts.get(key);
     if (!state || now - state.windowStart > LOGIN_LOCKOUT_WINDOW_MS) {
-      this.loginAttempts.set(email, { failCount: 1, windowStart: now });
+      attempts.set(key, { failCount: 1, windowStart: now });
     } else {
       state.failCount += 1;
     }
+  }
+
+  private failCount(attempts: Map<string, LoginAttemptState>, key: string): number {
+    const state = attempts.get(key);
+    return state && Date.now() - state.windowStart <= LOGIN_LOCKOUT_WINDOW_MS ? state.failCount : 0;
   }
 
   private async hasTotpEnrolled(tenantId: string, userId: string, role: string): Promise<boolean> {
@@ -319,11 +330,8 @@ export class AuthService {
     );
   }
 
-  // Deliberately does NOT sign `{ sub, tenantId, role, ... }` (which would
-  // structurally satisfy JwtClaimsSchema and let this challenge token pass
-  // as a real Bearer token on any guarded route). The `r` key and the
-  // `purpose` marker mean JwtStrategy.validate's JwtClaimsSchema.parse always
-  // rejects it, so it is single-purpose by construction, not convention.
+  // Deliberately not JwtClaimsSchema-shaped (the `r` key and `purpose` marker), so this challenge can never
+  // pass as a Bearer token on a guarded route.
   private signTwoFaChallenge(tenantId: string, userId: string, role: string): string {
     const payload: Omit<TwoFaChallengePayload, 'iat' | 'exp'> = {
       sub: userId,

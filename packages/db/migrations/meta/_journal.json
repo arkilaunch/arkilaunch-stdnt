@@ -372,6 +372,258 @@
       "when": 1790400014000,
       "tag": "0053_paymongo_linked_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790400015000,
+      "tag": "0054_kyc_rejection_reasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790400016000,
+      "tag": "0055_site_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790400017000,
+      "tag": "0056_pagasa_advisories",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1790400018000,
+      "tag": "0057_coupons",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790400019000,
+      "tag": "0058_booking_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790400020000,
+      "tag": "0059_edtr_hour_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790400021000,
+      "tag": "0060_tenant_brand_kit",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790400022000,
+      "tag": "0061_tenant_font_plex",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790400023000,
+      "tag": "0062_directory_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1790400024000,
+      "tag": "0063_global_email_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790400025000,
+      "tag": "0064_per_unit_dates_site_mobile",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790400026000,
+      "tag": "0065_equipment_options_photo_credit",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790400027000,
+      "tag": "0066_push_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1790400028000,
+      "tag": "0067_qa_batch_14_22",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790400029000,
+      "tag": "0068_qa_batch_23_28",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1790400030000,
+      "tag": "0069_platform_registration_notify",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1790400031000,
+      "tag": "0070_truck_routing_eta",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1790400032000,
+      "tag": "0071_hourly_rate_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1790400033000,
+      "tag": "0072_truck_pricing_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1790400034000,
+      "tag": "0073_hourly_rate_cards_repair",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1790400035000,
+      "tag": "0074_edtr_sheet_downloads",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1790400036000,
+      "tag": "0075_truck_driver_rate",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1790400037000,
+      "tag": "0076_truck_quote_breakdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1790400038000,
+      "tag": "0077_truck_short_trip_fee",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1790400039000,
+      "tag": "0078_tenant_login_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1790400040000,
+      "tag": "0079_equipment_type_costs",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1790400041000,
+      "tag": "0080_customer_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1791158400000,
+      "tag": "0081_user_signup_contact",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1791158401000,
+      "tag": "0082_support_tickets",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1791158402000,
+      "tag": "0083_testimonials_admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1791244800000,
+      "tag": "0084_payment_receipt_no",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791331200000,
+      "tag": "0085_assignment_operator_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1791417600000,
+      "tag": "0086_edtr_scan_rotation",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1791504000000,
+      "tag": "0087_billing_skip_deposit_for_edtr",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1791590400000,
+      "tag": "0088_billing_skip_ocr_accuracy_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791676800000,
+      "tag": "0089_incident_review_edtr_weather",
+      "breakpoints": true
     }
   ]
 }

@@ -5,18 +5,22 @@ import type { AssignableRole } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
 import { adminLayoutRoute } from './_admin.js';
 import { requireRole } from '../lib/guards.js';
-import { apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { ApiError, apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
 import { useToast } from '../components/toast.js';
-import { formatRole, formatStatus } from '../lib/format.js';
+import { formatRole } from '../lib/format.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { Button } from '../components/button.js';
+import { CopyButton } from '../components/copy-button.js';
 import { Input } from '../components/input.js';
 import { Select } from '../components/select.js';
-import { Surface } from '../components/surface.js';
+import { Modal } from '../components/modal.js';
+import { StatusBadge } from '../components/status-badge.js';
+import { ActionMenu } from '../components/action-menu.js';
+
 
 interface UserRow {
   id: string;
@@ -36,7 +40,7 @@ const usersListQuery = (limit: number, offset: number) => ({
   queryFn: () => apiGet<UserListResponse>(`/users?limit=${limit}&offset=${offset}`),
 });
 
-function InviteForm() {
+function InviteModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<AssignableRole>('customer');
@@ -50,9 +54,22 @@ function InviteForm() {
       setEmail('');
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
-    onError: () =>
-      setError('Could not invite this user. Check the email is not already registered.'),
+    // One account per email platform-wide: the address may belong to another company's user.
+    onError: (e) =>
+      setError(
+        e instanceof ApiError && e.message === 'email_disabled'
+          ? "This person's access was removed. Restore it from their profile instead."
+          : e instanceof ApiError && e.message === 'email_taken'
+            ? 'That email already has an ArkiLaunch account. Invite a different email.'
+            : apiErrorText(e),
+      ),
   });
+
+  function close() {
+    setActivationToken(null);
+    setError(null);
+    onClose();
+  }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -62,10 +79,35 @@ function InviteForm() {
   }
 
   return (
-    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-4">
-      <h2 className="font-display text-base font-semibold text-text">Invite a user</h2>
-      <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-3">
-        <div className="min-w-56 flex-1">
+    <Modal
+      open={open}
+      onClose={close}
+      title="Invite a user"
+      description="They get an account on your company with the role you pick."
+      size="sm"
+      footer={
+        activationToken ? (
+          <Button onClick={close}>Done</Button>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={close}>
+              Cancel
+            </Button>
+            <Button type="submit" form="invite-user" loading={invite.isPending}>
+              Send invite
+            </Button>
+          </>
+        )
+      }
+    >
+      {activationToken ? (
+        <p className="text-sm text-text">
+          Invite created. No email provider is wired up yet -- relay this activation token to the new user out of
+          band:{' '}
+          <code className="break-all rounded-sm bg-surface-sunk px-1.5 py-0.5 font-mono text-xs">{activationToken}</code>
+        </p>
+      ) : (
+        <form id="invite-user" onSubmit={onSubmit} className="flex flex-col gap-4">
           <Input
             label="Email address"
             id="invite-email"
@@ -75,33 +117,16 @@ function InviteForm() {
             onChange={(e) => setEmail(e.target.value)}
             {...(error ? { error } : {})}
           />
-        </div>
-        <div className="w-40">
-          <Select
-            label="Role"
-            id="invite-role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as AssignableRole)}
-          >
-            <option value="customer">Customer</option>
-            <option value="timekeeper">Timekeeper</option>
-            <option value="admin">Admin</option>
+          <Select label="Role" id="invite-role" value={role} onChange={(e) => setRole(e.target.value as AssignableRole)}>
+            {ASSIGNABLE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {formatRole(r)}
+              </option>
+            ))}
           </Select>
-        </div>
-        <Button type="submit" loading={invite.isPending} disabled={invite.isPending}>
-          Send invite
-        </Button>
-      </form>
-      {activationToken && (
-        <p className="text-sm text-text-muted">
-          No email provider is wired up yet -- relay this activation token to the new user out of
-          band:{' '}
-          <code className="rounded-sm bg-surface-sunk px-1.5 py-0.5 font-mono text-xs">
-            {activationToken}
-          </code>
-        </p>
+        </form>
       )}
-    </Surface>
+    </Modal>
   );
 }
 
@@ -114,6 +139,7 @@ function UserActions({ user }: { user: UserRow }) {
   const [pendingRole, setPendingRole] = useState<AssignableRole | null>(null);
   const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [confirmingReactivate, setConfirmingReactivate] = useState(false);
   const toast = useToast();
 
   const changeRole = useMutation({
@@ -163,61 +189,36 @@ function UserActions({ user }: { user: UserRow }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       {ASSIGNABLE_ROLES.includes(user.roleName as AssignableRole) && (
-        <select
-          aria-label={`Change role for ${user.email}`}
+        <Select
+          labelHidden
+          label={`Change role for ${user.email}`}
           value={user.roleName}
           disabled={changeRole.isPending}
           onChange={(e) => setPendingRole(e.target.value as AssignableRole)}
-          className="min-h-11 rounded-sm border border-border bg-surface px-2 text-sm text-text"
+          className="min-w-36 text-sm"
         >
           {ASSIGNABLE_ROLES.map((role) => (
             <option key={role} value={role}>
               {formatRole(role)}
             </option>
           ))}
-        </select>
+        </Select>
       )}
-      {user.status === 'invited' && (
-        <Button
-          variant="secondary"
-          size="field"
-          onClick={() => reinvite.mutate()}
-          loading={reinvite.isPending}
-        >
-          Re-invite
-        </Button>
-      )}
-      <Button
-        variant="secondary"
-        size="field"
-        onClick={() => setConfirmingReset(true)}
-        loading={resetPassword.isPending}
-      >
-        Reset password
-      </Button>
-      {user.status === 'disabled' ? (
-        <Button
-          variant="secondary"
-          size="field"
-          onClick={() => reactivate.mutate()}
-          loading={reactivate.isPending}
-        >
-          Reactivate
-        </Button>
-      ) : (
-        <Button
-          variant="destructive"
-          size="field"
-          onClick={() => setConfirmingDeactivate(true)}
-          loading={deactivate.isPending}
-        >
-          Remove access
-        </Button>
-      )}
+      <ActionMenu
+        label={`More actions for ${user.email}`}
+        items={[
+          ...(user.status === 'invited' ? [{ label: 'Re-invite', onSelect: () => reinvite.mutate(), disabled: reinvite.isPending }] : []),
+          { label: 'Reset password', onSelect: () => setConfirmingReset(true), disabled: resetPassword.isPending },
+          user.status === 'disabled'
+            ? { label: 'Reactivate', onSelect: () => setConfirmingReactivate(true), disabled: reactivate.isPending }
+            : { label: 'Remove access', onSelect: () => setConfirmingDeactivate(true), disabled: deactivate.isPending, destructive: true },
+        ]}
+      />
       {lastToken && (
-        <code className="rounded-sm bg-surface-sunk px-1.5 py-0.5 font-mono text-xs">
-          {lastToken}
-        </code>
+        <span className="inline-flex items-center gap-1 text-sm text-text-muted">
+          Invite token
+          <CopyButton value={lastToken} label="the invite token" />
+        </span>
       )}
 
       <ConfirmDialog
@@ -265,6 +266,24 @@ function UserActions({ user }: { user: UserRow }) {
       />
 
       <ConfirmDialog
+        open={confirmingReactivate}
+        title="Restore this person's access?"
+        tone="approve"
+        confirmLabel="Restore access"
+        pending={reactivate.isPending}
+        body={
+          <p>
+            <strong>{user.email}</strong> can sign in again as {formatRole(user.roleName).toLowerCase()}.
+          </p>
+        }
+        onConfirm={() => {
+          reactivate.mutate();
+          setConfirmingReactivate(false);
+        }}
+        onCancel={() => setConfirmingReactivate(false)}
+      />
+
+      <ConfirmDialog
         open={confirmingReset}
         title="Reset this password?"
         tone="danger"
@@ -288,38 +307,44 @@ function UserActions({ user }: { user: UserRow }) {
 
 function ManageUsersPage() {
   const [offset, setOffset] = useState(0);
+  const [inviting, setInviting] = useState(false);
   const columns: TableColumn<UserRow>[] = [
-    { header: 'Email', cell: (row) => row.email },
-    { header: 'Role', cell: (row) => formatRole(row.roleName) },
-    { header: 'Status', cell: (row) => formatStatus(row.status) },
-    { header: 'Actions', cell: (row) => <UserActions user={row} /> },
+    {
+      header: 'Email',
+      kind: 'text',
+      cell: (row) => (
+        <a href={`mailto:${row.email}`} className="text-accent hover:underline">
+          {row.email}
+        </a>
+      ),
+    },
+    { header: 'Role', kind: 'text', cell: (row) => formatRole(row.roleName) },
+    { header: 'Status', kind: 'status', cell: (row) => <StatusBadge status={row.status} /> },
+    { header: 'Actions', kind: 'action', cell: (row) => <UserActions user={row} /> },
   ];
 
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
-        eyebrow="Administration"
         title="People"
         description="Manage teammates, roles, and access."
+        actions={<Button onClick={() => setInviting(true)}>Invite a user</Button>}
       />
-      <InviteForm />
+      <InviteModal open={inviting} onClose={() => setInviting(false)} />
       <DataPanel
         title="Users"
         options={usersListQuery(PAGE_SIZE, offset)}
         emptyTitle="No users yet"
-        emptyDescription="Invite your first teammate above."
+        emptyDescription="Invite your first teammate."
+
         isEmpty={(data) => data.total === 0}
         render={(data) => (
-          <div>
-            <Table columns={columns} rows={data.items} rowKey={(row) => row.id} />
-            <Pagination
-              offset={offset}
-              limit={PAGE_SIZE}
-              total={data.total}
-              onOffsetChange={setOffset}
-              noun="people"
-            />
-          </div>
+          <Table
+            columns={columns}
+            rows={data.items}
+            rowKey={(row) => row.id}
+            header={{ title: 'People', count: data.total, pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={data.total} onOffsetChange={setOffset} noun="people" /> }}
+          />
         )}
       />
     </div>

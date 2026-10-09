@@ -1,57 +1,53 @@
 import { useState } from 'react';
+import { equipmentQueries } from '../lib/queries.js';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import type { AvailabilityResponse } from '@arkilaunch/shared';
-import { apiGet } from '../lib/api-client.js';
+import { bookingDays, minRentalDays, type AvailabilityResponse } from '@arkilaunch/shared';
 import { getAccessToken } from '../lib/auth-client.js';
+import { WEEKDAYS } from '../lib/format.js';
 
 const DAYS_AHEAD = 60;
 const REASON: Record<string, string> = {
   assignment: 'Booked',
+  hold: 'On hold',
   maintenance: 'Maintenance',
-  closed: 'Closed',
-  holiday: 'Holiday',
+  closed: 'Office closed',
+  holiday: 'Office closed (holiday)',
   operator: 'No operator',
 };
 
-// Local YYYY-MM-DD. The API speaks Manila dates.
-// ponytail: assumes the browser is on Manila time (every customer today);
-// pass a timezone to the API if the yard ever books across zones.
+// Office-closed days stop only pickup and return; a rental may run through them.
+const OFFICE_CLOSED = new Set(['closed', 'holiday']);
+const isTaken = (reason: string | null | undefined) => Boolean(reason) && !OFFICE_CLOSED.has(reason!);
+
+// ponytail: assumes the browser is on Manila time; pass a timezone to the API if bookings cross zones.
 export function localDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function availabilityQuery(equipmentId: string, from: string, to: string) {
-  return {
-    queryKey: ['equipment', equipmentId, 'availability', from, to] as const,
-    queryFn: () => apiGet<AvailabilityResponse>(`/equipment/${equipmentId}/availability?from=${from}&to=${to}`),
-  };
-}
-
-// Free/taken days from today through the chosen return (at least
-// DAYS_AHEAD days), so a booking of any length is checked end to end.
-// Signed-out visitors get nothing (the endpoint is authenticated); the
-// server check still guards.
 export function useAvailability(equipmentId: string, end?: string) {
   const from = localDate(new Date());
   const minTo = localDate(new Date(Date.now() + (DAYS_AHEAD - 1) * 86_400_000));
   const endDate = end ? localDate(new Date(end)) : '';
   return useQuery({
-    ...availabilityQuery(equipmentId, from, endDate > minTo ? endDate : minTo),
+    ...equipmentQueries.availability(equipmentId, from, endDate > minTo ? endDate : minTo),
     enabled: Boolean(getAccessToken()),
   });
 }
 
-// The first unavailable day the window touches, or null. Also checks the
-// pickup/return times against business hours.
 export function availabilityProblem(data: AvailabilityResponse | undefined, startIso: string, endIso: string): string | null {
   if (!data || !startIso || !endIso) return null;
   const start = new Date(startIso);
   const end = new Date(endIso);
   const first = localDate(start);
   const last = localDate(end);
-  const taken = data.days.find((d) => !d.available && d.date >= first && d.date <= last);
+  const edge = data.days.find((d) => !d.available && (d.date === first || d.date === last));
+  if (edge) {
+    const what = edge.date === first ? 'Pickup' : 'Return';
+    return `${what} on ${edge.date} is not possible (${(REASON[edge.reason ?? ''] ?? 'taken').toLowerCase()}).`;
+  }
+  const taken = data.days.find((d) => !d.available && isTaken(d.reason) && d.date > first && d.date < last);
   if (taken) return `${taken.date} is not available (${(REASON[taken.reason ?? ''] ?? 'taken').toLowerCase()}).`;
   if (data.hours) {
     const hm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -63,7 +59,16 @@ export function availabilityProblem(data: AvailabilityResponse | undefined, star
   return null;
 }
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export function rentalLengthProblem(data: AvailabilityResponse | undefined, startIso: string, endIso: string): string | null {
+  if (!data || !startIso || !endIso) return null;
+  const minDays = minRentalDays(data.dailyHours, data.minHours);
+  if (bookingDays(startIso, endIso) >= minDays) return null;
+  return `This company rents for at least ${minDays} days (its ${data.minHours}-hour minimum at ${data.dailyHours} hours a day). Pick a later return date.`;
+}
+
+const heldLabel = (iso: string) =>
+  new Date(iso).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 const addDays = (date: string, n: number) => {
   const d = new Date(`${date}T00:00:00`);
   d.setDate(d.getDate() + n);
@@ -74,10 +79,6 @@ const daysBetween = (a: string, b: string) =>
 const prettyDate = (date: string) =>
   new Date(`${date}T00:00:00`).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 
-// A month calendar for the rental span: the first click sets pickup, the
-// second sets return (the span previews on hover), the next click starts
-// over. Pages month by month with no limit; past and taken days are
-// disabled. Each visible month reads its own availability.
 export function RangeCalendar({
   equipmentId,
   start,
@@ -93,7 +94,6 @@ export function RangeCalendar({
   const first = start ? localDate(new Date(start)) : '';
   const last = end ? localDate(new Date(end)) : '';
   const [month, setMonth] = useState(() => (first && first > today ? first : today).slice(0, 7));
-  // Pickup chosen, return not yet.
   const [anchor, setAnchor] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
 
@@ -102,7 +102,7 @@ export function RangeCalendar({
   const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
   const gridEnd = cells[41]!;
   const visible = useQuery({
-    ...availabilityQuery(equipmentId, gridStart < today ? today : gridStart, gridEnd),
+    ...equipmentQueries.availability(equipmentId, gridStart < today ? today : gridStart, gridEnd),
     enabled: Boolean(getAccessToken()),
   });
   const byDate = new Map((visible.data?.days ?? []).map((d) => [d.date, d]));
@@ -116,8 +116,11 @@ export function RangeCalendar({
   const spanStart = anchor ?? first;
   const spanEnd = anchor ? (hover && hover >= anchor ? hover : anchor) : last;
 
+  const spansTaken = (from: string, to: string) =>
+    cells.some((d) => d > from && d < to && isTaken(byDate.get(d)?.reason ?? null));
+
   function pick(date: string) {
-    if (anchor && date >= anchor) {
+    if (anchor && date >= anchor && !spansTaken(anchor, date)) {
       onRange(anchor, date);
       setAnchor(null);
     } else {
@@ -129,6 +132,7 @@ export function RangeCalendar({
   const title = new Date(`${monthStart}T00:00:00`).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
   const hours = visible.data?.hours;
   const span = first && last ? daysBetween(first, last) : 0;
+  const nextFree = (visible.data?.days ?? []).find((d) => d.available && d.date >= today)?.date;
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border p-3">
       <div className="flex items-center justify-between">
@@ -141,7 +145,7 @@ export function RangeCalendar({
         >
           <ChevronLeft className="h-4 w-4" aria-hidden />
         </button>
-        <p className="font-display text-sm font-semibold text-text" aria-live="polite">
+        <p className="text-sm font-semibold text-text" aria-live="polite">
           {title}
         </p>
         <button
@@ -161,11 +165,18 @@ export function RangeCalendar({
         ))}
         {cells.map((date) => {
           const info = byDate.get(date);
-          const taken = info ? !info.available : false;
-          const disabled = date < today || taken;
+          const unavailable = info ? !info.available : false;
+          const taken = unavailable && isTaken(info?.reason);
+          const closed = unavailable && !taken;
+          const disabled = date < today || unavailable;
           const inSpan = Boolean(spanStart) && date >= spanStart && date <= spanEnd;
           const edge = date === spanStart || date === spanEnd;
-          const reason = taken ? (REASON[info?.reason ?? ''] ?? 'Taken') : '';
+          const held = info?.reason === 'hold';
+          const reason = unavailable
+            ? held && info?.heldUntil
+              ? `On hold for another customer until ${heldLabel(info.heldUntil)}; frees up if unpaid`
+              : (REASON[info?.reason ?? ''] ?? 'Taken')
+            : '';
           return (
             <button
               key={date}
@@ -178,10 +189,21 @@ export function RangeCalendar({
               onClick={() => pick(date)}
               onMouseEnter={() => setHover(date)}
               className={[
-                'min-h-10 text-sm tabular-nums transition-colors',
+'min-h-10 text-sm tabular-nums transition-colors',
                 date.slice(0, 7) === month ? '' : 'opacity-40',
                 disabled
-                  ? `cursor-not-allowed text-text-muted ${taken ? 'line-through' : ''}`
+                  ? [
+                      'cursor-not-allowed',
+                      held
+                        ? 'rounded-sm border border-dashed border-text-muted/50 bg-surface-sunk text-text-muted'
+                        : taken
+                        ? `rounded-sm text-text-muted line-through ${info?.reason === 'maintenance' ? 'bg-warning/15' : 'bg-error/10'}`
+                        : closed
+                          ? inSpan
+                            ? 'bg-accent/10 text-text-muted'
+                            : 'text-text-muted/60'
+                          : 'text-text-muted/50',
+                    ].join(' ')
                   : edge
                     ? 'rounded-sm bg-accent font-semibold text-white'
                     : inSpan
@@ -202,11 +224,26 @@ export function RangeCalendar({
               ? `${prettyDate(first)} to ${prettyDate(last)} · ${span} ${span === 1 ? 'day' : 'days'}`
               : 'Pick the pickup date.'}
         </span>
-        <span>
-          <span className="line-through">12</span> unavailable
-          {hours ? ` · open ${hours.openTime}–${hours.closeTime}` : ''}
-        </span>
+        {nextFree && !first && <span className="font-medium text-text">Next available: {prettyDate(nextFree)}</span>}
       </div>
+      <ul aria-label="Legend" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+        <li className="flex items-center gap-1.5">
+          <span aria-hidden className="h-3 w-3 rounded-sm bg-error/10" />
+          <span className="line-through">Booked</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span aria-hidden className="h-3 w-3 rounded-sm border border-dashed border-text-muted/50 bg-surface-sunk" />
+          On hold (unpaid request; frees up if not paid in time)
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span aria-hidden className="h-3 w-3 rounded-sm bg-warning/15" />
+          <span className="line-through">Maintenance</span>
+        </li>
+        <li className="flex items-center gap-1.5">
+          <span aria-hidden className="h-3 w-3 rounded-sm border border-border" />
+          Office closed{hours ? ` · open ${hours.openTime}–${hours.closeTime}` : ''} (can rent through, not pick up or return)
+        </li>
+      </ul>
     </div>
   );
 }

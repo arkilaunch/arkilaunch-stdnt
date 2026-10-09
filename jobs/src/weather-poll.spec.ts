@@ -1,25 +1,19 @@
 import { describe, expect, it, beforeAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { addresses, events, projectSites, rentals, weatherAlerts } from '@arkilaunch/db';
+import { addresses, equipment, equipmentAssignments, equipmentTypes, events, projectSites, rentals, weatherAlerts } from '@arkilaunch/db';
 import { FixtureWeatherAdapter } from '@arkilaunch/shared/testing';
 import type { WeatherPort } from '@arkilaunch/shared';
 import { runWeatherPoll } from './weather-poll.js';
 import { makeJobDb } from './db-client.js';
 
-// PRD-F5: QAD-T5 (advisory + liability incident on a threshold crossing),
-// QAD-T17 (Open-Meteo down: cached reading stays in place, alerts, never
-// drops the cycle silently). Uses a dedicated site + active rental (not
-// the shared seeded one) so assertions never race against another test
-// file's own poll of the same site. Every real invocation of
-// runWeatherPoll() polls EVERY active site across every tenant (this test
-// DB accumulates many from prior suite runs), so event lookups filter on
-// this site's id in the jsonb payload, not just "latest for the tenant" --
-// several other active sites under the same tenant can legitimately be
-// non-calm at the same time.
-describe('weather-poll (PRD-F5)', () => {
+// QAD-T5, QAD-T17. Each run polls every active site in the test DB, so event
+// lookups filter on this site's id, not "latest for the tenant".
+describe('weather-poll (PRD-F5)', { timeout: 180_000 }, () => {
   let tenantId: string;
   let siteId: string;
+  let bareSiteId: string;
 
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
@@ -41,13 +35,39 @@ describe('weather-poll (PRD-F5)', () => {
       .values({ tenantId, addressId: address!.id, latitude: '14.676000', longitude: '121.043700' })
       .returning();
     siteId = site!.id;
-    await db.insert(rentals).values({
-      tenantId,
-      customerId,
-      projectSiteId: siteId,
-      status: 'active',
-      startDate: new Date('2020-01-01T00:00:00Z'),
-    });
+    const [rental] = await db
+      .insert(rentals)
+      .values({
+        tenantId,
+        customerId,
+        projectSiteId: siteId,
+        status: 'active',
+        startDate: new Date('2020-01-01T00:00:00Z'),
+      })
+      .returning();
+    // Only a site with a delivered machine is monitored.
+    const [type] = await db.select().from(equipmentTypes).where(eq(equipmentTypes.name, 'Excavator')).limit(1);
+    const [unit] = await db
+      .insert(equipment)
+      .values({ tenantId, equipmentTypeId: type!.id, model: 'Poll Test Excavator', serialNo: `WP-${randomUUID().slice(0, 8)}` })
+      .returning();
+    await db
+      .insert(equipmentAssignments)
+      .values({ tenantId, equipmentId: unit!.id, rentalId: rental!.id, start: new Date('2020-01-01T00:00:00Z'), status: 'active' });
+
+    // A booked site with nothing delivered yet: never polled.
+    const [bareAddress] = await db
+      .insert(addresses)
+      .values({ tenantId, line1: 'Undelivered Site Rd', city: 'Quezon City', province: 'Metro Manila', country: 'PH' })
+      .returning();
+    const [bare] = await db
+      .insert(projectSites)
+      .values({ tenantId, addressId: bareAddress!.id, latitude: '14.600000', longitude: '121.000000' })
+      .returning();
+    bareSiteId = bare!.id;
+    await db
+      .insert(rentals)
+      .values({ tenantId, customerId, projectSiteId: bareSiteId, status: 'active', startDate: new Date('2020-01-01T00:00:00Z') });
     await client.end();
   });
 
@@ -107,9 +127,7 @@ describe('weather-poll (PRD-F5)', () => {
     expect(await latestAlertFor(siteId)).toBeNull();
   });
 
-  // The default port is createWeatherAdapter(), which resolves the real
-  // OpenMeteoAdapter once the flag is on -- but with the flag off, this
-  // must stay a true no-op without ever constructing (or calling) it.
+  // Flag off must never construct or call the real adapter.
   it('is a no-op with the flag off even when no port is injected (real default resolution)', async () => {
     delete process.env.ENABLE_WEATHER_POLL;
     await runWeatherPoll();
@@ -122,6 +140,12 @@ describe('weather-poll (PRD-F5)', () => {
     const row = await latestAlertFor(siteId);
     expect(row?.severity).toBe('none');
     expect(row?.status).toBe('cleared');
+  });
+
+  it('polls only sites with deployed equipment: an active rental with nothing delivered is skipped', async () => {
+    await runWeatherPoll(new FixtureWeatherAdapter({ tempC: 30, windKph: 5, precipMm: 0, code: 1 }));
+    expect(await latestAlertFor(siteId)).not.toBeNull();
+    expect(await latestAlertFor(bareSiteId)).toBeNull();
   });
 
   // QAD-T5.

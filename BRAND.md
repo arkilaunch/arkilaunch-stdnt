@@ -28,7 +28,9 @@
 
 **Selected mode:** `Product Mode`. Exception: S1 Public Landing and S22 Catalog Browse carry a light Brand-Mode surface (larger type, one image-led hero) so a prospective tenant or contractor gets an impression before the task. Every authed surface (S2 to S21, S25) is strictly Product Mode.
 
-**Named tiers (CR: dsd-marketing-tier):** the Brand-Mode exception above is formalized as a second token **tier**, not just a loose exception, because it now carries its own radius scale, elevation language, and motion budget (see [DESIGN.md](DESIGN.md) §2 to §5). Every screen belongs to exactly one tier:
+**One tier (CR: aws-design-language, [docs/cr-arkilaunch-aws-design-language.md](docs/cr-arkilaunch-aws-design-language.md)):** the tier split below is retired. Every screen, public or signed-in, takes the AWS reference's shape, type and elevation (`docs/assets/reference/aws.design.md`) on Yardboard's unchanged palette; the signed-in app adds four AWS Console patterns (breadcrumbs, collapsible side nav, container headers, Flashbar).
+
+~~**Named tiers (CR: dsd-marketing-tier):**~~ the Brand-Mode exception above is formalized as a second token **tier**, not just a loose exception, because it now carries its own radius scale, elevation language, and motion budget (see [DESIGN.md](DESIGN.md) §2 to §5). Every screen belongs to exactly one tier:
 
 | Tier | Screens | Governs |
 |---|---|---|
@@ -52,10 +54,10 @@ A component never silently crosses tiers. The tier is set once, on a route wrapp
 | Anti-reference | Why it is forbidden here |
 |---|---|
 | **Default SaaS purple** (indigo-to-violet gradients, purple primary buttons, gradient text) | It is the category's beige. It signals "another web app" to a crew that trusts machine panels and government weather colors, and it carries zero meaning in a yard. Amber, steel, and the PAGASA scale all carry meaning; purple carries none. |
-| **Enterprise SaaS coldness** (Workday/Salesforce grey chrome, dense corporate shells, faceless stock imagery) | Rhea is one person carrying a back office, not a procurement department. Cold grey enterprise chrome reads as "built for someone else's IT budget" and breaks Rule 3 (make them part of the branding). |
+| ~~**Enterprise SaaS coldness**~~ **Retired (CR: aws-design-language).** | The owner chose the AWS console and marketing structure on purpose. What survives of this rule: the chrome stays warm (paper canvas, sand borders, amber and the tenant's own colors); cold grey neutrals are still not imported. |
 | **Dense fintech / terminal tables that assume a retina desktop** (Bloomberg-terminal density, tiny 11px rows, hairline dividers, hover-only actions) | The primary device is a cheap Android over 3 to 5 Mbps in outdoor light. Hairlines vanish, hover does not exist on touch, and 11px rows fail both legibility and WCAG 2.2 target size. Density here must survive a thumb and the sun. |
 
-**Scope note (CR: dsd-marketing-tier):** "Default SaaS purple" and "Enterprise SaaS coldness" stay absolute anti-references, everywhere, no exception. Glassmorphism and floating-card depth theater, previously banned outright, are now banned in **Console tier only**; the Marketing tier (S1, S22) is permitted the SprintForge-derived glass nav and layered shadows under an explicit perf gate ([DESIGN.md](DESIGN.md) §6), because Rhea never works from that surface on her cheap Android in the field, a first-time visitor evaluating the product does.
+**Scope note (CR: dsd-marketing-tier; amended by CR: aws-design-language):** "Default SaaS purple" stays an absolute anti-reference, everywhere; the AWS reference's spectral gradients are not adopted for that reason. Glass is now banned on every screen (the one glass nav is gone). Glassmorphism and floating-card depth theater, previously banned outright, are now banned in **Console tier only**; the Marketing tier (S1, S22) is permitted the SprintForge-derived glass nav and layered shadows under an explicit perf gate ([DESIGN.md](DESIGN.md) §6), because Rhea never works from that surface on her cheap Android in the field, a first-time visitor evaluating the product does.
 
 ---
 
@@ -106,6 +108,8 @@ A component never silently crosses tiers. The tier is set once, on a route wrapp
 | Icon / mark | `docs/assets/brand/logo-mark.svg` (to produce) | Favicon, PWA icon, notification badge. The bezelled amber "A" lamp alone. |
 
 **Tenant lockup rule (Rule 3):** in the authed app bar and on a tenant's public catalog, the **tenant's** name/mark leads; "Powered by ArkiLaunch" is the secondary line. ArkiLaunch never overrides the tenant identity inside a tenant's own workspace. This rule also governs the Marketing-tier FloatingNav (DESIGN.md §4) if a tenant surface ever reuses it.
+
+**Tenant icon (CR: tenant-brand-kit):** a tenant may upload a square icon beside its logo. On that tenant's host it is the favicon, the apple-touch icon, the app-bar mark and the fallback link-preview image. Without an icon the logo stands in; without either, the app bar keeps the tenant's initial on its primary.
 
 **Clear space:** 1x the mark's bezel height on all sides.
 **Minimum size:** mark 24px (favicon 16px permitted); full lockup wordmark cap-height >= 14px.
@@ -159,6 +163,7 @@ Verbal tone, banned phrases, and the per-document-type register live in [docs/vo
 **Brand asset version:** `1.0.0` (major = rebrand, minor = new variant, patch = file fix). This is version `0.1` of the DSD; asset production begins at DSD lock.
 **Naming:** kebab-case; `logo-primary.svg`, `logo-mark.svg`, `logo-stacked.svg`, `concept-s4-dashboard.png`.
 **Location:** brand assets in `docs/assets/brand/`; concept frames in `docs/assets/concept/`; deploy copies in `public/brand/`. Fonts self-hosted under `public/fonts/` (Latin-subset WOFF2).
+**Platform product preview (CR: platform-landing-dashboard-image):** App-owned dashboard screenshots in `apps/web/public/images/platform-dashboard.webp` (1440px) and `platform-dashboard-small.webp` (800px), captured from the actual dashboard using sample API responses by `scripts/capture-platform-preview.mjs`. Label as sample data; refresh after material dashboard UI changes. Never capture production records for public marketing.
 **Approval / retirement:** the DSD DRI (ArkiLaunch design owner) approves asset changes; superseded files retire on a version bump and are removed from `public/` once no build references them.
 
 ---

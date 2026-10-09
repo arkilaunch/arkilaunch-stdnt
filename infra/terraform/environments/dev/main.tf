@@ -11,9 +11,7 @@ terraform {
     }
   }
 
-  # storage_account_name comes from infra/terraform/bootstrap's output --
-  # passed via `terraform init -backend-config="storage_account_name=..."`
-  # rather than hardcoded here, so this file has no subscription-specific value.
+  # storage_account_name comes from bootstrap via `terraform init -backend-config`.
   backend "azurerm" {
     resource_group_name = "rg-arkilaunch-tfstate"
     container_name      = "tfstate"
@@ -31,15 +29,7 @@ locals {
   name = "arkilaunch-${local.env}"
   tags = { environment = local.env, project = "arkilaunch" }
 
-  # Secrets shared by the API app and every cron job -- see the Dockerfile's
-  # "one image, five workloads" design; jobs run in the same trust boundary
-  # as the API, so no per-job secret narrowing today.
-  #
-  # Azure rejects a Container App secret with an empty string value ("value
-  # or keyVaultUrl and identity should be provided") -- so unset vendor keys
-  # (Azure DI/PayMongo, blank until those integrations go live) are filtered
-  # out of both maps entirely, not wired in as blank. Open-Meteo needs no
-  # key at all (free tier, cr-arkilaunch-open-meteo-free-tier.md).
+  # Azure rejects empty secret values, so unset vendor keys are filtered out, not wired blank.
   all_secrets = {
     database-url-direct           = var.database_url_direct
     database-url-pooled           = var.database_url_pooled
@@ -51,6 +41,9 @@ locals {
     azure-di-key                  = module.document_intelligence.primary_access_key
     paymongo-secret-key           = var.paymongo_secret_key
     paymongo-webhook-secret       = var.paymongo_webhook_secret
+    ors-api-key                   = var.ors_api_key
+    turnstile-secret-key          = var.turnstile_secret_key
+    vapid-private-key             = var.vapid_private_key
     appinsights-connection-string = module.log_analytics.app_insights_connection_string
   }
   secrets = { for k, v in local.all_secrets : k => v if v != "" }
@@ -66,6 +59,9 @@ locals {
     AZURE_DI_KEY                          = "azure-di-key"
     PAYMONGO_SECRET_KEY                   = "paymongo-secret-key"
     PAYMONGO_WEBHOOK_SECRET               = "paymongo-webhook-secret"
+    ORS_API_KEY                           = "ors-api-key"
+    TURNSTILE_SECRET_KEY                  = "turnstile-secret-key"
+    VAPID_PRIVATE_KEY                     = "vapid-private-key"
     APPLICATIONINSIGHTS_CONNECTION_STRING = "appinsights-connection-string"
   }
   secret_env_vars = { for k, v in local.all_secret_env_vars : k => v if contains(keys(local.secrets), v) }
@@ -83,10 +79,12 @@ locals {
     ENABLE_OCR_KYC               = tostring(var.enable_ocr_kyc)
     ENABLE_WEATHER_POLL          = tostring(var.enable_weather_poll)
     WEATHER_POLL_MAX_SITES       = tostring(var.weather_poll_max_sites)
+    VAPID_PUBLIC_KEY             = var.vapid_public_key
+    VAPID_SUBJECT                = var.vapid_subject
     ENABLE_DIESEL_SCRAPE         = tostring(var.enable_diesel_scrape)
     ENABLE_PAYMENTS              = tostring(var.enable_payments)
-    # F0 (this env's DI sku) analyzes only the first 2 pages of any
-    # document; the adapter hard-fails rather than silently truncate one.
+    TURNSTILE_ENABLED            = tostring(var.enable_turnstile)
+    # F0 analyzes only 2 pages; the adapter hard-fails rather than truncate.
     AZURE_DI_MAX_PAGES = "2"
   }
 }
@@ -132,10 +130,7 @@ module "container_apps_environment" {
   tags                       = local.tags
 }
 
-# Shared ACR-pull identity for the API app + all 4 jobs -- see
-# modules/managed_identity for why this exists (a real, observed failure
-# mode with SystemAssigned identities: Azure's own revision-provisioning
-# timeout can expire while waiting for a just-granted role to propagate).
+# Shared ACR-pull identity for the API app and all jobs.
 module "acr_identity" {
   source              = "../../modules/managed_identity"
   name                = "id-${local.name}-acrpull"
@@ -169,6 +164,24 @@ module "weather_poll_job" {
   name                         = "${local.name}-weather-poll"
   entrypoint                   = "weather-poll"
   cron_expression              = var.weather_poll_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
+module "weather_briefing_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-weather-briefing"
+  entrypoint                   = "weather-briefing"
+  cron_expression              = var.weather_briefing_cron
   resource_group_name          = module.resource_group.name
   location                     = var.location
   container_app_environment_id = module.container_apps_environment.id
@@ -220,13 +233,46 @@ module "diesel_job" {
 
 module "maintenance_notify_job" {
   source = "../../modules/cron_job"
-  # Azure Container App Job names cap at 32 chars; "arkilaunch-<env>-maintenance-notify"
-  # exceeds it, so this uses the shorter "pm-notify" (matches ops-arkilaunch.md's
-  # own "PM-threshold notify" naming) -- the entrypoint below still points at
-  # the real jobs/src/maintenance-notify.ts file, unrenamed.
+  # ACA job names cap at 32 chars, hence "pm-notify".
   name                         = "${local.name}-pm-notify"
   entrypoint                   = "maintenance-notify"
   cron_expression              = var.maintenance_notify_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
+module "hold_expiry_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-hold-expiry"
+  entrypoint                   = "hold-expiry"
+  cron_expression              = var.hold_expiry_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
+module "tier_recompute_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-tier-recompute"
+  entrypoint                   = "tier-recompute"
+  cron_expression              = var.tier_recompute_cron
   resource_group_name          = module.resource_group.name
   location                     = var.location
   container_app_environment_id = module.container_apps_environment.id
@@ -250,4 +296,22 @@ output "azure_di_endpoint" {
 
 output "registry_login_server" {
   value = module.container_registry.login_server
+}
+
+module "weekly_billing_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-weekly-billing"
+  entrypoint                   = "weekly-billing"
+  cron_expression              = var.weekly_billing_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
 }

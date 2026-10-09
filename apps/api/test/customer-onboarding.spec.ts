@@ -1,5 +1,8 @@
 import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+
+// A fresh TIN per company: one login cannot apply for the same TIN twice.
+const randomTin = () => String(Math.floor(Math.random() * 1e9)).padStart(9, '1');
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
 import {
@@ -18,11 +21,13 @@ import { PaymentsService } from '../src/payments/payments.service.js';
 import { QuotesService } from '../src/quotes/quotes.service.js';
 import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
+
+// What a reviewer ticks before approving: the PhilSys QR verified on
+// PhilSys Check, the holder may act for the company.
+const IDENTITY = { philsysVerified: true, holderAuthorized: true } as const;
 import { JwtService } from '@nestjs/jwt';
 
-// Customer prerequisites CR: a stranger signs up, adds a company and a
-// site, books, and cannot pay until staff verify the company. One login
-// may own several companies; no one else can use them.
+// Sign up, add a company and site, book, and cannot pay until staff verify; nobody else can use the company.
 function jwtService(): JwtService {
   const publicKey = process.env.JWT_PUBLIC_KEY!.replace(/\\n/g, '\n');
   const privateKey = process.env.JWT_PRIVATE_KEY!.replace(/\\n/g, '\n');
@@ -39,7 +44,7 @@ describe('Customer onboarding', () => {
   const quotes = new QuotesService(new PricingEngineService(), events);
   // Auto-quoting off: this suite covers bookings/payments, not pricing
   // (customer-journey.spec.ts covers the automatic quote).
-  const bookings = new BookingsService(events, { autoQuoteBooking: async () => null } as unknown as QuotesService);
+  const bookings = new BookingsService(events, { autoQuoteBooking: async () => null } as unknown as QuotesService, new PaymentsService(new StubPaymentsAdapter(), new EventsService()));
   let sessions = 0;
   const adapter = new StubPaymentsAdapter();
   adapter.createCheckoutSession = async (amountPhp: number, invoiceId: string) => ({
@@ -113,23 +118,28 @@ describe('Customer onboarding', () => {
     const tokens = await auth.registerCustomer({
       email,
       password: 'correct horse battery',
-      acceptedTerms: true,
+      firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
     }, 'test-tenant-a');
     const ctx = decodeCtx(tokens.accessToken);
     expect(ctx).toMatchObject({ tenantId, role: 'customer' });
+    const signupDb = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
+    try {
+      const [contact] = await signupDb`select contact_first_name, contact_last_name, phone, job_title, first_name, middle_name, last_name from users where id = ${ctx.userId}`;
+      expect(contact).toMatchObject({ contact_first_name: 'Ana', contact_last_name: 'Peña', phone: '+639171234567', job_title: 'Engineer', first_name: null, middle_name: null, last_name: null });
+    } finally { await signupDb.end(); }
 
     // The same email cannot sign up twice, in any tenant.
     await expect(
-      auth.registerCustomer({ email, password: 'another long password', acceptedTerms: true }, 'test-tenant-a'),
+      auth.registerCustomer({ email, password: 'another long password', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true }, 'test-tenant-a'),
     ).rejects.toBeInstanceOf(ConflictException);
 
     const details = {
-      tin: '123-456-789',
       billingAddress: '1248 North Quarry Way, Pasig',
       contactMobile: '09170000000',
     };
     const acme = await companies.createCompany(ctx, {
       companyName: 'Acme Builders',
+      tin: '123-456-789',
       secNumber: 'PH62780901',
       ...details,
     });
@@ -138,7 +148,18 @@ describe('Customer onboarding', () => {
     expect((await companies.listCompanies(ctx)).find((c) => c.id === acme.id)?.secNumber).toBe(
       'PH62780901',
     );
-    const beta = await companies.createCompany(ctx, { companyName: 'Beta Works', ...details });
+    // One application per company: the same TIN (head office written
+    // either way), SEC number or name again is refused, not a second row.
+    for (const again of [
+      { companyName: 'Acme Builders Two', tin: '123-456-789-000' },
+      { companyName: 'Another Name', secNumber: 'ph 62780901' },
+      { companyName: 'ACME builders' },
+    ]) {
+      await expect(companies.createCompany(ctx, { ...details, ...again })).rejects.toMatchObject({
+        response: { error: 'company_already_applied', companyId: acme.id },
+      });
+    }
+    const beta = await companies.createCompany(ctx, { companyName: 'Beta Works', tin: '987-654-321', ...details });
     expect((await companies.listCompanies(ctx)).map((c) => c.companyName).sort()).toEqual([
       'Acme Builders',
       'Beta Works',
@@ -151,6 +172,7 @@ describe('Customer onboarding', () => {
       `${tenantId}/test/id.jpg`,
       Buffer.from('not-really-an-image'),
     );
+    const acmeSec = await companies.addDocument(ctx, acme.id, 'sec_certificate', `${tenantId}/test/sec.jpg`, Buffer.from('not-really-an-image'));
     const site = await companies.createSite(ctx, {
       customerId: acme.id,
       line1: 'Lot 4 Ortigas Ave',
@@ -188,13 +210,30 @@ describe('Customer onboarding', () => {
       quotes.create(adminCtx, {
         customerId: acme.id,
         projectSiteId: site.id,
+        rentalId: randomUUID(),
         discount: { type: 'none', value: 0 },
         items: [{ equipmentTypeId: randomUUID(), rateCardId: randomUUID(), quantity: 1, estimatedHours: 1, mobilizationKm: 0, demobilizationKm: 0 }],
       }),
     ).rejects.toMatchObject({ response: { error: 'company_not_verified' } });
-    const queue = await companies.listForReview(adminCtx, 'pending');
-    expect(queue.find((c) => c.id === acme.id)?.documents).toHaveLength(1);
-    await companies.decide(adminCtx, acme.id, { decision: 'approved' });
+    const queue = (await companies.listForReview(adminCtx, 'pending')).items;
+    expect(queue.find((c) => c.id === acme.id)?.documents).toHaveLength(2);
+    await companies.decide(adminCtx, acme.id, { decision: 'approved', identity: IDENTITY, registryChecked: [acmeSec.id], cureDocuments: [] });
+
+    // Verified, but the site has not shown it is real: no job on it yet.
+    await expect(
+      bookings.create(ctx, { customerId: acme.id, projectSiteId: site.id, items: [{ equipmentId, ...window(0) }] }),
+    ).rejects.toMatchObject({ response: { error: 'site_proof_required' } });
+    expect((await companies.listSites(ctx))[0]?.proofComplete).toBe(false);
+    await companies.addSiteDocument(ctx, site.id, 'site_photo', `${tenantId}/test/site.jpg`);
+    // A photo alone is not proof; it needs a permit, NTP, title/lease or clearance.
+    expect((await companies.listSites(ctx))[0]?.proofComplete).toBe(false);
+    await companies.addSiteDocument(ctx, site.id, 'building_permit', `${tenantId}/test/permit.jpg`);
+    expect((await companies.listSites(ctx))[0]?.proofComplete).toBe(true);
+    // Staff see the same proof from the booking.
+    expect((await companies.listSiteDocuments(adminCtx, site.id)).documents.map((d) => d.documentType).sort()).toEqual([
+      'building_permit',
+      'site_photo',
+    ]);
 
     const booking = await bookings.create(ctx, {
       customerId: acme.id,
@@ -221,12 +260,12 @@ describe('Customer onboarding', () => {
     const tokens = await auth.registerCustomer({
       email: `signup-${randomUUID().slice(0, 8)}@onboarding.test`,
       password: 'correct horse battery',
-      acceptedTerms: true,
+      firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
     }, 'test-tenant-a');
     const ctx = decodeCtx(tokens.accessToken);
     const mine = await companies.createCompany(ctx, {
       companyName: 'Gamma Corp',
-      tin: '123456789',
+      tin: randomTin(),
       billingAddress: 'Somewhere, Cebu',
       contactMobile: '09180000000',
     });
@@ -245,20 +284,17 @@ describe('Customer onboarding', () => {
       companies.createSite(seededCustomerCtx, {
         customerId: mine.id,
         line1: 'x st',
-        city: 'Cebu',
-        province: 'Cebu',
-        latitude: 10.3,
-        longitude: 123.9,
+        city: 'Pasig',
+        province: 'Metro Manila',
+        latitude: 14.57,
+        longitude: 121.08,
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect((await companies.listCompanies(seededCustomerCtx)).map((c) => c.id)).not.toContain(
       mine.id,
     );
 
-    // The company card fetches its own registration certificate through
-    // ownDocumentKey(). RLS bounds the tenant and no further -- without the
-    // ownership predicate on top, this read is one customer of a tenant
-    // pulling another's KYC evidence by guessing a customer id.
+    // Without the ownership predicate on top of RLS, one customer could pull another's KYC evidence.
     const myDoc = await companies.addDocument(
       ctx,
       mine.id,
@@ -272,10 +308,7 @@ describe('Customer onboarding', () => {
     await expect(
       companies.ownDocumentKey(seededCustomerCtx, mine.id, myDoc.id),
     ).rejects.toBeInstanceOf(NotFoundException);
-    // A staff login -- of this tenant or another -- never reaches the
-    // ownership check at all: this route is the customer's own, and
-    // assertCustomer refuses the role first. Staff read the same document
-    // through the quote:approve route, which is audited.
+    // Staff never reach the ownership check: assertCustomer refuses the role first.
     await expect(
       companies.ownDocumentKey(adminCtx, mine.id, myDoc.id),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -288,17 +321,14 @@ describe('Customer onboarding', () => {
 
     // Tenant B's staff see nothing of tenant A's queue.
     expect(
-      (await companies.listForReview(otherTenantCtx, 'pending')).map((c) => c.id),
+      (await companies.listForReview(otherTenantCtx, 'pending')).items.map((c) => c.id),
     ).not.toContain(mine.id);
     await expect(
-      companies.decide(otherTenantCtx, mine.id, { decision: 'approved' }),
+      companies.decide(otherTenantCtx, mine.id, { decision: 'approved', identity: IDENTITY, registryChecked: [], cureDocuments: [] }),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
 
-  // The browse page's weather rail reads this. It is the first weather route
-  // a customer can reach at all -- the two on sites.controller.ts are
-  // STAFF_READ -- so the isolation is new surface, not a variation on old.
   describe('site forecast', () => {
     const DAYS = Array.from({ length: 5 }, (_, i) => ({
       date: `2026-09-2${i}`,
@@ -331,7 +361,7 @@ describe('Customer onboarding', () => {
     async function siteFor(ctx: RequestContext, service: CustomersService, city: string) {
       const company = await service.createCompany(ctx, {
         companyName: `Forecast ${city} ${randomUUID().slice(0, 6)}`,
-        tin: '123-456-789',
+        tin: randomTin(),
         billingAddress: `1 ${city} Road`,
         contactMobile: '09170000000',
       });
@@ -351,7 +381,7 @@ describe('Customer onboarding', () => {
       const tokens = await auth.registerCustomer({
         email: `forecast-${randomUUID().slice(0, 8)}@onboarding.test`,
         password: 'correct horse battery',
-        acceptedTerms: true,
+        firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
       }, 'test-tenant-a');
       ownerCtx = decodeCtx(tokens.accessToken);
     });
@@ -371,9 +401,7 @@ describe('Customer onboarding', () => {
       expect(forecast.fetchedAt).toMatch(/^\d{4}-/);
     });
 
-    // RLS bounds the tenant and no further, and `customer` is an intra-tenant
-    // role: without ownCustomers() on top, this read tells one customer where
-    // another company is working.
+    // Without ownCustomers() on top of RLS, this would tell one customer where another is working.
     it('refuses another customer site in the same tenant', async () => {
       const { port } = counting();
       const service = serviceWith(port);
@@ -441,6 +469,26 @@ describe('Customer onboarding', () => {
   // Scan-first onboarding: the scan only fills the form in. It must not
   // write a document row or decide anything -- staff still review.
   describe('company document scan', () => {
+    it('parses raw licence names and multiline address over mistaken query fields', async () => {
+      const content = 'Last Name, First Name, Middle Name\nSAN JUAN, ANA MARIA REYES\nAddress\n12 SAMPLE STREET\nBARANGAY UNO\nQUEZON CITY\nLicense No.\nN01-23-456789';
+      let offset = 0;
+      const lines = content.split('\n').map((value) => {
+        const line = { offset, length: value.length, page: 1, polygon: [] };
+        offset += value.length + 1;
+        return line;
+      });
+      const service = new CustomersService(events, new FixtureDocumentIntelligenceAdapter({
+        fields: { first_name: { value: 'REYES', confidence: 0.99 }, middle_name: { value: 'ANA', confidence: 0.99 }, last_name: { value: 'SAN', confidence: 0.99 }, address: { value: '', confidence: 0.99 } },
+        text: { content, lines, words: lines.map((line) => ({ offset: line.offset, length: line.length, confidence: 0.94 })) },
+      }));
+      const scan = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('licence-fixture'), 'drivers_license');
+      expect(scan.suggestions).toMatchObject({ firstName: 'ANA MARIA', middleName: 'REYES', lastName: 'SAN JUAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
+      expect(scan.confidence).toBe(0.94);
+      const national = await service.scanDocument(seededCustomerCtx, 'government_id', Buffer.from('same-text-other-id'), 'philsys');
+      // QA 36: PhilSys reads its own labels. No Apelyido/Last Name labels here, so names stay the query fields', but
+      // the printed Address block now wins over the empty query field.
+      expect(national.suggestions).toMatchObject({ firstName: 'REYES', middleName: 'ANA', lastName: 'SAN', address: '12 SAMPLE STREET, BARANGAY UNO, QUEZON CITY' });
+    });
     const scanner = (fields: Record<string, { value: string; confidence: number }>) =>
       new CustomersService(events, new FixtureDocumentIntelligenceAdapter({ fields }));
     const bytes = Buffer.from('not-really-an-image');
@@ -459,13 +507,16 @@ describe('Customer onboarding', () => {
       expect(sec.suggestions).toMatchObject({
         companyName: 'Almara Construction Corporation',
         secNumber: 'CS202312345',
-        address: '12 Yard Road, Cebu City',
+        // An SEC certificate prints only the SEC's own address.
+        address: null,
         tin: null,
         dtiNumber: null,
       });
       // The address is free text and does not drag legibility down.
       expect(sec.confidence).toBeCloseTo(0.9);
       expect(sec.extractionAvailable).toBe(true);
+      // No page text came back to judge the paper by.
+      expect(sec.layoutRecognized).toBeNull();
 
       const bir = await service.scanDocument(seededCustomerCtx, 'bir_cor', bytes);
       // Normalised into the canonical dashed TIN.
@@ -501,6 +552,28 @@ describe('Customer onboarding', () => {
       expect(scan.confidence).toBeCloseTo(0.92);
     });
 
+    it('does not call a sharp ID unclear over fields the card front does not print', async () => {
+      const service = scanner({
+        first_name: { value: 'KIMBERLY', confidence: 0.95 },
+        middle_name: { value: '', confidence: 0.4 },
+        last_name: { value: 'CORREA', confidence: 0.96 },
+        id_number: { value: '5467-9368-4538-7147', confidence: 0.97 },
+        birth_date: { value: 'DECEMBER 28, 2007', confidence: 0.94 },
+        // Guessed: sex is on the back of a PhilSys card.
+        sex: { value: 'F', confidence: 0.3 },
+      });
+      const scan = await service.scanDocument(seededCustomerCtx, 'government_id', bytes);
+      expect(scan.confidence).toBeCloseTo(0.94);
+
+      // A PCN that fails its format is dropped, and does not score either.
+      const bad = await scanner({
+        first_name: { value: 'KIMBERLY', confidence: 0.95 },
+        id_number: { value: '54679', confidence: 0.2 },
+      }).scanDocument(seededCustomerCtx, 'government_id', bytes);
+      expect(bad.suggestions.idNumber).toBeNull();
+      expect(bad.confidence).toBeCloseTo(0.95);
+    });
+
     it('drops a value that fails its format check rather than suggesting it', async () => {
       const service = scanner({
         tin: { value: 'not-a-tin', confidence: 0.99 },
@@ -530,7 +603,49 @@ describe('Customer onboarding', () => {
     },
         confidence: null,
         extractionAvailable: false,
+        layoutRecognized: null,
       });
+    });
+
+    // Shaped like a real eSPARC read (identifiers synthetic): the label parser beats the query.
+    const secText = [
+      'REPUBLIC OF THE PHILIPPINES SECURITIES AND EXCHANGE COMMISSION 3/F Newtown Square, Navy Base Road, Baguio City',
+      'COMPANY REG. NO .: 2022090000001-02',
+      'CERTIFICATE OF INCORPORATION',
+      'This is to certify that the Articles of Incorporation and By Laws of:',
+      'BENGUET HIGHLANDS FARMERS ASSOCIATION INC.',
+      'were duly approved by the Commission on this date, which took effect on February 23, 2019.',
+      'IN WITNESS WHEREOF, I have hereunto set my hand at Baguio City, Philippines, this day of 16 September Two Thousand Twenty Two.',
+    ].join('\n');
+    const withText = (content: string) => {
+      const words = [...content.matchAll(/\S+/g)].map((m) => ({ offset: m.index, length: m[0].length, confidence: 0.98 }));
+      return new CustomersService(
+        events,
+        new FixtureDocumentIntelligenceAdapter({
+          fields: {
+            company_name: { value: 'BENGUET HIGHLANDS FARMERS ASSOCIATION INC.', confidence: 0.6 },
+            registered_address: { value: '3/F Newtown Square, Navy Base Road, Baguio City', confidence: 0.97 },
+            registration_date: { value: 'February 23, 2019', confidence: 0.65 },
+          },
+          text: { content, words, lines: [] },
+        }),
+      );
+    };
+
+    it('reads an SEC certificate by its labels: the reg no. the query missed, no letterhead address', async () => {
+      const scan = await withText(secText).scanDocument(seededCustomerCtx, 'sec_certificate', bytes);
+      expect(scan.layoutRecognized).toBe(true);
+      expect(scan.suggestions).toMatchObject({
+        companyName: 'BENGUET HIGHLANDS FARMERS ASSOCIATION INC.',
+        secNumber: '2022090000001-02',
+        address: null,
+      });
+      expect(scan.confidence).toBeCloseTo(0.98);
+    });
+
+    it('warns when the paper is not the one it was scanned as', async () => {
+      const scan = await withText(secText).scanDocument(seededCustomerCtx, 'bir_cor', bytes);
+      expect(scan.layoutRecognized).toBe(false);
     });
 
     it('writes nothing: no document row, no verification decision', async () => {
@@ -552,24 +667,19 @@ describe('Customer onboarding', () => {
     });
   });
 
-  // Admin-side review: OCR fills the reviewer's form in, the reviewer
-  // corrects it, and approval writes what they confirmed. Nothing here
-  // decides anything on the extraction's own.
+  // Nothing here decides anything on the extraction's own.
   describe('staff document review', () => {
     const reviewer = (fields: Record<string, { value: string; confidence: number }>) =>
       new CustomersService(events, new FixtureDocumentIntelligenceAdapter({ fields }));
     const bytes = Buffer.from('not-really-an-image');
-    // Its own customer, never the module-wide seeded one: this block
-    // creates many companies per test run, and bookings.create()'s
-    // implicit-company selection elsewhere (payments-engine.spec.ts et al.)
-    // breaks the instant the shared seeded customer owns more than one.
+    // Its own customer: bookings.create()'s implicit-company selection breaks once the seeded one owns several.
     let reviewCtx: RequestContext;
 
     beforeAll(async () => {
       const tokens = await auth.registerCustomer({
         email: `staff-review-${randomUUID().slice(0, 8)}@onboarding.test`,
         password: 'correct horse battery',
-        acceptedTerms: true,
+        firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true,
       }, 'test-tenant-a');
       reviewCtx = decodeCtx(tokens.accessToken);
     });
@@ -577,7 +687,7 @@ describe('Customer onboarding', () => {
     async function companyWithRegistration(name: string, documentType = 'sec_certificate') {
       const company = await companies.createCompany(reviewCtx, {
         companyName: name,
-        tin: '111-222-333',
+        tin: randomTin(),
         billingAddress: '12 Yard Road, Cebu City',
         contactMobile: '0917 000 0000',
       });
@@ -590,6 +700,37 @@ describe('Customer onboarding', () => {
       );
       return { companyId: company.id, documentId: doc.id };
     }
+
+    // A submitted company: National ID (with the name the customer
+    // confirmed) and an SEC certificate. The ID goes first: this login
+    // already has one on file, copied onto the new company, and the
+    // registration completes (and locks) the application.
+    async function completeCompany(name: string) {
+      const company = await companies.createCompany(reviewCtx, {
+        companyName: name,
+        tin: randomTin(),
+        billingAddress: '12 Yard Road, Cebu City',
+        contactMobile: '0917 000 0000',
+      });
+      await companies.addDocument(reviewCtx, company.id, 'government_id', `storage://fixtures/${randomUUID()}.jpg`, bytes, {
+        firstName: 'Maria',
+        middleName: 'Reyes',
+        lastName: 'Santos',
+        idNumber: '1234-5678-9012-3456',
+      });
+      const sec = await companies.addDocument(reviewCtx, company.id, 'sec_certificate', `storage://fixtures/${randomUUID()}.jpg`, bytes);
+      return { companyId: company.id, secId: sec.id };
+    }
+
+    const newLogin = async () =>
+      decodeCtx(
+        (
+          await auth.registerCustomer(
+            { email: `one-id-${randomUUID().slice(0, 8)}@onboarding.test`, password: 'correct horse battery', firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Engineer', acceptedTerms: true },
+            'test-tenant-a',
+          )
+        ).accessToken,
+      );
 
     it('reads the document onto the row without deciding anything', async () => {
       const { companyId, documentId } = await companyWithRegistration('Reviewme Corp', 'company_registration');
@@ -607,7 +748,7 @@ describe('Customer onboarding', () => {
 
       const [company] = await companies
         .listForReview(adminCtx, 'pending')
-        .then((all) => all.filter((c) => c.id === companyId));
+        .then((all) => all.items.filter((c) => c.id === companyId));
       expect(company?.kycStatus).toBe('pending'); // unchanged by reading
       expect(company?.companyName).toBe('Reviewme Corp'); // not overwritten by OCR
     });
@@ -649,26 +790,65 @@ describe('Customer onboarding', () => {
       }
     });
 
-    it('writes the corrections the reviewer confirmed when approving', async () => {
-      const { companyId, documentId } = await companyWithRegistration('Typo Corp');
-      await companies.decide(adminCtx, companyId, {
-        decision: 'approved',
-        companyName: 'Typo Construction Corporation',
-        tin: '123-456-789',
-        secNumber: 'CS202312345',
-        registryChecked: [documentId],
+    it('approves exactly what the customer submitted, after the identity checks', async () => {
+      const { companyId, secId } = await completeCompany('As Sent Corp');
+      // No identity checks, no approval.
+      await expect(
+        companies.decide(adminCtx, companyId, { decision: 'approved', registryChecked: [secId], cureDocuments: [] }),
+      ).rejects.toMatchObject({ response: { error: 'identity_checks_required' } });
+      await companies.decide(adminCtx, companyId, { decision: 'approved', identity: IDENTITY, registryChecked: [secId], cureDocuments: [] });
+      const approved = (await companies.listForReview(adminCtx, 'approved')).items.find((c) => c.id === companyId);
+      expect(approved?.companyName).toBe('As Sent Corp');
+      expect(approved?.tin).toMatch(/^\d{9}$/);
+      expect(approved?.rejection).toBeNull();
+      expect(approved?.documents.find((d) => d.id === secId)?.registryChecked).toBe(true);
+    });
+
+    it('refuses approval without the ID and a registration', async () => {
+      // A fresh login: no ID on file to copy onto the company.
+      const ctx = await newLogin();
+      const company = await companies.createCompany(ctx, {
+        companyName: 'Half Done Corp',
+        tin: randomTin(),
+        billingAddress: '12 Yard Road, Cebu City',
+        contactMobile: '0917 000 0000',
       });
-      const approved = (await companies.listForReview(adminCtx, 'approved')).find(
-        (c) => c.id === companyId,
-      );
-      expect(approved?.companyName).toBe('Typo Construction Corporation');
-      expect(approved?.tin).toBe('123-456-789');
-      expect(approved?.secNumber).toBe('CS202312345');
-      expect(approved?.documents[0]?.registryChecked).toBe(true);
+      const { id: documentId } = await companies.addDocument(ctx, company.id, 'sec_certificate', `storage://fixtures/${randomUUID()}.jpg`, bytes);
+      const companyId = company.id;
+      await expect(
+        companies.decide(adminCtx, companyId, { decision: 'approved', identity: IDENTITY, registryChecked: [documentId], cureDocuments: [] }),
+      ).rejects.toMatchObject({ response: { error: 'documents_incomplete' } });
+    });
+
+    it("scores a login's second company on the ID it already gave, not as a duplicate of itself", async () => {
+      const owner = await newLogin();
+      const mobile = `0917 ${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
+      const apply = async (ctx: RequestContext, name: string) => {
+        const company = await companies.createCompany(ctx, { companyName: name, tin: randomTin(), billingAddress: '12 Yard Road, Cebu City', contactMobile: mobile });
+        await companies.addDocument(ctx, company.id, 'sec_certificate', `storage://fixtures/${randomUUID()}.jpg`, bytes);
+        return company.id;
+      };
+      const first = await apply(owner, `First ${randomUUID().slice(0, 6)} Corp`);
+      await companies.addDocument(owner, first, 'government_id', `storage://fixtures/${randomUUID()}.jpg`, bytes, {
+        idNumber: `${randomTin()}${randomTin().slice(0, 7)}`,
+      });
+      // The ID step is skipped: createCompany copies the login's ID on file.
+      const second = await apply(owner, `Second ${randomUUID().slice(0, 6)} Corp`);
+      const check = async (id: string, check: string) =>
+        (await companies.listForReview(adminCtx, 'pending')).items
+          .find((c) => c.id === id)
+          ?.score?.checks.find((c) => c.id === check)?.status;
+      expect(await check(second, 'duplicates')).toBe('pass');
+      expect(await check(second, 'doc_quality')).not.toBe('fail');
+
+      // Another login with the same mobile is flagged, and so is the owner's company it collides with.
+      const stranger = await apply(await newLogin(), `Stranger ${randomUUID().slice(0, 6)} Corp`);
+      expect(await check(stranger, 'duplicates')).toBe('fail');
+      expect(await check(second, 'duplicates')).toBe('fail');
     });
 
     it('refuses approval until every SEC/BIR/DTI paper is ticked as checked on its registry', async () => {
-      const { companyId, documentId } = await companyWithRegistration('Unchecked Corp');
+      const { companyId, secId: documentId } = await completeCompany('Unchecked Corp');
       const dti = await companies.addDocument(
         reviewCtx,
         companyId,
@@ -677,13 +857,16 @@ describe('Customer onboarding', () => {
         bytes,
       );
       await expect(
-        companies.decide(adminCtx, companyId, { decision: 'approved', registryChecked: [documentId] }),
+        companies.decide(adminCtx, companyId, { decision: 'approved', identity: IDENTITY, registryChecked: [documentId], cureDocuments: [] }),
       ).rejects.toMatchObject({
         response: { error: 'registry_check_required', documentTypes: ['dti_certificate'] },
       });
-      // Rejecting needs no registry check.
-      await companies.decide(adminCtx, companyId, { decision: 'rejected' });
-      const rejected = (await companies.listForReview(adminCtx, 'rejected')).find((c) => c.id === companyId);
+      // Rejecting needs no registry check, only a reason.
+      await expect(companies.decide(adminCtx, companyId, { decision: 'rejected', registryChecked: [], cureDocuments: [] })).rejects.toMatchObject({
+        response: { error: 'rejection_reason_required' },
+      });
+      await companies.decide(adminCtx, companyId, { decision: 'rejected', reason: 'dti_expired', registryChecked: [], cureDocuments: [] });
+      const rejected = (await companies.listForReview(adminCtx, 'rejected')).items.find((c) => c.id === companyId);
       expect(rejected?.documents.find((d) => d.id === dti.id)?.registryChecked).toBe(false);
     });
 
@@ -707,7 +890,7 @@ describe('Customer onboarding', () => {
         { firstName: 'Juan', lastName: 'Dela Cruz', idNumber: '1234-5678-9012-3457', sex: 'M' },
       );
       const read = async () =>
-        (await companies.listForReview(adminCtx, 'pending'))
+        (await companies.listForReview(adminCtx, 'pending')).items
           .find((c) => c.id === company.id)!
           .documents.find((d) => d.id === doc.id)!;
 
@@ -725,16 +908,32 @@ describe('Customer onboarding', () => {
       expect((await read()).customer.id_number).toBe('1234-5678-9012-3457');
     });
 
-    it('leaves the company alone when the reviewer rejects it', async () => {
-      const { companyId } = await companyWithRegistration('Reject Corp');
+    it('records the reason and the papers that cure it when the reviewer rejects', async () => {
+      const { companyId } = await completeCompany('Reject Corp');
       await companies.decide(adminCtx, companyId, {
         decision: 'rejected',
-        companyName: 'Should Not Be Written',
+        reason: 'sec_not_in_good_standing',
+        note: 'Check with SEC shows it suspended since 2024.',
+        registryChecked: [],
+        cureDocuments: [],
       });
-      const rejected = (await companies.listForReview(adminCtx, 'rejected')).find(
-        (c) => c.id === companyId,
-      );
+      const rejected = (await companies.listForReview(adminCtx, 'rejected')).items.find((c) => c.id === companyId);
       expect(rejected?.companyName).toBe('Reject Corp');
+      expect(rejected?.rejection).toMatchObject({
+        reason: 'sec_not_in_good_standing',
+        note: 'Check with SEC shows it suspended since 2024.',
+        cureDocuments: ['sec_good_standing', 'sec_gis'],
+        final: false,
+      });
+    });
+
+    it('keeps a fraudulent rejection final: no uploads, no reapplying', async () => {
+      const { companyId } = await completeCompany('Forged Corp');
+      await companies.decide(adminCtx, companyId, { decision: 'rejected', reason: 'fraudulent', registryChecked: [], cureDocuments: [] });
+      await expect(
+        companies.addDocument(reviewCtx, companyId, 'sec_certificate', `storage://fixtures/${randomUUID()}.jpg`, bytes),
+      ).rejects.toMatchObject({ response: { error: 'rejection_final' } });
+      await expect(companies.reapply(reviewCtx, companyId)).rejects.toMatchObject({ response: { error: 'rejection_final' } });
     });
 
     it('refuses a document that belongs to another company', async () => {
@@ -750,7 +949,7 @@ describe('Customer onboarding', () => {
       const illegible = reviewer({ first_name: { value: 'J', confidence: 0.4 } });
       const company = await illegible.createCompany(reviewCtx, {
         companyName: 'Blurry Scan Corp',
-        tin: '111-222-333',
+        tin: randomTin(),
         billingAddress: '12 Yard Road, Cebu City',
         contactMobile: '0917 000 0000',
       });
@@ -764,11 +963,27 @@ describe('Customer onboarding', () => {
       expect(doc.status).toBe('needs_review');
     });
 
-    it('locks a submitted company until the reviewer unlocks a field, and keeps it pending', async () => {
+    it('takes the SEC number off the scanned certificate and refuses a typed change after', async () => {
+      const service = reviewer({ sec_number: { value: 'CS202312345', confidence: 0.95 } });
+      const company = await service.createCompany(reviewCtx, {
+        companyName: `Secnum Corp ${randomUUID().slice(0, 6)}`,
+        secNumber: 'CS201900001',
+        billingAddress: '12 Yard Road, Cebu City',
+        contactMobile: '0917 000 0000',
+      });
+      await service.addDocument(reviewCtx, company.id, 'sec_certificate', `storage://fixtures/${randomUUID()}.jpg`, bytes);
+      const [after] = (await service.listCompanies(reviewCtx)).filter((c) => c.id === company.id);
+      expect(after?.secNumber).toBe('CS202312345');
+      await expect(service.updateCompany(reviewCtx, company.id, { secNumber: 'CS201900001' })).rejects.toMatchObject({
+        response: { error: 'sec_number_from_document' },
+      });
+    });
+
+    it('locks a submitted company; a rejection opens the cure, and reapplying sends it back', async () => {
       const service = reviewer({ tin: { value: '111-222-333', confidence: 0.95 } });
       const company = await service.createCompany(reviewCtx, {
         companyName: 'Locked Corp',
-        tin: '111-222-333',
+        tin: randomTin(),
         billingAddress: '12 Yard Road, Cebu City',
         contactMobile: '0917 000 0000',
       });
@@ -782,37 +997,44 @@ describe('Customer onboarding', () => {
         ConflictException,
       );
       await expect(upload('bir_cor')).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.reapply(reviewCtx, company.id)).rejects.toMatchObject({ response: { error: 'not_rejected' } });
 
-      const commented = await service.comment(adminCtx, company.id, {
-        comment: 'The TIN is one digit off, and the 2303 is cut off.',
-        unlock: ['tin', 'bir_cor'],
+      await service.decide(adminCtx, company.id, {
+        decision: 'rejected',
+        reason: 'bir_registration_invalid',
+        note: 'The 2303 is from 2015 and the TIN is not on ORUS.',
+        registryChecked: [],
+        cureDocuments: [],
       });
-      expect(commented.kycStatus).toBe('pending');
 
-      // Only what was unlocked, once each.
-      await expect(
-        service.updateCompany(reviewCtx, company.id, { billingAddress: '1 Other St, Cebu City' }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      // Reapplying needs every cure paper uploaded since the rejection.
+      await expect(service.reapply(reviewCtx, company.id)).rejects.toMatchObject({
+        response: { error: 'cure_documents_missing', documentTypes: ['bir_cor', 'business_permit'] },
+      });
       const fixed = await service.updateCompany(reviewCtx, company.id, { tin: '111-222-444' });
       expect(fixed.tin).toBe('111-222-444');
-      expect(fixed.kycStatus).toBe('pending');
-      expect(fixed.unlockedFields).toEqual(['bir_cor']);
       await upload('bir_cor');
-      await expect(upload('bir_cor')).rejects.toBeInstanceOf(ConflictException);
+      await upload('business_permit');
+      const reapplied = await service.reapply(reviewCtx, company.id);
+      expect(reapplied.kycStatus).toBe('pending');
+      // The reviewer still sees what it was rejected for.
+      expect(reapplied.rejection?.reason).toBe('bir_registration_invalid');
 
       // The replaced 2303 no longer counts; the queue shows one of each.
-      const [queued] = (await service.listForReview(adminCtx, 'pending')).filter((c) => c.id === company.id);
-      expect(queued?.documents.map((d) => d.documentType).sort()).toEqual(['bir_cor', 'government_id']);
-      expect(queued?.reviewComment).toBe('The TIN is one digit off, and the 2303 is cut off.');
-      expect(queued?.unlockedFields).toEqual([]);
+      const [queued] = (await service.listForReview(adminCtx, 'pending')).items.filter((c) => c.id === company.id);
+      expect(queued?.documents.map((d) => d.documentType).sort()).toEqual([
+        'bir_cor',
+        'business_permit',
+        'government_id',
+      ]);
 
       const sql = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
       try {
         const [note] = await sql`
           select payload from notifications
-          where notification_type = 'company_review_comment' and (payload->>'company_id') = ${company.id}
+          where notification_type = 'company_rejected' and (payload->>'customer_id') = ${company.id}
         `;
-        expect(note).toBeDefined();
+        expect(note).toMatchObject({ payload: { reason: 'bir_registration_invalid' } });
       } finally {
         await sql.end();
       }
@@ -820,32 +1042,34 @@ describe('Customer onboarding', () => {
       // Approval only needs the live 2303 ticked, not the superseded one.
       await service.decide(adminCtx, company.id, {
         decision: 'approved',
+        identity: IDENTITY,
         registryChecked: queued!.documents.filter((d) => d.documentType === 'bir_cor').map((d) => d.id),
+        cureDocuments: [],
       });
+      const [approved] = (await service.listForReview(adminCtx, 'approved')).items.filter((c) => c.id === company.id);
+      expect(approved?.rejection).toBeNull();
     });
 
-    it('writes the reviewer-confirmed name onto the customer account only on approval', async () => {
+    it('writes the name the customer confirmed off the ID onto their account only on approval', async () => {
       const service = reviewer({
         first_name: { value: 'MARIA', confidence: 0.95 },
         last_name: { value: 'SANTOS', confidence: 0.95 },
       });
-      const company = await service.createCompany(reviewCtx, {
-        companyName: 'Named Corp',
-        tin: '111-222-333',
-        billingAddress: '12 Yard Road, Cebu City',
-        contactMobile: '0917 000 0000',
-      });
+      const { companyId, secId } = await completeCompany('Named Corp');
+      const company = { id: companyId };
 
       const sql = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
       try {
+        // Earlier approvals in this block wrote the same login's name.
+        await sql`update users set first_name = null, middle_name = null, last_name = null where id = ${reviewCtx.userId}`;
         const before = await sql`select first_name from users where id = ${reviewCtx.userId}`;
         expect((before[0] as { first_name: string | null }).first_name).toBeNull();
 
         await service.decide(adminCtx, company.id, {
           decision: 'approved',
-          firstName: 'Maria',
-          middleName: 'Reyes',
-          lastName: 'Santos',
+          identity: IDENTITY,
+          registryChecked: [secId],
+          cureDocuments: [],
         });
 
         const after =

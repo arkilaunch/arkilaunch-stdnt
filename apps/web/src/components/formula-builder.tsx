@@ -10,6 +10,8 @@ const LABELS: Record<string, string> = {
   per_km: 'Rate per km',
   diesel: 'Diesel ₱/L',
   fuel_l_per_km: 'Fuel L/km',
+  round_trip: 'Round-trip multiplier',
+  quote_multiplier: 'Quotation multiplier',
   driver_fee: "Driver's fee",
   tolls: 'Tolls',
   extras: 'All extra charges',
@@ -35,12 +37,6 @@ export interface SampleInputs {
   dieselPhp: number;
 }
 
-/**
- * The truck price formula, built by clicking: variables as named chips,
- * operators, numbers. The text stays the source of truth (and editable for
- * anyone who prefers typing); every change is checked by the same evaluator
- * the server uses and priced on a sample trip.
- */
 export function FormulaBuilder({
   value,
   onChange,
@@ -49,7 +45,7 @@ export function FormulaBuilder({
 }: {
   value: string;
   onChange: (next: string) => void;
-  settings: Pick<TruckSettings, 'baseFeePhp' | 'driverFeePhp' | 'extras'>;
+  settings: Pick<TruckSettings, 'baseFeePhp' | 'driverFeePhp' | 'driverRatePhpPerKm' | 'extras' | 'roundTripMultiplier' | 'quoteMultiplier'>;
   sample: SampleInputs;
 }) {
   const [number, setNumber] = useState('');
@@ -60,8 +56,6 @@ export function FormulaBuilder({
   const append = (token: string) => onChange(`${value.trim()} ${token}`.trim());
   const undo = () => onChange(list.slice(0, -1).join(' '));
 
-  // Priced on a sample 100 km trip with two ₱500 tolls, by the same code
-  // that prices a real request.
   let preview: { total: number; sum: number } | null = null;
   let error: string | null = null;
   try {
@@ -96,7 +90,7 @@ export function FormulaBuilder({
       </div>
 
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium uppercase tracking-[0.04em] text-text-muted">Values</span>
+        <span className="text-sm font-medium text-text-muted">Values</span>
         <div className="flex flex-wrap gap-1.5">
           {[...Object.keys(LABELS), ...extraVars.map(([name]) => name)].map((name) => (
             <Button key={name} type="button" variant="secondary" onClick={() => append(name)}>
@@ -104,7 +98,7 @@ export function FormulaBuilder({
             </Button>
           ))}
         </div>
-        <span className="text-xs font-medium uppercase tracking-[0.04em] text-text-muted">Operators</span>
+        <span className="text-sm font-medium text-text-muted">Operators</span>
         <div className="flex flex-wrap items-end gap-1.5">
           {OPERATORS.map(([op, shown]) => (
             <Button key={op} type="button" variant="secondary" aria-label={`Insert ${shown}`} onClick={() => append(op)}>

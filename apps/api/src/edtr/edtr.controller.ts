@@ -1,71 +1,66 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
-  ServiceUnavailableException,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
-import { type EdtrCaptureRequest, type RequestContext } from '@arkilaunch/shared';
+import { MAX_UPLOAD_BYTES, type EdtrCaptureRequest } from '@arkilaunch/shared';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
-import { MAX_UPLOAD_BYTES, validateUpload } from '../storage/upload-validation.js';
-import { StorageService } from '../storage/storage.service.js';
+import { validateUpload } from '../storage/upload-validation.js';
+import { StorageService, edtrBucket } from '../storage/storage.service.js';
 import { EdtrService } from './edtr.service.js';
-import { EdtrApproveDto, EdtrCaptureDto, EdtrListQueryDto, EdtrRejectDto } from './dto.js';
-
-type CtxRequest = Request & { ctx: RequestContext };
-type MulterFile = { buffer: Buffer; size: number; mimetype: string };
-
-const EDTR_BUCKET = () => requireEnv('SUPABASE_STORAGE_BUCKET_EDTR');
-// A missing storage bucket is an operator misconfiguration, not a bad
-// request. Thrown as a bare Error it surfaced to the user as an opaque 500
-// "Internal server error" that named nothing and looked like data loss; say
-// which setting is absent and that the log was not stored.
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new ServiceUnavailableException({
-      error: 'storage_not_configured',
-      missing: name,
-      detail: 'Document storage is not configured in this environment, so the scan was not saved.',
-    });
-  }
-  return value;
-}
+import { EdtrWeekService } from './edtr-week.service.js';
+import { EdtrApproveDto, EdtrBillPreviewQueryDto, EdtrCaptureDto, EdtrRotationDto, EdtrTranscribeDto, EdtrListQueryDto, EdtrRejectDto, EdtrReviewDto, EdtrWeekBillDto } from './dto.js';
+import type { CtxRequest, MulterFile } from '../common/request.js';
 
 @Controller('edtr')
 export class EdtrController {
   constructor(
     private readonly edtr: EdtrService,
     private readonly storage: StorageService,
+    private readonly weeks: EdtrWeekService,
   ) {}
 
-  // The `POST edtr/dev/run-worker` POC shim was removed here by
-  // cr-arkilaunch-pilot-honesty.md. Its own comment said "Remove before
-  // this ships past a POC", and it did two things a shipping build must
-  // not: it exposed the ACA Job's entrypoint over HTTP (the real
-  // edtr-ocr-worker is a separate scheduled process, RFC-2 §2), and it
-  // injected a fixture with literal hours_active: '8.0' while never
-  // reading the uploaded image at all.
-  //
-  // Local-dev replacement, matching how production actually runs it
-  // (infra/terraform/modules/cron_job): `pnpm --filter @arkilaunch/jobs
-  // worker:edtr`. See docs/runbook-local-dev.md.
+  // One unit's Mon-Sun week: each day's reading and decision, totals, the sheet's WEEK SUMMARY, bill state.
+  // Four segments, so it never collides with ':id'.
+  @Get('weeks/:rentalId/:equipmentId/:weekStart')
+  @RequirePermission('edtr:approve')
+  week(
+    @Param('rentalId', ParseUUIDPipe) rentalId: string,
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Param('weekStart') weekStart: string,
+    @Req() req: CtxRequest,
+  ) {
+    return this.weeks.week(req.ctx, rentalId, equipmentId, weekStart);
+  }
 
-  // QAD-T31 (resource abuse / cost bomb): each capture queues an async
-  // Azure DI extraction, so this route gets a tighter cap than the global
-  // default. paper_ocr arrives multipart with a `file` field (RFC-2 §6:
-  // validated + uploaded to Storage here, BEFORE the blob reaches Storage,
-  // not via a direct-to-Storage signed upload); digital_entry has no file
-  // and is still plain JSON -- multer's FileInterceptor only activates on a
-  // multipart content-type, so a JSON request passes through untouched.
+  // "Approve & bill": once every logged day is decided, invoices the week's hours past the deposit and
+  // sends the invoice and the SOA. A person clicks it; nothing bills on a schedule before Monday's cron (RFC-2).
+  @Post('weeks/:rentalId/:equipmentId/:weekStart/bill')
+  @RequirePermission('edtr:approve')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  billWeek(
+    @Param('rentalId', ParseUUIDPipe) rentalId: string,
+    @Param('equipmentId', ParseUUIDPipe) equipmentId: string,
+    @Param('weekStart') weekStart: string,
+    @Body() body: EdtrWeekBillDto,
+    @Req() req: CtxRequest,
+  ) {
+    return this.weeks.bill(req.ctx, rentalId, equipmentId, weekStart, body);
+  }
+
+  // Tighter cap: each capture queues an Azure DI extraction. FileInterceptor only engages on multipart,
+  // so digital_entry JSON passes through untouched.
   @Post()
   @RequirePermission('edtr:create')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -75,7 +70,7 @@ export class EdtrController {
     if (body.source === 'paper_ocr') {
       const validated = validateUpload(file);
       const key = this.storage.buildObjectKey(req.ctx.tenantId, validated.extension);
-      await this.storage.uploadObject(EDTR_BUCKET(), key, file!.buffer, validated.contentType);
+      await this.storage.uploadObject(edtrBucket(), key, file!.buffer, validated.contentType);
       rawFileUri = key;
     }
 
@@ -83,35 +78,50 @@ export class EdtrController {
     return this.edtr.capture(req.ctx, captureRequest);
   }
 
-  // GET /api/v1/edtr?... (S8 review queue). Same permission as capture:
-  // staff and timekeepers both hold edtr:create, and the service itself
-  // scopes a timekeeper's results to their assigned sites.
+  // Staff only; the service's timekeeper site-scoping stays as defence in depth.
   @Get()
-  @RequirePermission('edtr:create')
+  @RequirePermission('edtr:read')
   list(@Query() query: EdtrListQueryDto, @Req() req: CtxRequest) {
     return this.edtr.list(req.ctx, query);
   }
 
+  // edtr:create too: the timekeeper polls their own capture and previews its scan (site-scoped in the service).
   @Get(':id')
-  @RequirePermission('edtr:create')
+  @RequirePermission('edtr:create', 'edtr:read')
   get(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.edtr.get(req.ctx, id);
   }
 
-  // Signed, short-lived URL for the scanned page, so the review screen can
-  // draw the OCR bounding boxes over the image the model actually read.
-  // Never a public URL (RFC-2 §6); the key is re-derived from the owning
-  // row under RLS, never taken from the caller.
+  @Patch(':id/rotation')
+  @RequirePermission('edtr:approve')
+  rotate(@Param('id') id: string, @Body() body: EdtrRotationDto, @Req() req: CtxRequest) {
+    return this.edtr.setRotation(req.ctx, id, body.degrees);
+  }
+
+  // Approvers only: hours typed from the photo of a sheet the worker could not read.
+  @Post(':id/transcribe')
+  @RequirePermission('edtr:approve')
+  transcribe(@Param('id') id: string, @Body() body: EdtrTranscribeDto, @Req() req: CtxRequest) {
+    return this.edtr.transcribe(req.ctx, id, body);
+  }
+
+  // Approvers only: it prices hours exactly as approve() would, without writing anything.
+  @Get(':id/bill-preview')
+  @RequirePermission('edtr:approve')
+  billPreview(@Param('id') id: string, @Query() query: EdtrBillPreviewQueryDto, @Req() req: CtxRequest) {
+    return this.edtr.billPreview(req.ctx, id, query);
+  }
+
+  // Never a public URL; the key is re-derived from the owning row under RLS.
   @Get(':id/image')
-  @RequirePermission('edtr:create')
+  @RequirePermission('edtr:create', 'edtr:read')
   async image(@Param('id') id: string, @Req() req: CtxRequest) {
     const key = await this.edtr.rawFileKey(req.ctx, id);
-    const url = await this.storage.createSignedDownloadUrl(EDTR_BUCKET(), key);
+    const url = await this.storage.createSignedDownloadUrl(edtrBucket(), key);
     return { url, expiresInSeconds: 300 };
   }
 
-  // Addressed by reconciliation id: what a reviewer working the queue
-  // actually holds. Three segments, so it never collides with ':id/approve'.
+  // Three segments, so it never collides with ':id/approve'.
   @Post('reconciliations/:reconciliationId/approve')
   @RequirePermission('edtr:approve')
   approveByReconciliation(
@@ -126,6 +136,19 @@ export class EdtrController {
   @RequirePermission('edtr:approve')
   approve(@Param('id') id: string, @Body() body: EdtrApproveDto, @Req() req: CtxRequest) {
     return this.edtr.approve(req.ctx, id, body);
+  }
+
+  @Post(':id/review')
+  @RequirePermission('edtr:approve')
+  review(@Param('id') id: string, @Body() body: EdtrReviewDto, @Req() req: CtxRequest) {
+    return this.edtr.review(req.ctx, id, body);
+  }
+
+  // Admins only: takes an unbilled log out entirely; a billed one is refused (409 already_billed).
+  @Delete(':id')
+  @RequirePermission('edtr:approve')
+  remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.edtr.remove(req.ctx, id);
   }
 
   @Post(':id/reject')

@@ -33,7 +33,7 @@ describe('OpenMeteoAdapter', () => {
     expect(calledUrl.origin + calledUrl.pathname).toBe('https://api.open-meteo.com/v1/forecast');
     expect(calledUrl.searchParams.get('latitude')).toBe('14.676');
     expect(calledUrl.searchParams.get('longitude')).toBe('121.0437');
-    expect(calledUrl.searchParams.get('current')).toBe('temperature_2m,wind_speed_10m,precipitation,weather_code');
+    expect(calledUrl.searchParams.get('current')).toBe('temperature_2m,wind_speed_10m,precipitation,weather_code,wind_gusts_10m,relative_humidity_2m');
     expect(calledUrl.searchParams.get('temperature_unit')).toBe('celsius');
     expect(calledUrl.searchParams.get('wind_speed_unit')).toBe('kmh');
     expect(calledUrl.searchParams.get('precipitation_unit')).toBe('mm');
@@ -53,11 +53,7 @@ describe('OpenMeteoAdapter', () => {
     expect(result).toEqual({ tempC: 30.1, windKph: 12.4, precipMm: 0.2, code: 3 });
   });
 
-  // The safety-critical case: a missing field must throw, never coerce to
-  // 0. An all-zero reading evaluates to severity 'none', which
-  // severityMessage() renders as "No weather advisory in effect" -- a
-  // fabricated all-clear for a construction site (see
-  // packages/shared/src/weather-port.spec.ts's regression rationale).
+  // Safety-critical: a missing field must throw, never coerce to 0 (a fabricated all-clear).
   it('throws rather than defaulting a missing field to 0', async () => {
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       jsonResponse(200, {
@@ -84,10 +80,7 @@ describe('OpenMeteoAdapter', () => {
     await expect(adapter.getConditions(14.676, 121.0437)).rejects.toBeInstanceOf(WeatherObservationError);
   });
 
-  // If Open-Meteo ever stopped honouring wind_speed_unit=kmh, a real 60 kph
-  // gale reported as 16.7 (m/s) would compare false against every wind
-  // threshold and render "No weather advisory in effect" -- silently. The
-  // current_units literal check is the guard against exactly that.
+  // A 60 kph gale reported as 16.7 m/s would read as no advisory; the unit literal guards it.
   it('throws when current_units reports a unit other than what was requested', async () => {
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       jsonResponse(200, {
@@ -150,9 +143,7 @@ describe('OpenMeteoAdapter', () => {
   });
 });
 
-// The forecast half. Same wire path, same refusal to coerce: a customer-facing
-// five-day rail must never be filled in from a block this adapter cannot
-// trust, so every partial shape throws rather than yielding a short week.
+// The forecast half: every partial shape throws rather than yielding a short week.
 const DAILY_UNITS = {
   temperature_2m_max: '°C',
   temperature_2m_min: '°C',
@@ -195,7 +186,6 @@ describe('OpenMeteoAdapter.getForecast', () => {
     );
     expect(url.searchParams.get('forecast_days')).toBe('5');
     expect(url.searchParams.get('timezone')).toBe('Asia/Manila');
-    // The units are pinned here for the same reason as the current block.
     expect(url.searchParams.get('wind_speed_unit')).toBe('kmh');
   });
 
@@ -245,5 +235,77 @@ describe('OpenMeteoAdapter.getForecast', () => {
     await expect(new OpenMeteoAdapter().getForecast(14.676, 121.0437)).rejects.toMatchObject({
       kind: 'rate_limited',
     });
+  });
+});
+
+const HOURLY_UNITS = {
+  temperature_2m: '°C',
+  wind_speed_10m: 'km/h',
+  precipitation: 'mm',
+  wind_gusts_10m: 'km/h',
+  relative_humidity_2m: '%',
+};
+
+function hourlyBody(hours: number, overrides: Record<string, unknown> = {}) {
+  const fill = <T,>(v: T) => Array.from({ length: hours }, () => v);
+  return {
+    hourly_units: HOURLY_UNITS,
+    hourly: {
+      time: Array.from({ length: hours }, (_, i) => `2026-09-28T${String(7 + i).padStart(2, '0')}:00`),
+      temperature_2m: fill(29),
+      wind_speed_10m: fill(12),
+      precipitation: fill(4.2),
+      weather_code: fill(61),
+      wind_gusts_10m: fill(30),
+      relative_humidity_2m: fill(80),
+      ...overrides,
+    },
+  };
+}
+
+describe('OpenMeteoAdapter.getHourlyForecast', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('asks for the hourly block with the same fields and pinned units as the live reading', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse(200, hourlyBody(3)));
+    await new OpenMeteoAdapter().getHourlyForecast(14.676, 121.0437, 3);
+
+    const url = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0] as URL;
+    expect(url.searchParams.get('hourly')).toBe(
+      'temperature_2m,wind_speed_10m,precipitation,weather_code,wind_gusts_10m,relative_humidity_2m',
+    );
+    expect(url.searchParams.get('forecast_hours')).toBe('3');
+    expect(url.searchParams.get('timezone')).toBe('Asia/Manila');
+  });
+
+  it('zips each hour into an observation the per-equipment rules read', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse(200, hourlyBody(3)));
+    const hours = await new OpenMeteoAdapter().getHourlyForecast(14.676, 121.0437, 3);
+    expect(hours).toHaveLength(3);
+    expect(hours[0]).toEqual({
+      time: '2026-09-28T07:00',
+      observed: { tempC: 29, windKph: 12, precipMm: 4.2, code: 61, gustKph: 30, humidityPct: 80 },
+    });
+  });
+
+  it('throws on a short block rather than a shorter forecast', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(jsonResponse(200, hourlyBody(2)));
+    await expect(new OpenMeteoAdapter().getHourlyForecast(14.676, 121.0437, 3)).rejects.toMatchObject({
+      kind: 'malformed_response',
+    });
+  });
+
+  it('throws on a mis-scaled unit', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      jsonResponse(200, { ...hourlyBody(3), hourly_units: { ...HOURLY_UNITS, wind_speed_10m: 'm/s' } }),
+    );
+    await expect(new OpenMeteoAdapter().getHourlyForecast(14.676, 121.0437, 3)).rejects.toBeInstanceOf(
+      WeatherObservationError,
+    );
   });
 });

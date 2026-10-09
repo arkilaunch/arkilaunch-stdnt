@@ -1,45 +1,138 @@
 import { describe, expect, it } from 'vitest';
-import { IDLE_REASONS, WEATHER_CODES } from '@arkilaunch/shared';
-import { buildEdtrSheetSvg, edtrSheetQrPayload, IDLE_LABELS } from './edtr-sheet.js';
+import { WEATHER_CODES, parseEdtrSheet } from '@arkilaunch/shared';
+import { PAGE, buildEdtrSheetSvg, edtrSheetFilename, edtrSheetQrPayload } from './edtr-sheet.js';
 
 const context = {
   rentalId: '11111111-2222-3333-4444-555555555555',
   chargeTo: 'Acme Builders Inc.',
   projectLocation: '12 Katipunan Ave, Quezon City, Metro Manila',
-  equipment: [{ id: 'eeeeeeee-0000-0000-0000-000000000001', type: 'Excavator', model: 'PC200', serialNo: 'SN-778' }],
+  bookingCode: 'EQR-2026-0042',
+  siteRep: 'Engr. Reyes',
+  // Unit on site Tue 22 Sep .. Fri 25 Sep (Manila).
+  equipment: [
+    {
+      id: 'eeeeeeee-0000-0000-0000-000000000001',
+      type: 'Excavator',
+      model: 'PC200',
+      serialNo: 'SN-778',
+      start: '2026-09-21T16:00:00.000Z',
+      end: '2026-09-25T09:00:00.000Z',
+      operatorName: 'Jun Cruz',
+      lastHourMeter: 1234.5,
+    },
+  ],
+  tenant: { name: 'Almara Construction', address: 'Pasig City', contact: '0917 000 0000', logoUrl: null },
 };
 
 // The printed sheet is the OCR contract (parseEdtrSheet): these checks fail
 // if a layout edit drifts from what the reader expects.
-describe('buildEdtrSheetSvg', () => {
+describe('buildEdtrSheetSvg (EDTR v3)', () => {
   const svg = buildEdtrSheetSvg({ context, equipmentId: context.equipment[0]!.id, weekStart: '2026-09-21' });
 
-  it('prints the header labels the parser finds the grid by', () => {
-    for (const label of ['DATE', 'AM', 'PM', 'OVERTIME', 'TOTAL', 'IN', 'OUT', 'IDLE REASON', 'WEATHER AM', 'WEATHER PM']) {
-      expect(svg).toContain(`>${label}<`);
+  it('prints every header word the parser finds the v3 grid by', () => {
+    for (const word of ['DATE', 'DAY', 'AM', 'PM', 'OVERTIME', 'TOTAL', 'RUNNING', 'IDLE', 'BREAKDOWN', 'WEATHER', 'OTHER', 'HRS', 'METER', 'START', 'END', 'IN', 'OUT', 'WEATHER AM', 'WEATHER PM', 'INITIAL']) {
+      expect(svg).toContain(`>${word}<`);
     }
+    expect(svg).not.toContain('>IDLE REASON<');
   });
 
-  it('pre-prints seven MM/DD dates and nothing else in the DATE cells', () => {
+  it('pre-prints seven MM/DD dates, hatching the days outside the rental', () => {
     for (const d of ['09/21', '09/22', '09/23', '09/24', '09/25', '09/26', '09/27']) expect(svg).toContain(`>${d}<`);
-    expect(svg).toContain('>MON<');
+    // Mon 21, Sat 26, Sun 27 are outside the unit's span.
+    expect(svg.match(/OUTSIDE RENTAL — DO NOT FILL/g)).toHaveLength(3);
+    expect(svg).toContain('>TUE<');
+    expect(svg).not.toContain('>MON<');
   });
 
-  it('prints one tick box per option, per group, per row', () => {
+  it('prints one weather tick box per code, per half-day, and no STD SHIFT column', () => {
     const boxes = svg.match(/width="3.2" height="3.2"/g) ?? [];
-    expect(boxes).toHaveLength(7 * (IDLE_LABELS.length + 2 * WEATHER_CODES.length));
-    expect(IDLE_LABELS).toHaveLength(IDLE_REASONS.length);
+    expect(boxes).toHaveLength(4 * 2 * WEATHER_CODES.length);
+    expect(svg).not.toContain('STD SHIFT');
   });
 
-  it('fills the header and carries the rental, unit and week in the QR (never a tenant)', () => {
-    expect(svg).toContain('Acme Builders Inc.');
-    expect(svg).toContain('Excavator · PC200 · SN SN-778');
-    expect(edtrSheetQrPayload(context.rentalId, 'e1', '2026-09-21')).toBe(`ARKI-EDTR2:${context.rentalId}:e1:2026-09-21`);
+  it('carries the booking code, tenant, site rep, operator and hour meter; the QR names no tenant', () => {
+    for (const s of ['EQR-2026-0042', 'ALMARA CONSTRUCTION', 'Engr. Reyes', 'Jun Cruz', '1234.5', 'Excavator · PC200 · SN SN-778']) {
+      expect(svg).toContain(s);
+    }
+    expect(edtrSheetQrPayload(context.rentalId, 'e1', '2026-09-21')).toBe(`ARKI-EDTR3:${context.rentalId}:e1:2026-09-21`);
+    expect(svg).not.toContain('Sheet ');
+    expect(svg).toContain('REMARKS / DOWNTIME NOTES');
   });
 
-  it('prints a blank fallback with no dates and no QR', () => {
+  it('squeezes a long tenant name and field value into their boxes instead of cutting them', () => {
+    const long = 'Northern Luzon Heavy Equipment Rental and General Construction Services Corporation';
+    const location = 'Lot 7 Block 12, Barangay San Isidro, Kilometer 42 Marcos Highway, Antipolo City, Rizal';
+    for (const page of ['letter', 'legal'] as const) {
+      const s = buildEdtrSheetSvg({
+        context: { ...context, projectLocation: location, tenant: { ...context.tenant, name: long } },
+        equipmentId: context.equipment[0]!.id,
+        weekStart: '2026-09-21',
+        page,
+        logoDataUri: 'data:image/png;base64,AA==',
+      });
+      const W = PAGE[page].w;
+      const name = s.match(new RegExp(`<text x="([\\d.]+)"[^>]*textLength="([\\d.]+)"[^>]*>${long.toUpperCase()}<`));
+      // Ends before the centred title begins (27 bold capitals at 5.2 mm).
+      expect(Number(name![1]) + Number(name![2])).toBeLessThan(W / 2 - (27 * 5.2 * 0.72) / 2);
+      const loc = s.match(new RegExp(`textLength="([\\d.]+)"[^>]*>${location}<`));
+      expect(Number(loc![1])).toBeLessThan((W - 16) / 4);
+    }
+    expect(svg).not.toMatch(/textLength="[\d.]+"[^>]*>ALMARA CONSTRUCTION</);
+    expect(svg).not.toContain('…');
+  });
+
+  it('sizes the page from one constant, Legal by default and Letter on request', () => {
+    expect(svg).toContain(`viewBox="0 0 ${PAGE.legal.w} ${PAGE.legal.h}"`);
+    const letter = buildEdtrSheetSvg({ context, equipmentId: context.equipment[0]!.id, weekStart: '2026-09-21', page: 'letter' });
+    expect(letter).toContain(`viewBox="0 0 ${PAGE.letter.w} ${PAGE.letter.h}"`);
+    expect(letter).toContain('Page: Letter');
+  });
+
+  it('names the file by booking code, unit and week', () => {
+    expect(edtrSheetFilename({ context, equipmentId: context.equipment[0]!.id, weekStart: '2026-09-21' }, 'pdf')).toBe(
+      'edtr-v3-EQR-2026-0042-SN-778-2026-09-21.pdf',
+    );
+  });
+
+  it('prints a blank fallback with no dates, no QR and a hand-fill booking box', () => {
     const blank = buildEdtrSheetSvg({});
     expect(blank).toContain('BLANK SHEET');
+    expect(blank).toContain('BOOKING CODE');
     expect(blank).not.toContain('>09/21<');
+  });
+
+
+  // Round trip at the contract level: the grid as a layout model would
+  // return it for this printed header parses back into the v3 fields.
+  it('round-trips through the parser with the printed header labels', () => {
+    const header0 = ['DATE', 'DAY', 'AM', 'AM', 'PM', 'PM', 'OVERTIME', 'OVERTIME', 'TOTAL HOURS', 'RUNNING HRS', 'IDLE HRS', 'BREAKDOWN HRS', 'WEATHER HRS', 'OTHER HRS', 'METER START', 'METER END', 'WEATHER AM', 'WEATHER PM', 'INITIAL'];
+    const header1 = ['', '', 'IN', 'OUT', 'IN', 'OUT', 'IN', 'OUT', '', '', '', '', '', '', '', '', '', '', ''];
+    const rows = [
+      header0,
+      header1,
+      ['09/21', 'OUTSIDE RENTAL', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      ['09/22', 'TUE', '07:00', '12:00', '13:00', '17:00', '', '', '9', '7', '0.5', '1.5', '', '', '1234.5', '1241.5', '', '', 'ER'],
+    ];
+    const parsed = parseEdtrSheet(
+      [
+        {
+          rowCount: rows.length,
+          columnCount: header0.length,
+          cells: rows.flatMap((row, rowIndex) => row.map((content, columnIndex) => ({ rowIndex, columnIndex, content, confidence: 0.98 }))),
+        },
+      ],
+      '2026-09-23',
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.days).toHaveLength(1);
+    expect(parsed.days[0]).toMatchObject({
+      reportDate: '2026-09-22',
+      hoursActive: 7,
+      totalMismatch: false,
+      v3: { total: 9, running: 7, idle: 0.5, breakdown: 1.5, weather: 0, other: 0, meterStart: 1234.5, meterEnd: 1241.5 },
+    });
+    // Every label the parser matches exactly is printed (as words) on the sheet.
+    for (const label of header0) for (const word of label.split(' ')) expect(svg).toContain(`>${word}<`);
   });
 });

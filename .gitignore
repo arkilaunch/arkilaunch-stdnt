@@ -39,3 +39,6 @@ test-results/
 
 # Local env backups (never commit: these hold real secrets)
 *.lanbak
+
+# Local Playwright screenshot/run output
+artifacts/

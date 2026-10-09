@@ -1,16 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { signIn } from './sign-in.js';
+import { choose } from './select.js';
 
-// End-to-end cover for the inventory CRUD surface (Figma 292:1344,
-// 293:2668, 293:3256) against the real fleet endpoints.
-//
-// One test, one round trip: a machine is added, edited, and retired. Split
-// into three tests it would need three fixtures and leave two orphans in the
-// seeded tenant every run; as one journey it cleans up after itself, because
-// the retire IS the cleanup.
-//
-// The serial carries the run's timestamp: serials are unique per tenant, so
-// a fixed one would 409 on the second run against the same database.
+// One journey so the retire is the cleanup. The serial carries the run's timestamp: serials are unique per tenant.
 
 test('a machine can be added, edited and retired from the inventory', async ({ page }) => {
   const serial = `E2E-${Date.now()}`;
@@ -25,10 +17,10 @@ test('a machine can be added, edited and retired from the inventory', async ({ p
 
   await addDialog.getByLabel('Equipment name').fill('E2E Backhoe');
   // The first real option; index 0 is the "Choose a category" placeholder.
-  await addDialog.getByLabel('Category').selectOption({ index: 1 });
+  await choose(addDialog.getByLabel('Category'), { index: 1 });
   await addDialog.getByLabel('Serial / ID number').fill(serial);
   await addDialog.getByLabel('Weight / capacity (tons)').fill('22.5');
-  await addDialog.getByLabel('Fuel type').selectOption('Diesel');
+  await choose(addDialog.getByLabel('Fuel type'), { label: 'Diesel' });
   await addDialog.getByRole('button', { name: 'Add equipment' }).click();
 
   await expect(addDialog).toBeHidden();
@@ -39,12 +31,12 @@ test('a machine can be added, edited and retired from the inventory', async ({ p
   await expect(card.getByText('E2E Backhoe')).toBeVisible();
 
   // --- edit --------------------------------------------------------------
-  await card.getByRole('button', { name: 'Edit' }).click();
+  await card.getByRole('button', { name: /more actions for/i }).click();
+  await page.getByRole('menuitem', { name: 'Edit details' }).click();
   const editDialog = page.getByRole('dialog');
   await expect(editDialog).toBeVisible();
 
-  // The serial is immutable once recorded -- migration 0026 REVOKEs UPDATE
-  // on the column, so the field must not offer to change it.
+  // The serial is immutable: UPDATE on the column is revoked.
   await expect(editDialog.getByLabel('Serial / ID number')).toBeDisabled();
 
   await editDialog.getByLabel('Equipment name').fill('E2E Backhoe II');
@@ -54,17 +46,15 @@ test('a machine can be added, edited and retired from the inventory', async ({ p
   await expect(card.getByText('E2E Backhoe II')).toBeVisible();
 
   // --- retire ------------------------------------------------------------
-  await card.getByRole('button', { name: 'Delete' }).click();
-  const confirm = page.getByRole('dialog');
-  await expect(confirm.getByRole('heading', { name: 'Delete Asset?' })).toBeVisible();
-  // The confirm must not repeat the frame's promise to destroy the logs.
-  await expect(confirm.getByText(/history, field logs and the invoices they priced are kept/i))
+  await card.getByRole('button', { name: /more actions for/i }).click();
+  await page.getByRole('menuitem', { name: 'Retire equipment' }).click();
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm.getByRole('heading', { name: 'Retire this machine?' })).toBeVisible();
+  await expect(confirm.getByText(/rental history, field logs and invoices remain available/i))
     .toBeVisible();
 
-  await confirm.getByRole('button', { name: 'Delete asset' }).click();
+  await confirm.getByRole('button', { name: 'Retire equipment' }).click();
 
-  // Gone from the fleet list. It still exists in the database -- a retire is
-  // not a delete -- but it has left every surface a machine can be booked
-  // from.
+  // Retired, not deleted: gone from every bookable surface.
   await expect(page.getByRole('group', { name: serial })).toBeHidden();
 });

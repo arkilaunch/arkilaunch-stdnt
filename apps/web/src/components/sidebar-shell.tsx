@@ -1,54 +1,100 @@
 import { useRouterState } from '@tanstack/react-router';
-import { useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
+import { Menu, X } from 'lucide-react';
 import type { NavGroup } from '../lib/nav-config.js';
 import { AppBar } from './app-bar.js';
 import { NavGroupList } from './nav-group.js';
 import { SkipLink } from './skip-link.js';
+import { FlashbarSlot } from './toast.js';
 
 export interface SidebarShellProps {
   navGroups: NavGroup[];
+  navTitle: string;
   tenantLabel: string;
   children: ReactNode;
+  hideNav?: boolean;
 }
 
-// DESIGN.md §4.1 Nav shell (role-aware): tenant mark leads in the app bar,
-// persistent sidebar on desktop, an off-canvas drawer at the 360px baseline
-// so the console never breaks the mandated mobile floor.
-export function SidebarShell({ navGroups, tenantLabel, children }: SidebarShellProps) {
+export const ShellNavContext = createContext<{ navGroups: NavGroup[]; tenantLabel: string } | null>(null);
+export const useShellNav = () => useContext(ShellNavContext);
+
+const NAV_KEY = 'arkilaunch.sideNav';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAV_KEY) === 'collapsed';
+  } catch {
+    return false;
+  }
+}
+
+export function SidebarShell({ navGroups, navTitle, tenantLabel, children, hideNav = false }: SidebarShellProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+
+  function toggleCollapsed() {
+    setCollapsed((was) => {
+      try {
+        localStorage.setItem(NAV_KEY, was ? 'open' : 'collapsed');
+      } catch {
+        // Private mode: the choice lasts this page load only.
+      }
+      return !was;
+    });
+  }
+
+  // Cloudscape app layout: a bare glyph (hamburger opens, X closes) that darkens on hover, no tile behind it.
+  const railButton =
+    'flex min-h-11 min-w-11 items-center justify-center rounded-sm text-text-muted hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
 
   return (
-    <div className="flex min-h-screen flex-col bg-bg">
-      <SkipLink />
-      <AppBar tenantLabel={tenantLabel} onMenuClick={() => setDrawerOpen((v) => !v)} />
-      <div className="flex flex-1">
-        {/* Named, because the catalog page renders a second complementary
-            landmark (its right rail) and an unnamed pair is ambiguous to a
-            screen reader. */}
-        <aside
-          aria-label="Sidebar"
-          className="hidden w-60 shrink-0 border-r border-border bg-surface-sunk px-3 py-6 lg:block"
-        >
-          <NavGroupList groups={navGroups} pathname={pathname} />
-        </aside>
+    <ShellNavContext.Provider value={{ navGroups, tenantLabel }}>
+      <div className="flex min-h-screen flex-col bg-bg">
+        <SkipLink />
+        <AppBar
+          tenantLabel={tenantLabel}
+          {...(!hideNav
+            ? {
+                onMenuClick: () => setDrawerOpen((v) => !v),
+                onMenuClose: () => setDrawerOpen(false),
+                menuOpen: drawerOpen,
+                menu: <NavGroupList groups={navGroups} pathname={pathname} onNavigate={() => setDrawerOpen(false)} dropdown />,
+              }
+            : {})}
+        />
+        <div className="flex flex-1">
+          {/* Named: the catalog renders a second complementary landmark. */}
+          {hideNav ? null : collapsed ? (
+            <aside aria-label="Sidebar" className="sticky top-14 hidden h-[calc(100dvh-3.5rem)] w-14 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border bg-surface px-1.5 pb-4 pt-3 [scrollbar-width:none] lg:flex [&::-webkit-scrollbar]:hidden">
+              <button type="button" onClick={toggleCollapsed} aria-expanded={false} aria-label="Open navigation" title="Open navigation" className={`${railButton} mb-3 self-center`}>
+                <Menu aria-hidden strokeWidth={2.25} className="h-5 w-5" />
+              </button>
+              <NavGroupList groups={navGroups} pathname={pathname} collapsed />
+            </aside>
+          ) : (
+            <aside
+              aria-label="Sidebar"
+              className="scroll-thin sticky top-14 hidden h-[calc(100dvh-3.5rem)] w-64 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border bg-surface px-3 pb-6 pt-3 lg:flex"
+            >
+              <div className="mb-3 flex min-h-11 items-center justify-between gap-2 px-3">
+                <h2 className="min-w-0 truncate text-base font-semibold text-text">{navTitle}</h2>
+                <button type="button" onClick={toggleCollapsed} aria-expanded aria-label="Close navigation" title="Close navigation" className={`${railButton} -mr-3`}>
+                  <X aria-hidden strokeWidth={2.25} className="h-5 w-5" />
+                </button>
+              </div>
+              <NavGroupList groups={navGroups} pathname={pathname} />
+            </aside>
+          )}
 
-        {drawerOpen && (
-          <div className="fixed inset-0 z-50 flex lg:hidden">
-            <button
-              type="button"
-              aria-label="Close navigation"
-              onClick={() => setDrawerOpen(false)}
-              className="flex-1 bg-[var(--yb-modal-scrim)]"
-            />
-            <div className="w-64 max-w-[80vw] bg-surface-sunk px-3 py-6 shadow-lg">
-              <NavGroupList groups={navGroups} pathname={pathname} onNavigate={() => setDrawerOpen(false)} />
+          <main id="main" className="min-w-0 flex-1 px-4 pb-10 pt-4 sm:px-8 sm:pt-6">
+            <div className="mx-auto w-full max-w-[1440px]">
+              <FlashbarSlot />
+              {children}
             </div>
-          </div>
-        )}
-
-        <main id="main" className="min-w-0 flex-1 p-4 sm:p-6">{children}</main>
+          </main>
+        </div>
       </div>
-    </div>
+    </ShellNavContext.Provider>
   );
 }

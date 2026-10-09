@@ -1,26 +1,18 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import type { EquipmentResponse } from '@arkilaunch/shared';
+import { EQUIPMENT_PHOTO_MAX_BYTES, type EquipmentResponse } from '@arkilaunch/shared';
 import { Modal } from './modal.js';
 import { Input } from './input.js';
 import { Select } from './select.js';
 import { Button } from './button.js';
 import { CaptureField } from './capture-field.js';
 import { useToast } from './toast.js';
-import { apiErrorText, apiPatch, apiPost, apiPostForm } from '../lib/api-client.js';
+import { ApiError, apiErrorText, apiPatch, apiPost, apiPostForm } from '../lib/api-client.js';
+import type { PrepareUploadOptions } from '../lib/image-compression.js';
 import { referenceQueries } from '../lib/queries.js';
 
-// Figma 292:1344 (Add Equipment) and 293:2668 (Edit Details). One component:
-// the two frames are the same form, differing only in heading and submit
-// label.
-//
-// Two sections of the frame are deliberately absent. HOURLY RATE and DAILY
-// RATE would put a second price next to rate_cards, which is what quoting
-// actually reads -- a competing source of truth on the money path -- so the
-// form links to the rate cards screen instead. The frame's own section
-// numbering (1, 2, 3, 5) is a design slip, not a missing section.
-
+// No hourly/daily rate fields: rate_cards is the one price quoting reads.
 const FUEL_TYPES = ['Diesel', 'Gasoline', 'Electric', 'Hybrid', 'LPG'];
 
 const STATUSES = [
@@ -29,22 +21,19 @@ const STATUSES = [
   { value: 'maintenance', label: 'In maintenance' },
 ];
 
-// The frame draws a textarea; the app has no Textarea primitive and one
-// field does not earn a shared component. Mirrors Input's field styling.
 const TEXTAREA_CLASSES =
   'block w-full rounded-sm border border-border bg-surface px-3.5 py-3 text-base text-text ' +
   'hover:border-border-strong focus-visible:outline focus-visible:outline-2 ' +
   'focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
 
+const PHOTO_UPLOAD: PrepareUploadOptions = { maxEdge: 1920, quality: 0.8, type: 'image/webp', maxBytes: EQUIPMENT_PHOTO_MAX_BYTES };
+
 export interface EquipmentFormModalProps {
-  /** Absent for create, present for edit. */
   equipment?: EquipmentResponse;
   onClose: () => void;
 }
 
-// An empty numeric field means "not specified", which must be omitted from
-// the request rather than sent as 0 -- a machine with no recorded weight is
-// not a machine that weighs nothing.
+// An empty numeric field is omitted, never sent as 0.
 function numberOrUndefined(value: string): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
@@ -75,31 +64,31 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
   const [notes, setNotes] = useState(equipment?.notes ?? '');
   const [categoryNote, setCategoryNote] = useState(equipment?.categoryNote ?? '');
   const [photo, setPhoto] = useState<File | null>(null);
+  const [photoCredit, setPhotoCredit] = useState(equipment?.photoCredit ?? '');
+  const [photoSourceUrl, setPhotoSourceUrl] = useState(equipment?.photoSourceUrl ?? '');
+  const [optionRows, setOptionRows] = useState<{ name: string; values: string }[]>(
+    (equipment?.optionGroups ?? []).map((g) => ({ name: g.name, values: g.values.join(', ') })),
+  );
   const [serialError, setSerialError] = useState<string | null>(null);
 
-  // "Others" carries a free-text category instead of a standard one.
   const isOthers = types.data?.find((type) => type.id === equipmentTypeId)?.name === 'Others';
 
   const save = useMutation({
     mutationFn: async () => {
       const spec = {
-        ...(textOrUndefined(modelNumber) ? { modelNumber: textOrUndefined(modelNumber) } : {}),
-        ...(numberOrUndefined(year) !== undefined
-          ? { yearOfManufacture: numberOrUndefined(year) }
-          : {}),
-        ...(numberOrUndefined(tons) !== undefined
-          ? { weightCapacityTons: numberOrUndefined(tons) }
-          : {}),
-        ...(textOrUndefined(engineType) ? { engineType: textOrUndefined(engineType) } : {}),
-        ...(textOrUndefined(fuelType) ? { fuelType: textOrUndefined(fuelType) } : {}),
-        ...(textOrUndefined(notes) ? { notes: textOrUndefined(notes) } : {}),
-        ...(isOthers && textOrUndefined(categoryNote)
-          ? { categoryNote: textOrUndefined(categoryNote) }
-          : {}),
+        modelNumber: textOrUndefined(modelNumber),
+        yearOfManufacture: numberOrUndefined(year),
+        weightCapacityTons: numberOrUndefined(tons),
+        engineType: textOrUndefined(engineType),
+        fuelType: textOrUndefined(fuelType),
+        notes: textOrUndefined(notes),
+        categoryNote: isOthers ? textOrUndefined(categoryNote) : undefined,
+        optionGroups,
+        ...(isEdit || photoCredit.trim() ? { photoCredit: photoCredit.trim() } : {}),
+        ...(isEdit || photoSourceUrl.trim() ? { photoSourceUrl: photoSourceUrl.trim() } : {}),
       };
 
-      // serialNo is absent from the edit request on purpose: migration 0026
-      // REVOKEs UPDATE on that column, which is why the field is disabled.
+      // serialNo is never sent on edit: UPDATE on that column is revoked.
       const saved = isEdit
         ? await apiPatch<EquipmentResponse>(`/equipment/${equipment.id}`, {
             model,
@@ -114,9 +103,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
             ...spec,
           });
 
-      // The photo is a second request: it is multipart, and a failed upload
-      // must not fail the save. Failing it left the modal open over a machine
-      // that was already inserted, so the retry POSTed a duplicate.
+      // A separate request so a failed upload never fails the save (a retry would duplicate the machine).
       let photoError: string | null = null;
       if (photo) {
         try {
@@ -143,18 +130,26 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
       onClose();
     },
     onError: (error) => {
-      const text = apiErrorText(error);
-      // A taken serial belongs beside the field that caused it, not in a
-      // toast the reader has to map back to an input.
-      if (text.toLowerCase().includes('serial')) {
+      if (error instanceof ApiError && error.message === 'serial_no_taken') {
         setSerialError('Another machine in the fleet already uses this serial number.');
         return;
       }
-      toast.error(isEdit ? 'Could not save those changes' : 'Could not add that machine', text);
+      toast.error(isEdit ? 'Could not save those changes' : 'Could not add that machine', apiErrorText(error));
     },
   });
 
+  const optionGroups = optionRows
+    .map((row) => ({
+      name: row.name.trim(),
+      values: [...new Set(row.values.split(',').map((v) => v.trim()).filter(Boolean))],
+    }))
+    .filter((g) => g.name && g.values.length > 0);
+  const duplicateOption = new Set(optionGroups.map((g) => g.name)).size !== optionGroups.length;
+  const badSourceUrl = photoSourceUrl.trim() !== '' && !photoSourceUrl.trim().startsWith('https://');
+
   const canSubmit =
+    !duplicateOption &&
+    !badSourceUrl &&
     model.trim() !== '' &&
     (!isOthers || categoryNote.trim() !== '') &&
     (isEdit || (serialNo.trim() !== '' && equipmentTypeId));
@@ -192,7 +187,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
         }}
       >
         <section className="flex flex-col gap-4">
-          <h3 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h3 className="text-sm font-medium text-text-muted">
             Basic information
           </h3>
           <Input
@@ -255,7 +250,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
         </section>
 
         <section className="flex flex-col gap-4">
-          <h3 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h3 className="text-sm font-medium text-text-muted">
             Technical specifications
           </h3>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -296,7 +291,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
         </section>
 
         <section className="flex flex-col gap-4">
-          <h3 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h3 className="text-sm font-medium text-text-muted">
             Operational details
           </h3>
           <Select label="Current status" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -308,7 +303,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
           </Select>
           <p className="text-sm text-text-muted">
             Hire rates are not set here. Every machine of a category is priced by its{' '}
-            <Link to="/app/settings" className="text-accent underline">
+            <Link to="/app/quotes" className="text-accent underline">
               rate card
             </Link>
             , which is what quotes are calculated from.
@@ -316,7 +311,57 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
         </section>
 
         <section className="flex flex-col gap-4">
-          <h3 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h3 className="text-sm font-medium text-text-muted">
+            Rental options
+          </h3>
+          <p className="text-sm text-text-muted">
+            Choices the customer picks when booking, such as bucket size or arm length. They do not
+            change the price.
+          </p>
+          {optionRows.map((row, index) => (
+            <div key={index} className="grid items-end gap-3 sm:grid-cols-[1fr_2fr_auto]">
+              <Input
+                label="Option"
+                value={row.name}
+                maxLength={60}
+                onChange={(e) =>
+                  setOptionRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))
+                }
+                placeholder="Bucket size"
+                {...(duplicateOption && optionGroups.filter((g) => g.name === row.name.trim()).length > 1
+                  ? { error: 'Each option needs its own name.' }
+                  : {})}
+              />
+              <Input
+                label="Choices, separated by commas"
+                value={row.values}
+                onChange={(e) =>
+                  setOptionRows((rows) => rows.map((r, i) => (i === index ? { ...r, values: e.target.value } : r)))
+                }
+                placeholder="Standard, 3/4, 1/2"
+              />
+              <Button
+                variant="ghost"
+                onClick={() => setOptionRows((rows) => rows.filter((_, i) => i !== index))}
+                aria-label={`Remove option ${row.name || index + 1}`}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+          {optionRows.length < 6 && (
+            <Button
+              variant="secondary"
+              className="w-fit"
+              onClick={() => setOptionRows((rows) => [...rows, { name: '', values: '' }])}
+            >
+              Add an option
+            </Button>
+          )}
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <h3 className="text-sm font-medium text-text-muted">
             Notes
           </h3>
           <label htmlFor="equipment-notes" className="sr-only">
@@ -333,7 +378,7 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
         </section>
 
         <section className="flex flex-col gap-4">
-          <h3 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h3 className="text-sm font-medium text-text-muted">
             Asset media
           </h3>
           <CaptureField
@@ -342,7 +387,26 @@ export function EquipmentFormModal({ equipment, onClose }: EquipmentFormModalPro
             value={photo}
             onChange={setPhoto}
             accept="image/*"
+            uploadOptions={PHOTO_UPLOAD}
           />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Input
+              label="Photo credit"
+              value={photoCredit}
+              maxLength={200}
+              onChange={(e) => setPhotoCredit(e.target.value)}
+              placeholder="Komatsu (reference photo)"
+              hint="Only for a photo that is not your own."
+            />
+            <Input
+              label="Photo source page"
+              type="url"
+              value={photoSourceUrl}
+              onChange={(e) => setPhotoSourceUrl(e.target.value)}
+              placeholder="https://"
+              {...(badSourceUrl ? { error: 'Use a full https:// link.' } : {})}
+            />
+          </div>
         </section>
       </form>
     </Modal>

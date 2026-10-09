@@ -11,20 +11,24 @@ export const customers = pgTable(
       .references(() => tenants.id, { onDelete: 'restrict' }),
     userId: uuid('user_id').references(() => users.id), // optional; internal-only records
     companyName: text('company_name').notNull(),
-    // Figma 582:3946 "Add New Company". One login may own several companies
-    // (several rows sharing user_id).
     tin: text('tin'),
-    // SEC/DTI registration number, shown as "Registration Number" on the
-    // company card (Figma 251:1945). Nullable: companies registered before
-    // this column existed have none, and the OCR scan only suggests it.
+    // Nullable: the OCR scan only suggests it.
     secNumber: text('sec_number'),
     billingAddress: text('billing_address'),
     kycStatus: text('kyc_status').notNull().default('pending'), // pending, approved, rejected
-    // A reviewer's note to the customer on a pending company, and the fields
-    // and document types it unlocks for them to fix. Everything else stays
-    // read-only while the company waits for review.
+    // Retired: kept so old rows still read.
     reviewComment: text('review_comment'),
     unlockedFields: jsonb('unlocked_fields').$type<string[]>().notNull().default([]),
+    // The latest rejection; kept while a reapplied company is pending, cleared on approval.
+    rejectionReason: text('rejection_reason'),
+    rejectionNote: text('rejection_note'),
+    cureDocuments: jsonb('cure_documents').$type<string[]>().notNull().default([]),
+    rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+    identityChecks: jsonb('identity_checks'),
+    // Negotiation tier (bronze|silver|gold|platinum); recomputed daily and on every settled invoice.
+    tier: text('tier').notNull().default('bronze'),
+    tierScore: integer('tier_score'),
+    tierComputedAt: timestamp('tier_computed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [tenantIsolationPolicy(),
@@ -61,7 +65,7 @@ export const addresses = pgTable(
       .references(() => tenants.id, { onDelete: 'restrict' }),
     line1: text('line1').notNull(),
     line2: text('line2'),
-    barangay: text('barangay'), // 0045
+    barangay: text('barangay'),
     city: text('city').notNull(),
     province: text('province').notNull(),
     postalCode: text('postal_code'),
@@ -94,9 +98,7 @@ export const customerAddresses = pgTable(
   ],
 );
 
-// Sensitive personal info under RA 10173 (CLR register). Real Azure DI
-// extraction lands with RFC-2; the ocr_payload/confidence columns are
-// reserved here so the table shape does not change when F6 lands.
+// Sensitive personal info under RA 10173.
 export const kycDocuments = pgTable(
   'kyc_documents',
   {
@@ -112,11 +114,10 @@ export const kycDocuments = pgTable(
     ocrPayload: jsonb('ocr_payload'),
     confidence: numeric('confidence', { precision: 5, scale: 4 }),
     status: text('status').notNull().default('pending'), // pending, needs_review, verified, rejected, superseded (replaced by a re-upload); legacy resubmit_required reads as pending
-    // RFC-2 §2: worker claim/lock/retry bookkeeping, same shape as edtr.
+    // Worker claim/lock/retry bookkeeping, same shape as edtr.
     attempts: integer('attempts').notNull().default(0),
     lockedAt: timestamp('locked_at', { withTimezone: true }),
     lastError: text('last_error'),
-    // RFC-2 §3: format check + fuzzy-match + human portal confirmation.
     formatValid: jsonb('format_valid'), // { tin, sec_number, dti_number, id_number: bool }
     portalMatchScore: numeric('portal_match_score', { precision: 5, scale: 4 }),
     registryStatus: text('registry_status'), // active | suspended | revoked, human-confirmed

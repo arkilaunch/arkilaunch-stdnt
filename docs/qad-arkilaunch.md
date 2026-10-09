@@ -42,7 +42,7 @@ The system that must not fail is the trusted-billing loop: scan an EDTR, reconci
 |-------|---------|----------------|-------|
 | Unit | **Vitest** (NestJS default harness) | Pricing math, reconciliation tolerance logic, confidence-gate branching, RBAC permission resolution, Zod schema validation. Includes the **OCR extraction-accuracy harness** (per-field accuracy against a labeled golden set, target >= 90.06%, BRD-M2). | Engineer (write alongside code) |
 | Integration | Vitest + real Postgres (Docker Compose, prod-mirrored schema) | The money chain end to end at the service layer: **OCR to billing to reconciliation to deduction**; weather poll writing `weather_alerts` and auto-logging a liability incident; **Postgres RLS** denying cross-tenant rows under the request-scoped GUC. | Engineer |
-| System | Staging (Vercel + ACA revision + Supabase staging) | Full stack against sandbox Azure DI, PayMongo test, Open-Meteo. Includes a **throttled 3 to 5 Mbps** run of EDTR upload and quote generation on a cheap-Android profile. | QA |
+| System | Staging (Cloudflare Worker frontend + ACA revision + Supabase staging) | Full stack against sandbox Azure DI, PayMongo test, Open-Meteo. Includes a **throttled 3 to 5 Mbps** run of EDTR upload and quote generation on a cheap-Android profile. | QA |
 | API contract | **Postman / Newman** collection in CI | Every Must-Have endpoint contract (SDD §4): request/response shape, status codes, the 409 discrepancy path, the 202 async path, webhook signature rejection. | Engineer / QA |
 | E2E | **Playwright** | The two money paths as a real browser session: OCR to reconciliation to deduction, and quote to PayMongo checkout to webhook status, each in happy, sad, and abuse form. | Engineer / QA |
 | UAT | ISO/IEC 25010 questionnaire (5-point Likert), see §8 | Functional suitability and the other seven characteristics judged by real users; feeds BRD-M5. | QA / product |
@@ -52,7 +52,7 @@ The system that must not fail is the trusted-billing loop: scan an EDTR, reconci
 
 ## 2. Test Environments & Data
 
-**Staging URL:** `https://staging.arkilaunch.app` (Vercel frontend, ACA staging API revision, Supabase staging project, behind Cloudflare).
+**Staging URL:** `https://staging.arkilaunch.app` (Cloudflare Workers frontend, ACA staging API revision, Supabase staging project, behind Cloudflare). Pilot reality: `dev` is staging and is served at `https://arkilaunch.app` (CR: cloudflare-frontend).
 
 > **Deviation (`cr-arkilaunch-pilot-honesty.md` §2.3, 2026-08-13):** Terraform defines only `dev` and `prod`; no third `staging` environment exists. For a single-tenant pilot with fewer than ten daily users, a third environment triples upkeep for no proportionate gain. The existing `dev` environment is designated as staging and is the safe home for the live-DB isolation suite (`cross-tenant-isolation-suite` in `.github/workflows/ci.yml`, gated on `vars.RUN_LIVE_DB_TESTS`), which must never run against prod because `pnpm db:seed:test` writes fixture tenants.
 **Test credentials:** Stored in the team password manager under "ArkiLaunch QA Accounts" (never committed). One admin (Rhea proxy), one owner, one timekeeper (2FA-enrolled), one customer, one platform admin, per seeded tenant.
@@ -111,7 +111,7 @@ Every row has a stable `QAD-T#` and traces to a `PRD-F#` (and, where relevant, a
 
 | QAD-T# | Attack | Trigger | Expected defense | PRD-F# / trace |
 |--------|--------|---------|------------------|----------------|
-| QAD-T22 | Auth / session abuse | Credential stuffing and brute force on `/auth/login`; a forged token with `alg: none` or an algorithm-confusion swap | Rate limit + lockout after threshold; JWT verification enforces the **algorithm allowlist** (asymmetric only); forged/`alg:none` token rejected; attempts logged | PRD-F7 / SDD §5 |
+| QAD-T22 | Auth / session abuse | Credential stuffing and brute force on `/auth/login`; a forged token with `alg: none` or an algorithm-confusion swap | Rate limit + lockout after threshold; JWT verification enforces the **algorithm allowlist** (asymmetric only); forged/`alg:none` token rejected; attempts logged. **Addendum (2026-09-27, `cr-arkilaunch-turnstile.md`):** after 2 failures per email or per IP, login requires a Cloudflare Turnstile token (403 `captcha_required`); signup, company registration and forgot-password always do; siteverify outage fails closed (503). Throttle buckets key on an IP the client cannot forge | PRD-F7 / SDD §5 |
 | QAD-T23 | Cross-tenant **read** | Tenant A user crafts a request for Tenant B's rows (swap an id in URL/body) | Postgres RLS returns **zero Tenant B rows** from the database itself; `cross_tenant_access_denied` logged | PRD-F7 / US-07 AC2 |
 | QAD-T24 | Cross-tenant **write** | Tenant A user attempts to INSERT/UPDATE/DELETE a Tenant B row (spoofed `tenant_id` in body, or foreign id in a nested write) | RLS `WITH CHECK` on the non-BYPASSRLS role rejects the write; **no Tenant B row is created or mutated**; app-layer filter is second line, not sole line; attempt logged | PRD-F7 / US-07 AC2, SDD §3 |
 | QAD-T25 | Refresh-token reuse | Replay an already-rotated refresh token | Reuse detected; **the whole token family is revoked**; both the replayer and the legitimate holder must re-authenticate | PRD-F7 / US-07 AC3 |
@@ -176,6 +176,15 @@ These turn the BRD metrics into pass/fail gates with a real measurement method.
 | QAD-T46 | Rounding / tolerance | Line subtotals and the quote total round half-up to 2 decimals; sum of rounded line items reconciles to the rounded total within +/- PHP 0.01; negative/NaN/absurd inputs rejected pre-compute | PRD-F1 / pricing correctness |
 | QAD-T47 | Revision integrity | `/revise` creates revision n+1 with a fresh snapshot, links `parent_quotation_id`, marks the parent `superseded`; the parent's numbers are unchanged | PRD-F1 / versioned quotation |
 | QAD-T48 | AuthZ / isolation | A non-`quote:create` role is denied; a Tenant A quote cannot read Tenant B rate cards or params (RLS) | PRD-F1/F7 / US-07, RFC-1 |
+
+### 3.8 Coupon Test Cases (`QAD-T49`..`T51`, [cr-arkilaunch-coupons.md](cr-arkilaunch-coupons.md))
+
+| QAD-T# | Test | What it proves | PRD/BRD trace |
+|--------|------|----------------|----------------|
+| QAD-T49 | Rent-only discount | A coupon lowers the booking invoice's rent line and total; the consumable-deposit line is unchanged; a retry with the same code is the same invoice, one use; re-pricing an issued invoice expires its open PayMongo session | PRD-F2 / US-08 |
+| QAD-T50 | Coupon rules | Expired, inactive, used-up and unknown codes all answer `coupon_invalid`; a once-per-company code refuses the company's second booking with `coupon_used` and rolls the claim back; one coupon per invoice | PRD-F2 / US-08 |
+| QAD-T52 | Staff amount change | Staff lower an issued booking invoice to PHP 5: rent line first, deposit last; the old PayMongo session is expired and the next checkout charges PHP 5; raising the amount is refused | PRD-F2 / US-08 |
+| QAD-T51 | Coupon isolation | Tenant B cannot list or redeem Tenant A's coupons; the same code in two tenants never collides (RLS) | RFC-1 |
 
 ---
 

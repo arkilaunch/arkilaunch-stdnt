@@ -1,37 +1,24 @@
 import { useState } from 'react';
-import { Link } from '@tanstack/react-router';
+import { notificationsQueries } from '../lib/queries.js';
+import { Link, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { queryOptions } from '@tanstack/react-query';
-import type { NotificationListResponse, NotificationResponse } from '@arkilaunch/shared';
-import { apiGet, apiPatch } from '../lib/api-client.js';
+import { isWeatherNotice, weatherNoticeText, type NotificationResponse, type WeatherAudience, type WeatherNoticeType } from '@arkilaunch/shared';
+import { apiPatch } from '../lib/api-client.js';
+import { getCurrentRole } from '../lib/guards.js';
 import { Surface } from './surface.js';
 import { Button } from './button.js';
 import { EmptyState } from './empty-state.js';
-import { BellIcon } from './icons.js';
 import { Pagination, PAGE_SIZE } from './pagination.js';
 import { formatRelativeTime } from '../lib/format-time.js';
-import { formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { formatDate, formatDateTime, formatPeso, formatStatus, shortCode } from '../lib/format.js';
 import { Skeleton } from './skeleton.js';
+import { CircleCheck, CircleX, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
 
-export const notificationQueries = {
-  list: (limit = 20, offset = 0) =>
-    queryOptions({
-      queryKey: ['notifications', limit, offset] as const,
-      queryFn: () =>
-        apiGet<NotificationListResponse>(`/notifications?limit=${limit}&offset=${offset}`),
-    }),
-};
-
-// The payload column is typed `unknown` in the shared schema on purpose --
-// each notification type writes its own shape, and the only current writer
-// (jobs/src/maintenance-notify.ts) stores equipment_id/threshold/
-// runtime_hours. Read it defensively: an unrecognised payload still renders
-// its type, time and read state rather than crashing the feed or, worse,
-// printing "[object Object]".
 function payloadLines(payload: unknown): string[] {
   if (!payload || typeof payload !== 'object') return [];
   return Object.entries(payload as Record<string, unknown>)
     .filter(([, value]) => value !== null && typeof value !== 'object')
+    .filter(([key]) => !('booking_code' in (payload as object)) || !key.endsWith('_id'))
     .map(([key, value]) => {
       const label = formatStatus(key);
       if (key.endsWith('_id') && typeof value === 'string') {
@@ -41,18 +28,266 @@ function payloadLines(payload: unknown): string[] {
     });
 }
 
-// The customer-journey events (bookings/quotes/payments services write
-// these) get a sentence and a destination; anything else falls back to the
-// generic type + payload rendering above.
 interface Described {
   title: string;
   body: string;
-  action?: { label: string; to: string; params: Record<string, string> };
+  action?: { label: string; to: string; params: Record<string, string>; search?: Record<string, string> };
 }
 
-export function describeNotification(type: string, payload: unknown): Described | null {
+export type FeedArea = 'app' | 'account' | 'field' | 'admin';
+
+// Role first, URL only as fallback: a customer's bell also renders on storefront pages.
+export function feedAreaOf(pathname: string, role: string | null = getCurrentRole()): FeedArea {
+  if (role === 'customer') return 'account';
+  if (role === 'timekeeper') return 'field';
+  if (role === 'platform_admin') return 'admin';
+  if (role) return 'app';
+  const first = pathname.split('/')[1];
+  return first === 'account' || first === 'field' || first === 'admin' ? first : 'app';
+}
+
+function staffBooking(
+  p: Record<string, unknown>,
+  label = 'Open booking',
+  tab?: 'actions' | 'negotiation',
+): NonNullable<Described['action']> {
+  const code = typeof p.booking_code === 'string' ? p.booking_code : null;
+  if (code) return { label, to: '/app/bookings', params: {}, search: { open: code, ...(tab ? { tab } : {}) } };
+  const rentalId = typeof p.rental_id === 'string' ? p.rental_id : null;
+  return rentalId
+    ? { label, to: '/app/bookings/$bookingId', params: { bookingId: rentalId } }
+    : { label, to: '/app/bookings', params: {} };
+}
+
+function staffPayment(p: Record<string, unknown>): NonNullable<Described['action']> {
+  return typeof p.booking_code === 'string' || typeof p.rental_id === 'string'
+    ? staffBooking(p, 'Open booking', 'actions')
+    : { label: 'Open payments', to: '/app/payments', params: {} };
+}
+
+function describeForPlatform(type: string, p: Record<string, unknown>): Described | null {
+  if (type !== 'tenant_registered') return null;
+  const name = typeof p.company_name === 'string' ? p.company_name : 'A rental company';
+  return {
+    title: 'New rental company',
+    body: `${name} registered on the platform.`,
+    action:
+      typeof p.application_id === 'string'
+        ? { label: 'Open application', to: '/admin/applications/$applicationId', params: { applicationId: p.application_id } }
+        : { label: 'Open applications', to: '/admin/applications', params: {} },
+  };
+}
+
+function describeForStaff(type: string, p: Record<string, unknown>): Described | null {
+  const ref = typeof p.booking_code === 'string' ? p.booking_code : 'a booking';
+  const trip = typeof p.truck_request_id === 'string';
+  switch (type) {
+    case 'support_ticket_created':
+      return { title: 'New support ticket', body: `Ticket #${String(p.ticket_code ?? '')} was submitted.`, action: { label: 'Open tickets', to: '/app/tickets', params: {} } };
+    case 'booking_requested':
+      return { title: 'New booking', body: `${ref} was requested.`, action: staffBooking(p) };
+    case 'statement_ready':
+      return {
+        title: 'Statement of Account ready',
+        body: `${ref} is complete. Check its Statement of Account, then email it to the customer.`,
+        action:
+          typeof p.rental_id === 'string'
+            ? { label: 'Open statement', to: '/app/bookings/$bookingId/statement', params: { bookingId: p.rental_id } }
+            : staffBooking(p),
+      };
+    case 'truck_requested':
+      return { title: 'New truck request', body: `${ref}: a customer requested a self-loading truck.`, action: staffBooking(p) };
+    case 'call_requested':
+      return {
+        title: 'Call requested',
+        body: `The customer on ${ref} asked for a call${trip ? '' : ' before paying'}.`,
+        action: staffBooking(p, 'Call the customer', 'actions'),
+      };
+    case 'truck_price_accepted':
+      return {
+        title: 'Price accepted',
+        body: `The customer accepted ${typeof p.price_php === 'number' ? formatPeso(p.price_php) : 'the agreed price'} on ${ref}.`,
+        action: staffBooking(p, 'Open booking', 'actions'),
+      };
+    case 'booking_cancelled':
+      return { title: 'Booking cancelled', body: `The customer cancelled ${ref}. Its unpaid invoice was voided.`, action: staffBooking(p) };
+    case 'truck_cancelled':
+      return { title: 'Trip cancelled', body: `The customer cancelled ${ref}. Its unpaid invoice was voided.`, action: staffBooking(p) };
+    case 'payment_on_void_invoice':
+      return {
+        title: 'Refund needed',
+        body: `A payment came in on ${ref} after its invoice was voided (price changed or cancelled). Refund it in PayMongo.`,
+        action: staffPayment(p),
+      };
+    case 'customer_message': {
+      const offer = typeof p.offer_php === 'number' ? ` with an offer of ${formatPeso(p.offer_php)}` : '';
+      return {
+        title: 'Customer message',
+        body: `The customer replied on ${ref}${offer}.`,
+        action: staffBooking(p, 'Open conversation', 'negotiation'),
+      };
+    }
+    case 'quote_cap_review':
+      return {
+        title: 'Discount needs the Owner',
+        body: `A revised quote on ${ref} gives more than the customer's tier allows. The Owner must approve or reject it.`,
+        action: staffBooking(p),
+      };
+    case 'quote_cap_rejected':
+      return {
+        title: 'Discount rejected',
+        body: `The Owner rejected the over-cap discount on ${ref}. Revise the quote within the tier cap.`,
+        action: staffBooking(p),
+      };
+    case 'quote_accepted':
+    case 'quote_declined':
+      return {
+        title: type === 'quote_accepted' ? 'Quote accepted' : 'Quote declined',
+        body: `The customer ${type === 'quote_accepted' ? 'accepted' : 'declined'} the quote on ${ref}.`,
+        action: staffBooking(p),
+      };
+    case 'change_request_submitted':
+      return {
+        title: 'Change request',
+        body: `The customer asked to ${p.kind === 'cancel' ? 'cancel' : 'extend'} ${ref}.`,
+        action: staffBooking(p, 'Review request', 'actions'),
+      };
+    case 'deposit_low':
+      return {
+        title: 'Deposit running low',
+        body: `${ref} has ${formatPeso(p.balance_php as number)} left of its ${formatPeso(p.deposit_php as number)} deposit.`,
+        action: staffBooking(p),
+      };
+    case 'payment_paid':
+    case 'payment_received':
+    case 'payment_failed':
+    case 'payment_refunded':
+    case 'payment_disputed':
+    case 'payment_amount_mismatch': {
+      const what: Record<string, string> = {
+        payment_paid: 'was paid',
+        payment_received: 'was paid',
+        payment_failed: 'failed',
+        payment_refunded: 'was refunded',
+        payment_disputed: 'is disputed',
+        payment_amount_mismatch: 'came in at a different amount than the invoice',
+      };
+      return {
+        title: type === 'payment_amount_mismatch' ? 'Payment amount mismatch' : `Payment ${type.slice('payment_'.length)}`,
+        body: `An online payment on ${ref} ${what[type]}.`,
+        action: staffPayment(p),
+      };
+    }
+    case 'edtr_submitted':
+      return {
+        title: 'Field log submitted',
+        body: `A timekeeper submitted ${typeof p.report_date === 'string' ? p.report_date : 'a day'} on ${ref}. It is waiting for approval.`,
+        action:
+          typeof p.project_site_id === 'string'
+            ? { label: 'Review in site hub', to: '/app/deployment/$siteId', params: { siteId: p.project_site_id }, search: { tab: 'logs' } }
+            : { label: 'Open field logs', to: '/app/ocr', params: {} },
+      };
+    case 'maintenance_due':
+    case 'maintenance_warning':
+      return {
+        title: type === 'maintenance_due' ? 'Maintenance due' : 'Maintenance coming up',
+        body: `A machine${typeof p.runtime_hours === 'number' ? ` at ${p.runtime_hours} running hours` : ''} is ${type === 'maintenance_due' ? 'due' : 'close to'} its service.`,
+        action: {
+          label: 'Open machine',
+          to: '/app/inventory',
+          params: {},
+          ...(typeof p.serial_no === 'string' ? { search: { q: p.serial_no } } : {}),
+        },
+      };
+    case 'hold_expired':
+      return {
+        title: 'Hold lapsed',
+        body: `${ref} was not paid in time, so it was cancelled and its dates freed.`,
+        action: staffBooking(p),
+      };
+    case 'company_submitted':
+    case 'company_reapplied': {
+      const name = typeof p.company_name === 'string' ? p.company_name : 'A company';
+      return {
+        title: type === 'company_submitted' ? 'New company registration' : 'Registration resubmitted',
+        body:
+          type === 'company_submitted'
+            ? `${name} needs approval.`
+            : `${name} uploaded new documents after a rejection and needs a fresh decision.`,
+        action: {
+          label: 'Review',
+          to: '/app/registration/pending',
+          params: {},
+          ...(typeof p.customer_id === 'string' ? { search: { open: p.customer_id } } : {}),
+        },
+      };
+    }
+    case 'weather_advisory':
+      return { title: 'Weather advisory', body: 'A site is under a weather advisory.', action: { label: 'Open incidents', to: '/app/incidents', params: {} } };
+    default:
+      return null;
+  }
+}
+
+function describeForField(type: string, p: Record<string, unknown>): Described | null {
+  const day = typeof p.report_date === 'string' ? p.report_date : 'a day';
+  const ref = typeof p.booking_code === 'string' ? ` on ${p.booking_code}` : '';
+  const toDashboard = { label: 'Open dashboard', to: '/field', params: {} };
+  switch (type) {
+    case 'edtr_approved':
+      return { title: 'Field log approved', body: `The office approved ${day}${ref}.`, action: toDashboard };
+    case 'edtr_needs_correction':
+      return {
+        title: 'Correction needed',
+        body: `The office asked you to correct ${day}${ref}${typeof p.reason === 'string' ? `: ${p.reason}` : ''}. Submit it again.`,
+        action: { label: 'Resubmit', to: '/field/scan', params: {} },
+      };
+    case 'edtr_rejected':
+      return {
+        title: 'Field log rejected',
+        body: `The office rejected ${day}${ref}${typeof p.reason === 'string' ? `: ${p.reason}` : ''}.`,
+        action: toDashboard,
+      };
+    case 'edtr_review':
+      return { title: 'Field logs to check', body: 'A field log needs your attention.', action: toDashboard };
+    case 'weather_advisory':
+      return { title: 'Weather advisory', body: 'One of your sites is under a weather advisory.', action: { label: 'View sites', to: '/field/deployment', params: {} } };
+    default:
+      return null;
+  }
+}
+
+function describeWeather(type: WeatherNoticeType, p: Record<string, unknown>, area: FeedArea): Described {
+  const audience: WeatherAudience = area === 'field' ? 'timekeeper' : area === 'account' ? 'customer' : 'staff';
+  const { title, body } = weatherNoticeText(type, p, audience);
+  const machines = Array.isArray(p.machines) ? (p.machines as { rentalId?: string }[]) : [];
+  const bookingId = typeof p.rental_id === 'string' ? p.rental_id : (machines[0]?.rentalId ?? '');
+  const siteId = typeof p.project_site_id === 'string' ? p.project_site_id : '';
+  const action: Described['action'] =
+    audience === 'customer'
+      ? bookingId
+        ? { label: 'Open booking', to: '/account/bookings/$bookingId', params: { bookingId } }
+        : { label: 'My bookings', to: '/account/bookings', params: {} }
+      : audience === 'timekeeper'
+        ? { label: 'Open dashboard', to: '/field', params: {} }
+        : typeof p.incident_id === 'string'
+          ? { label: 'Open incident', to: '/app/incidents', params: {}, search: { open: p.incident_id } }
+          : siteId
+          ? { label: 'Open site', to: '/app/deployment/$siteId', params: { siteId } }
+          : { label: 'Open incidents', to: '/app/incidents', params: {} };
+  return { title, body, action };
+}
+
+export function describeNotification(type: string, payload: unknown, area: FeedArea = 'app'): Described | null {
   const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-  if (type === 'password_reset_requested') {
+  if (isWeatherNotice(type)) return describeWeather(type, p, area);
+  if (area === 'field') return describeForField(type, p);
+  if (area === 'admin') return describeForPlatform(type, p);
+  if (area === 'app') {
+    const staff = describeForStaff(type, p);
+    if (staff) return staff;
+  }
+  if (type === 'password_reset_requested' && area === 'app') {
     const email = typeof p.email === 'string' ? p.email : 'A user';
     return {
       title: 'Password reset requested',
@@ -60,16 +295,7 @@ export function describeNotification(type: string, payload: unknown): Described 
       action: { label: 'Open People', to: '/app/users', params: {} },
     };
   }
-  if (type === 'company_submitted') {
-    const name = typeof p.company_name === 'string' ? p.company_name : 'A company';
-    return {
-      title: 'New company registration',
-      body: `${name} needs approval.`,
-      action: { label: 'Review', to: '/app/registration/pending', params: {} },
-    };
-  }
-  // document_resubmit_required is no longer written; old rows read as the
-  // reviewer's note it has become.
+  // document_resubmit_required is legacy: old rows still exist.
   if (type === 'company_review_comment' || type === 'document_resubmit_required') {
     const name = typeof p.company_name === 'string' ? p.company_name : 'your company';
     return {
@@ -90,46 +316,61 @@ export function describeNotification(type: string, payload: unknown): Described 
     return type === 'company_verified'
       ? {
           title: 'Company verified',
-          body: `${name} is verified. You can now pay for its bookings.`,
-          action: { label: 'My bookings', to: '/account/bookings', params: {} },
+          body: `${name} is verified. You can now book and pay for its rentals.`,
+          action:
+            typeof p.customer_id === 'string'
+              ? { label: 'View company', to: '/account/companies/$companyId', params: { companyId: p.customer_id } }
+              : { label: 'My applications', to: '/account/applications', params: {} },
         }
       : {
           title: 'Company not verified',
-          body: `${name} could not be verified. Contact the rental team to fix it.`,
-          action: { label: 'View company', to: '/account/companies', params: {} },
+          body:
+            typeof p.reason_label === 'string'
+              ? `${name}: ${p.reason_label}. Open it to see which documents fix this, then reapply.`
+              : `${name} could not be verified. Contact the rental team to fix it.`,
+          action: {
+            label: 'View company',
+            to: '/account/companies/$companyId',
+            params: { companyId: String(p.customer_id ?? '') },
+          },
         };
   }
-  if (type === 'truck_requested' || (type === 'call_requested' && typeof p.truck_request_id === 'string')) {
-    return {
-      title: type === 'truck_requested' ? 'New truck request' : 'Call requested',
-      body: type === 'truck_requested' ? 'A customer requested a self-loading truck.' : 'A customer asked for a call about their truck request.',
-      action: { label: 'Open trucks', to: '/app/trucks', params: {} },
-    };
-  }
-  if ((type === 'negotiation_reply' || type === 'customer_message') && typeof p.truck_request_id === 'string') {
-    const staffSide = type === 'customer_message';
+  if (type === 'support_ticket_status_changed') return { title: 'Support ticket updated', body: `Ticket #${String(p.ticket_code ?? '')}: ${formatStatus(String(p.status ?? ''))}.`, action: { label: 'Open help center', to: '/account/help', params: {} } };
+  if (typeof p.truck_request_id === 'string') {
+    const code = typeof p.booking_code === 'string' ? p.booking_code : 'your truck request';
     const offer = typeof p.offer_php === 'number' ? ` with an offer of ${formatPeso(p.offer_php)}` : '';
-    return {
-      title: staffSide ? 'Customer message' : 'Negotiation update',
-      body: staffSide
-        ? `A customer replied on a truck request${offer}.`
-        : `The rental team replied on your truck request${offer}.`,
-      action: staffSide
-        ? { label: 'Open trucks', to: '/app/trucks', params: {} }
-        : { label: 'Open truck requests', to: '/account/trucks', params: {} },
+    const bodies: Record<string, string> = {
+      negotiation_reply: `The rental team replied on ${code}${offer}.`,
+      call_confirmed: `${code} is confirmed by phone.`,
+      truck_price_updated: `The rental team set the price of ${code} at ${typeof p.price_php === 'number' ? formatPeso(p.price_php) : 'a new figure'}${typeof p.previous_php === 'number' ? ` (was ${formatPeso(p.previous_php)})` : ''}. Accept it to pay.`,
+      payment_received: `${code} is paid.`,
+      truck_dispatched: `${code} is on its way${typeof p.eta_at === 'string' ? `; estimated arrival ${formatDateTime(p.eta_at)}` : ''}.`,
+      payment_failed: `The payment for ${code} did not go through. Nothing was charged.`,
+      payment_refunded: `A refund was issued on ${code}.`,
     };
-  }
-  if ((type === 'payment_paid' || type === 'payment_failed' || type === 'payment_disputed') && typeof p.rental_id !== 'string') {
-    const what = type === 'payment_paid' ? 'was paid' : type === 'payment_failed' ? 'failed' : 'is disputed';
     return {
-      title: `Payment ${type.slice('payment_'.length)}`,
-      body: `An online payment ${what}.`,
-      action: { label: 'Open payments', to: '/app/payments', params: {} },
+      title: type === 'truck_price_updated' ? 'Price to accept' : formatStatus(type),
+      body: bodies[type] ?? `${code} was updated.`,
+      action: {
+        label: 'Open trip',
+        to: '/account/trucks',
+        params: {},
+        ...(typeof p.booking_code === 'string' ? { search: { open: p.booking_code } } : {}),
+      },
     };
   }
   const rentalId = typeof p.rental_id === 'string' ? p.rental_id : null;
-  if (!rentalId) return null;
-  const ref = shortCode('booking', rentalId);
+  if (!rentalId) {
+    if (typeof p.invoice_id === 'string' && type.startsWith('payment_')) {
+      return {
+        title: formatStatus(type),
+        body: 'An update on one of your payments.',
+        action: { label: 'View invoice', to: '/account/invoices/$invoiceId', params: { invoiceId: p.invoice_id } },
+      };
+    }
+    return null;
+  }
+  const ref = typeof p.booking_code === 'string' ? p.booking_code : 'your booking';
   const toNegotiation = { to: '/account/negotiation/$bookingId', params: { bookingId: rentalId } };
   const toBooking = { to: '/account/bookings/$bookingId', params: { bookingId: rentalId } };
   switch (type) {
@@ -182,11 +423,11 @@ export function describeNotification(type: string, payload: unknown): Described 
         body: `The equipment for booking ${ref} is back with the rental team. Your hire is complete.`,
         action: { label: 'View booking', ...toBooking },
       };
-    case 'call_requested':
+    case 'statement_ready':
       return {
-        title: 'Call requested',
-        body: `The customer on booking ${ref} asked for a call before paying.`,
-        action: { label: 'Open booking', to: '/app/bookings/$bookingId', params: { bookingId: rentalId } },
+        title: 'Statement of Account ready',
+        body: `Booking ${ref} is complete. Your Statement of Account covers the whole rental.`,
+        action: { label: 'View statement', to: '/account/bookings/$bookingId/statement', params: { bookingId: rentalId } },
       };
     case 'call_confirmed':
       return {
@@ -200,11 +441,23 @@ export function describeNotification(type: string, payload: unknown): Described 
         body: `The rental team cancelled booking ${ref}. Any refund due is handled by the billing team.`,
         action: { label: 'View booking', ...toBooking },
       };
+    case 'hold_expired':
+      return {
+        title: 'Booking request lapsed',
+        body: `Booking ${ref} was not paid in time, so its dates were released and the request was cancelled. Nothing was charged; book again to pick new dates.`,
+        action: { label: 'View booking', ...toBooking },
+      };
     case 'deposit_low':
       return {
         title: 'Deposit running low',
         body: `Booking ${ref} has ${formatPeso(p.balance_php as number)} left of its ${formatPeso(p.deposit_php as number)} deposit. Hours past it are billed weekly.`,
         action: { label: 'View booking', ...toBooking },
+      };
+    case 'weekly_statement':
+      return {
+        title: 'Weekly statement',
+        body: `Booking ${ref}: ${Number(p.hours ?? 0).toFixed(1)} h this week, ${formatPeso(p.from_deposit_php as number)} from your deposit (${formatPeso(p.deposit_left_php as number)} left). ${Number(p.due_php ?? 0) > 0 ? `${formatPeso(p.due_php as number)} to pay.` : 'Nothing to pay.'}`,
+        action: { label: 'View statement', to: '/account/bookings/$bookingId/statement', params: { bookingId: rentalId } },
       };
     case 'weekly_invoice':
       return {
@@ -212,6 +465,15 @@ export function describeNotification(type: string, payload: unknown): Described 
         body: `Booking ${ref} used hours past its deposit: ${formatPeso(p.amount_php as number)} is due.`,
         action: { label: 'View invoice', to: '/account/invoices/$invoiceId', params: { invoiceId: String(p.invoice_id) } },
       };
+    case 'daily_log_approved':
+      return {
+        title: 'Daily log approved',
+        body: `${typeof p.report_date === 'string' ? p.report_date : 'A day'} on booking ${ref} was approved and is on your booking page.`,
+        action: { label: 'View daily logs', ...toBooking },
+      };
+    case 'quote_accepted':
+    case 'quote_declined':
+      return { title: formatStatus(type), body: `Booking ${ref} was updated.`, action: { label: 'View booking', ...toBooking } };
     case 'change_request_resolved':
       return {
         title: p.decision === 'approved' ? 'Request approved' : 'Request declined',
@@ -223,90 +485,168 @@ export function describeNotification(type: string, payload: unknown): Described 
   }
 }
 
-function NotificationRow({ notification }: { notification: NotificationResponse }) {
+export type NotificationTone = 'success' | 'danger' | 'warning' | 'neutral';
+
+function toneOf(type: string): NotificationTone {
+  if (/(failed|rejected|mismatch|disputed|cancelled|declined)$/.test(type)) return 'danger';
+  if (/(approved|verified|confirmed|accepted|delivered|paid|received)$/.test(type)) return 'success';
+  if (type === 'deposit_low' || type === 'edtr_needs_correction' || type.startsWith('maintenance_') || type.includes('weather'))
+    return 'warning';
+  return 'neutral';
+}
+
+function categoryOf(type: string): string {
+  if (/^(payment_|weekly_invoice|weekly_statement|deposit_)/.test(type)) return 'Billing';
+  if (type.startsWith('maintenance_')) return 'Maintenance';
+  if (type.includes('weather')) return 'Weather';
+  if (type.startsWith('truck_')) return 'Truck';
+  if (/^(customer_message|negotiation_reply|company_review_comment)$/.test(type)) return 'Message';
+  if (type.startsWith('edtr_') || type === 'daily_log_approved') return 'Field log';
+  if (/^(company_|document_)/.test(type)) return 'Verification';
+  if (/^(booking_|quote_|change_request_|call_|equipment_)/.test(type)) return 'Booking';
+  return 'Update';
+}
+
+/** What the event is about and how it went: a word, not a pictogram. */
+export function notificationKind(type: string): { label: string; tone: NotificationTone } {
+  return { label: categoryOf(type), tone: toneOf(type) };
+}
+
+// Cloudscape status indicator: a small glyph in the status colour beside plain text.
+// Warning yellow fails contrast as text, so only its glyph takes the colour.
+const STATUS: Record<NotificationTone, { Icon: LucideIcon; icon: string; text: string }> = {
+  success: { Icon: CircleCheck, icon: 'text-success', text: 'text-success' },
+  danger: { Icon: CircleX, icon: 'text-error', text: 'text-error' },
+  warning: { Icon: TriangleAlert, icon: 'text-warning', text: 'text-text' },
+  neutral: { Icon: Info, icon: 'text-accent', text: 'text-text-muted' },
+};
+
+/** Unread rows sit on a faint wash of the tenant's button colour. */
+export function notificationRowClass(unread: boolean): string {
+  return unread ? 'bg-primary/10' : '';
+}
+
+export function NotificationKindLabel({ type }: { type: string }) {
+  const { label, tone } = notificationKind(type);
+  const { Icon, icon, text } = STATUS[tone];
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${text}`}>
+      <Icon aria-hidden="true" strokeWidth={2.5} className={`h-3.5 w-3.5 shrink-0 ${icon}`} />
+      {label}
+    </span>
+  );
+}
+
+export function UnreadBadge() {
+  return (
+    <span aria-hidden="true" className="rounded-full bg-primary px-2 py-px text-xs font-bold leading-4 text-on-primary">New</span>
+  );
+}
+
+const manilaDay = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+function dayHeading(date: Date): string {
+  const now = new Date();
+  if (manilaDay(date) === manilaDay(now)) return 'Today';
+  if (manilaDay(date) === manilaDay(new Date(now.getTime() - 86_400_000))) return 'Yesterday';
+  return formatDate(date);
+}
+
+// Newest first already, so consecutive runs of one day form a group.
+function groupByDay(items: NotificationResponse[]): [string, NotificationResponse[]][] {
+  const groups: [string, NotificationResponse[]][] = [];
+  for (const item of items) {
+    const heading = dayHeading(new Date(item.createdAt));
+    const last = groups.at(-1);
+    if (last?.[0] === heading) last[1].push(item);
+    else groups.push([heading, [item]]);
+  }
+  return groups;
+}
+
+function NotificationRow({ notification, area }: { notification: NotificationResponse; area: FeedArea }) {
   const queryClient = useQueryClient();
   const isUnread = notification.status === 'unread';
-  const when = formatRelativeTime(new Date(notification.createdAt).toISOString());
-  const described = describeNotification(notification.notificationType, notification.payload);
+  const createdAt = new Date(notification.createdAt).toISOString();
+  const when = formatRelativeTime(createdAt);
+  const described = describeNotification(notification.notificationType, notification.payload, area);
 
   const markRead = useMutation({
     mutationFn: () => apiPatch(`/notifications/${notification.id}/read`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-4 last:border-b-0">
-      <div className="flex min-w-0 items-start gap-3">
-        <span
-          aria-hidden="true"
-          className={[
-            'flex h-11 w-11 shrink-0 items-center justify-center rounded-md',
-            isUnread ? 'bg-primary text-on-primary' : 'bg-surface-sunk text-text-muted',
-          ].join(' ')}
-        >
-          <BellIcon />
-        </span>
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-center gap-2">
-            <span className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text">
-              {described?.title ?? formatStatus(notification.notificationType)}
-            </span>
-            <span aria-hidden="true" className="h-1 w-1 rounded-full bg-border" />
-            <span className="font-mono text-xs text-text-muted">
-              {shortCode('log', notification.id)}
-            </span>
+  const content = (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <p className="flex items-center gap-2">
+        <NotificationKindLabel type={notification.notificationType} />
+        {isUnread && <UnreadBadge />}
+      </p>
+      <p className={`text-sm text-text ${isUnread ? 'font-bold' : ''}`}>
+        {isUnread && <span className="sr-only">Unread: </span>}
+        {described?.title ?? formatStatus(notification.notificationType)}
+      </p>
+      {described ? (
+        <p className="text-sm text-text-muted">{described.body}</p>
+      ) : (
+        payloadLines(notification.payload).map((line) => (
+          <p key={line} className="text-sm text-text-muted">
+            {line}
           </p>
-          {described ? (
-            <p className="text-sm text-text-muted">{described.body}</p>
-          ) : (
-            payloadLines(notification.payload).map((line) => (
-              <p key={line} className="text-sm text-text-muted">
-                {line}
-              </p>
-            ))
-          )}
-          {described?.action && (
-            <Link
-              to={described.action.to}
-              params={described.action.params}
-              onClick={() => isUnread && markRead.mutate()}
-              className="mt-2 inline-block"
-            >
-              <Button variant="primary">{described.action.label}</Button>
-            </Link>
-          )}
-        </div>
-      </div>
-
-      <div className="flex shrink-0 items-center gap-3">
-        <span className="text-right text-sm text-text-muted" title={when?.absolute}>
-          {when?.relative.replace('Reported ', '') ?? '--'}
+        ))
+      )}
+      {described?.action && (
+        <span className="mt-1 text-sm font-medium text-accent underline-offset-2 group-hover:underline">
+          {described.action.label}
         </span>
+      )}
+    </div>
+  );
+
+  return (
+    <li
+      className={[
+        'flex items-start gap-4 border-b border-border px-4 py-3.5 last:border-b-0',
+        notificationRowClass(isUnread),
+      ].join(' ')}
+    >
+      {described?.action ? (
+        <Link
+          to={described.action.to}
+          params={described.action.params}
+          {...(described.action.search ? { search: described.action.search } : {})}
+          onClick={() => isUnread && markRead.mutate()}
+          className="group min-w-0 flex-1 rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-focus-ring"
+        >
+          {content}
+        </Link>
+      ) : (
+        <div className="min-w-0 flex-1">{content}</div>
+      )}
+
+      <div className="flex shrink-0 flex-col items-end gap-1.5">
+        <time dateTime={createdAt} title={when?.absolute} className="font-mono text-xs tabular-nums text-text-muted">
+          {when?.relative ?? '--'}
+        </time>
         {isUnread && (
-          <Button
-            variant="secondary"
-            loading={markRead.isPending}
+          <button
+            type="button"
+            disabled={markRead.isPending}
             onClick={() => markRead.mutate()}
+            className="min-h-6 text-xs font-medium text-text-muted underline-offset-2 hover:text-text hover:underline disabled:opacity-50"
           >
-            Dismiss
-          </Button>
+            Mark read
+          </button>
         )}
       </div>
-    </div>
+    </li>
   );
 }
 
-// One feed, three mount points: the admin console, the customer account and
-// the field console all read the same tenant-scoped GET /notifications.
-// The Figma frames (168:3011, 276:7669, 359:2970) differ only in their
-// surrounding shell, which the layout routes already supply.
 export function NotificationFeed() {
-  // "Load more" grew the page size and re-requested from offset 0, so
-  // reaching the fourth page re-fetched the first three, and there was no
-  // way back up a long feed. Every other list in the console pages through
-  // the same server limit/offset; this one now does too.
   const [offset, setOffset] = useState(0);
-  const query = useQuery(notificationQueries.list(PAGE_SIZE, offset));
+  const area = feedAreaOf(useRouterState({ select: (s) => s.location.pathname }));
+  const query = useQuery(notificationsQueries.list(PAGE_SIZE, offset));
   const queryClient = useQueryClient();
   const markAll = useMutation({
     mutationFn: () => apiPatch('/notifications/read-all', {}),
@@ -338,9 +678,10 @@ export function NotificationFeed() {
   return (
     <Surface radius="md" elevation="sm" className="overflow-hidden p-0">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <h2 className="font-display text-base font-semibold text-text">Pending items</h2>
+        <h2 className="text-heading-md text-text">
+          Inbox <span className="font-mono text-sm font-normal tabular-nums text-text-muted">{query.data.total}</span>
+        </h2>
         <div className="flex items-center gap-3">
-          <p className="text-sm text-text-muted">{query.data.total} in total</p>
           {query.data.items.some((item) => item.status === 'unread') && (
             <Button
               variant="secondary"
@@ -352,11 +693,18 @@ export function NotificationFeed() {
           )}
         </div>
       </div>
-      <div>
-        {query.data.items.map((item) => (
-          <NotificationRow key={item.id} notification={item} />
-        ))}
-      </div>
+      {groupByDay(query.data.items).map(([heading, items]) => (
+        <section key={heading} aria-label={heading}>
+          <h3 className="border-b border-border bg-surface-sunk px-4 py-2 text-sm font-bold text-text">
+            {heading}
+          </h3>
+          <ul>
+            {items.map((item) => (
+              <NotificationRow key={item.id} notification={item} area={area} />
+            ))}
+          </ul>
+        </section>
+      ))}
       <Pagination
         offset={offset}
         limit={PAGE_SIZE}

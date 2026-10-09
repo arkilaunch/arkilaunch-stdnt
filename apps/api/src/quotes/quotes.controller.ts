@@ -1,18 +1,15 @@
 import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
-import type { RequestContext } from '@arkilaunch/shared';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { QuotesService } from './quotes.service.js';
-import { QuoteRequestDto } from './dto.js';
-
-type CtxRequest = Request & { ctx: RequestContext };
+import { CapDecisionDto, QuoteRequestDto } from './dto.js';
+import type { CtxRequest } from '../common/request.js';
 
 @Controller('quotes')
 export class QuotesController {
   constructor(private readonly quotes: QuotesService) {}
 
-  // QAD-T31 (resource abuse / cost bomb): rapid repeated quote generation.
+  // Throttled: rapid repeated quote generation is a cost bomb.
   @Post('preview')
   @RequirePermission('quote:create')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -37,6 +34,12 @@ export class QuotesController {
   @RequirePermission('quote:approve')
   approve(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.quotes.approve(req.ctx, id);
+  }
+
+  @Post(':id/cap-decision')
+  @RequirePermission('quote:approve_cap')
+  capDecision(@Param('id') id: string, @Body() body: CapDecisionDto, @Req() req: CtxRequest) {
+    return this.quotes.approveCap(req.ctx, id, body.approved);
   }
 
   @Post(':id/accept')

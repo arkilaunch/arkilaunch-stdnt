@@ -1,30 +1,32 @@
-import { createRoute, Link, useNavigate } from '@tanstack/react-router';
+import { createRoute, Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { quoteExpiresAt, type BookingDetailResponse } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
-import { bookingsQueries, quotesQueries } from '../lib/queries.js';
+import { useTenant, useTenantName } from '../lib/tenant.js';
+import { bookingsQueries, quotesQueries, tierQueries } from '../lib/queries.js';
 import { ApiError, apiErrorText, apiPost } from '../lib/api-client.js';
 import { formatDate, formatPeso, shortCode } from '../lib/format.js';
+import { amountDue } from './account.checkout.js';
 import { PageHeader } from '../components/page-header.js';
 import { Surface } from '../components/surface.js';
-import { Button } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
 import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
-import { CheckIcon, ClockIcon } from '../components/icons.js';
-import { NegotiationThread } from '../components/negotiation-thread.js';
+import { Check, Clock } from 'lucide-react';
+import { NegotiationThread, inAppNegotiation, negotiationMessageId } from '../components/negotiation-thread.js';
+import { NegotiateChoice } from '../components/negotiate-choice.js';
+import { bookingMessage } from '../lib/messenger-message.js';
+import { TierNote } from '../components/tier-cap.js';
 import { QuoteLines } from '../components/quote-lines.js';
+import { PrintFrame } from '../components/print-frame.js';
 import { useToast } from '../components/toast.js';
 import { LoadError } from '../components/load-error.js';
 import { Skeleton } from '../components/skeleton.js';
+import { messengerHrefs } from '../components/messenger-links.js';
 
-// Figma 219:2226 (Proceed to Negotiation), 225:3084 (Messenger Chat Nego),
-// 225:3085 (Call Nego), 225:3087 (Nego Finalized), 238:2649 (Manage Nego
-// Details). Negotiation is a conversation beside the current quote: the
-// customer counters in the thread, staff answer with a revised quote, and
-// the customer accepts or declines the quote itself. Only the accepted
-// quote's engine-priced total is ever charged.
+// Only the accepted quote's engine-priced total is ever charged.
 
-const heading = 'font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted';
+const heading = 'text-heading-md text-text';
 
 function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
   const navigate = useNavigate();
@@ -52,7 +54,7 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
     return (
       <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
         <h2 className={heading}>Quote</h2>
-        <StatusPill tone="recon-review" label="Being priced" icon={<ClockIcon />} />
+        <StatusPill tone="recon-review" label="Being priced" icon={<Clock className="size-full" />} />
         <p className="text-sm text-text-muted">
           The rental team is pricing this booking against today&rsquo;s diesel rate. You will get a
           notification when the quote is ready. Tell them anything that affects the price in the
@@ -70,7 +72,7 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
       <div className="flex items-center justify-between gap-2">
         <h2 className={heading}>Quote &middot; revision {quote.revision}</h2>
         {quote.status === 'accepted' && (
-          <StatusPill tone="recon-approved" label="Agreed" icon={<CheckIcon />} />
+          <StatusPill tone="recon-approved" label="Agreed" icon={<Check className="size-full" />} />
         )}
       </div>
       <LineItems quoteId={quote.id} />
@@ -90,9 +92,13 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
             >
               Accept quote
             </Button>
-            <Button variant="secondary" onClick={() => document.getElementById(`message-${booking.id}`)?.focus()}>
-              Negotiate
-            </Button>
+            {inAppNegotiation() ? (
+              <Button variant="secondary" onClick={() => document.getElementById(negotiationMessageId(`/bookings/${booking.id}`))?.focus()}>
+                Negotiate
+              </Button>
+            ) : (
+              <MessengerNegotiate booking={booking} variant="secondary">Negotiate</MessengerNegotiate>
+            )}
             <Button
               variant="ghost"
               loading={decide.isPending && decide.variables === 'decline'}
@@ -115,9 +121,7 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
         </p>
       )}
       {quote.status === 'accepted' && (
-        <Link to="/account/negotiation/$bookingId/final" params={{ bookingId: booking.id }}>
-          <Button variant="primary">Review and pay</Button>
-        </Link>
+        <Link to="/account/negotiation/$bookingId/final" params={{ bookingId: booking.id }} className={buttonClass('primary')}>Review and pay</Link>
       )}
 
       <Link
@@ -131,12 +135,38 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
-function useBooking(bookingId: string) {
-  return useQuery(bookingsQueries.detail(bookingId));
+// In-app chat is off: the button copies the booking and opens the tenant's Messenger.
+function MessengerNegotiate({ booking, variant, children }: { booking: BookingDetailResponse; variant: 'primary' | 'secondary'; children: string }) {
+  const navigate = useNavigate();
+  const tenantName = useTenantName();
+  return (
+    <NegotiateChoice
+      variant={variant}
+      message={bookingMessage(tenantName, booking)}
+      onInApp={() => undefined}
+      fallback={() => void navigate({ to: '/account/negotiation/$bookingId/call', params: { bookingId: booking.id } })}
+    >
+      {children}
+    </NegotiateChoice>
+  );
 }
 
-// Only a 404/403 means the booking is not this customer's; anything else is
-// a failed load they can retry, not "booking not found".
+function MessengerCard({ booking }: { booking: BookingDetailResponse }) {
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col items-start gap-3 p-5">
+      <h2 className={heading}>Talk to the rental team</h2>
+      <p className="text-sm text-text-muted">
+        Ask questions or counter-offer on Messenger. We copy your booking details so you only need
+        to paste them. Whatever you agree comes back here as a revised quote for you to accept.
+      </p>
+      {booking.status !== 'cancelled' && (
+        <MessengerNegotiate booking={booking} variant="primary">Message us on Messenger</MessengerNegotiate>
+      )}
+    </Surface>
+  );
+}
+
+// Only a 404/403 means the booking is not theirs; anything else is a retryable failure.
 function LoadFailed({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   if (error instanceof ApiError && (error.status === 404 || error.status === 403))
     return <NotFound />;
@@ -154,35 +184,41 @@ function NotFound() {
       title="Booking not found"
       description="This booking does not exist, or it belongs to another account."
       action={
-        <Link to="/account/bookings">
-          <Button variant="primary">My bookings</Button>
-        </Link>
+        <Link to="/account/bookings" className={buttonClass('primary')}>My bookings</Link>
       }
     />
   );
 }
 
 function NegotiationPage({ bookingId }: { bookingId: string }) {
-  const booking = useBooking(bookingId);
+  const booking = useQuery(bookingsQueries.detail(bookingId));
+  const customerId = booking.data?.customerId ?? '';
+  const tier = useQuery({ ...tierQueries.customer(customerId), enabled: Boolean(customerId) });
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Negotiation"
-        title={`Booking ${shortCode('booking', bookingId)}`}
+        title={booking.data ? `Booking ${booking.data.code}` : 'Booking'}
         description="Agree the price with the rental team before you pay."
         actions={
-          <Link to="/account/bookings/$bookingId" params={{ bookingId }}>
-            <Button variant="ghost">Booking details</Button>
-          </Link>
+          <Link to="/account/bookings/$bookingId" params={{ bookingId }} className={buttonClass('ghost')}>Booking details</Link>
         }
       />
       {booking.isPending && <Skeleton label="Loading your booking" rows={3} />}
       {booking.isError && <LoadFailed error={booking.error} onRetry={() => booking.refetch()} />}
       {booking.data && (
         <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
-          <NegotiationThread bookingId={bookingId} disabled={booking.data.status === 'cancelled'} />
-          <QuoteCard booking={booking.data} />
+          <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1">
+            <TierNote customerId={booking.data.customerId} audience="customer" />
+            {inAppNegotiation() ? (
+              <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
+            ) : (
+              <MessengerCard booking={booking.data} />
+            )}
+          </div>
+          <div className="order-1 min-w-0 lg:order-2">
+            <QuoteCard booking={booking.data} />
+          </div>
         </div>
       )}
     </div>
@@ -190,58 +226,52 @@ function NegotiationPage({ bookingId }: { bookingId: string }) {
 }
 
 function NegotiationRoute() {
-  const { bookingId } = accountNegotiationRoute.useParams();
+  const { bookingId } = useParams({ strict: false }) as { bookingId: string };
   return <NegotiationPage bookingId={bookingId} />;
 }
 
-// /chat is the Figma frame's own URL; it is the same screen.
-function NegotiationChatRoute() {
-  const { bookingId } = accountNegotiationChatRoute.useParams();
-  return <NegotiationPage bookingId={bookingId} />;
-}
-
-// Figma 225:3085. There is no telephony here and no yard phone number in
-// the data, so the call happens off-app; what comes back into the app is
-// the revised quote the team sends after it.
 function NegotiationCallRoute() {
   const { bookingId } = accountNegotiationCallRoute.useParams();
+  const booking = useQuery(bookingsQueries.detail(bookingId));
+  const code = booking.data?.code;
+  const tenant = useTenant();
+  const hrefs = messengerHrefs(tenant?.phone);
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader
-        eyebrow="Negotiation"
-        title="Negotiate by phone"
-        description={`Booking ${shortCode('booking', bookingId)}`}
-      />
+      <PageHeader title="Negotiate by phone" {...(code ? { description: `Booking ${code}` } : {})} />
       <Surface radius="md" elevation="sm" className="flex max-w-xl flex-col gap-3 p-6">
         <p className="text-sm text-text">
-          Call the rental team on the number on our contact page and quote your booking reference{' '}
-          <span className="font-mono font-semibold">{shortCode('booking', bookingId)}</span>.
+          {hrefs ? 'Call or message the rental team on Viber or Telegram' : 'Call the rental team on the number on our contact page'} and quote your booking reference{' '}
+          <span className="font-mono font-semibold">{code ?? '(loading)'}</span>.
         </p>
         <p className="text-sm text-text-muted">
           Whatever you agree on the call comes back here as a revised quote for you to accept, so
           the price you pay is always the one written down.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Link to="/contact">
-            <Button variant="primary">Contact page</Button>
-          </Link>
-          <Link to="/account/negotiation/$bookingId" params={{ bookingId }}>
-            <Button variant="secondary">Back to the conversation</Button>
-          </Link>
+          {hrefs ? (
+            <>
+              <a href={hrefs.viber} className={buttonClass('primary')}>Call on Viber</a>
+              <a href={hrefs.telegram} target="_blank" rel="noreferrer" className={buttonClass('primary')}>Message on Telegram</a>
+            </>
+          ) : (
+            <Link to="/contact" className={buttonClass('primary')}>Contact page</Link>
+          )}
+          <Link to="/account/negotiation/$bookingId" params={{ bookingId }} className={buttonClass('secondary')}>Back to the conversation</Link>
         </div>
       </Surface>
     </div>
   );
 }
 
-// Figma 225:3087 "Negotiation Finalized": the agreed numbers, then pay.
 function NegotiationFinalRoute() {
   const { bookingId } = accountNegotiationFinalRoute.useParams();
-  const booking = useBooking(bookingId);
+  const booking = useQuery(bookingsQueries.detail(bookingId));
   const quoteId = booking.data?.quotation?.id ?? '';
   const quote = useQuery({ ...quotesQueries.detail(quoteId), enabled: Boolean(quoteId) });
   const accepted = booking.data?.quotation?.status === 'accepted';
-  const deposit = booking.data?.deposit.required ?? 0;
+  const due = booking.data ? amountDue(booking.data) : null;
+  const totalDue = due?.total != null ? formatPeso(due.total) : '--';
 
   if (booking.isError)
     return <LoadFailed error={booking.error} onRetry={() => booking.refetch()} />;
@@ -251,9 +281,7 @@ function NegotiationFinalRoute() {
         title="Nothing agreed yet"
         description="Accept the quote on the negotiation page first; this summary appears once you have."
         action={
-          <Link to="/account/negotiation/$bookingId" params={{ bookingId }}>
-            <Button variant="primary">Back to negotiation</Button>
-          </Link>
+          <Link to="/account/negotiation/$bookingId" params={{ bookingId }} className={buttonClass('primary')}>Back to negotiation</Link>
         }
       />
     );
@@ -261,9 +289,22 @@ function NegotiationFinalRoute() {
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col items-center gap-5">
-      <StatusPill tone="recon-approved" label="Agreed" icon={<CheckIcon />} />
+      <div className="w-full">
+        <PrintFrame
+          title="Agreed quotation"
+          docRef={quote.data ? `${shortCode('quote', quote.data.id)} rev ${quote.data.revision}` : '--'}
+          issuedAt={quote.data?.createdAt ?? null}
+          details={[
+            ['Booking', booking.data?.code ?? '--'],
+            ['Status', 'Accepted by the customer'],
+            ['Valid until', quote.data?.createdAt ? formatDate(quoteExpiresAt(quote.data.createdAt)) : '--'],
+            ['Total due', totalDue],
+          ]}
+        />
+      </div>
+      <StatusPill tone="recon-approved" label="Agreed" icon={<Check className="size-full" />} />
       <div className="text-center">
-        <h1 className="font-display text-2xl font-semibold text-text">Negotiation finalised</h1>
+        <h1 className="text-display-md text-text">Negotiation finalised</h1>
         <p className="mt-1 text-sm text-text-muted">
           These are the terms you accepted. Review them, then pay.
         </p>
@@ -271,13 +312,13 @@ function NegotiationFinalRoute() {
       <Surface radius="md" elevation="sm" className="flex w-full flex-col gap-3 p-5">
         <h2 className={heading}>Summary &middot; revision {quote.data?.revision ?? '--'}</h2>
         <LineItems quoteId={quoteId} />
-        <Row label="Refundable deposit" value={formatPeso(deposit)} />
+        <Row label="Consumable deposit" value={formatPeso(due?.deposit ?? 0)} />
         <div className="flex items-end justify-between gap-3 border-t border-border pt-3">
-          <span className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text">
+          <span className="text-sm font-medium text-text">
             Total due
           </span>
-          <span className="font-mono text-2xl font-semibold text-text">
-            {quote.data ? formatPeso(quote.data.total + deposit) : '--'}
+          <span className="font-mono text-display-md text-text">
+            {totalDue}
           </span>
         </div>
       </Surface>
@@ -285,23 +326,17 @@ function NegotiationFinalRoute() {
         <Button variant="ghost" className="flex-1" onClick={() => window.print()}>
           Print quote
         </Button>
-        <Link to="/account/checkout/$bookingId" params={{ bookingId }} className="flex-1">
-          <Button variant="primary" className="w-full">
-            Proceed to payment
-          </Button>
+        <Link to="/account/checkout/$bookingId" params={{ bookingId }} className={buttonClass('primary', 'default', 'flex-1 w-full')}>
+          Proceed to payment
         </Link>
-        <Link to="/account/bookings/$bookingId" params={{ bookingId }} className="flex-1">
-          <Button variant="secondary" className="w-full">
-            Booking details
-          </Button>
+        <Link to="/account/bookings/$bookingId" params={{ bookingId }} className={buttonClass('secondary', 'default', 'flex-1 w-full')}>
+          Booking details
         </Link>
       </div>
     </div>
   );
 }
 
-// Each quoted line with its own price, so the customer sees what makes up
-// the total, not just the total.
 function LineItems({ quoteId }: { quoteId: string }) {
   const quote = useQuery({ ...quotesQueries.detail(quoteId), enabled: Boolean(quoteId) });
   if (!quote.data?.lineItems.length) return null;
@@ -317,9 +352,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-// Siblings, not nested: each screen reads its OWN route's params (see the
-// note this replaced in unbacked-screens.tsx -- reading the parent's
-// params from a sibling throws "Could not find an active match").
+// Siblings, not nested: reading a parent's params from a sibling throws "Could not find an active match".
 export const accountNegotiationRoute = createRoute({
   getParentRoute: () => accountLayoutRoute,
   path: '/account/negotiation/$bookingId',
@@ -329,7 +362,7 @@ export const accountNegotiationRoute = createRoute({
 export const accountNegotiationChatRoute = createRoute({
   getParentRoute: () => accountLayoutRoute,
   path: '/account/negotiation/$bookingId/chat',
-  component: NegotiationChatRoute,
+  component: NegotiationRoute,
 });
 
 export const accountNegotiationCallRoute = createRoute({

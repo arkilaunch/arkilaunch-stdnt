@@ -5,11 +5,7 @@ import { makeToken, makeValidClaims } from '../test/make-token.js';
 import { setAccessToken, clearTokens } from '../lib/auth-client.js';
 import { clearCart } from '../lib/cart-client.js';
 
-// The weather panel beside the catalog, driven through the real route.
-//
-// The thing that needs watching: an unavailable forecast must READ as
-// unavailable. A blank week or a row of zeros renders as five calm days,
-// which is the failure mode weather-port.spec.ts exists to stop.
+// An unavailable forecast must READ as unavailable, never as five calm days.
 
 const SITE = {
   id: '22222222-2222-2222-2222-222222222222',
@@ -78,7 +74,10 @@ describe('WeatherInsights', () => {
     stub();
     const { unmount } = await renderRoute('/equipment');
 
-    const rail = await screen.findByRole('complementary', { name: 'Weather insights' });
+    // Rain and a thunderstorm in the week: the button flags two rough days.
+    expect(await screen.findByLabelText('2 rough weather days this week')).toHaveTextContent('2');
+    (await screen.findByRole('button', { name: /Weather insights/ })).click();
+    const rail = await screen.findByRole('dialog', { name: 'Weather insights' });
     await waitFor(() => expect(rail).toHaveTextContent('Weather insights'));
     await waitFor(() => expect(rail).toHaveTextContent('Thunderstorms'));
     expect(rail).toHaveTextContent('Rain');
@@ -95,7 +94,8 @@ describe('WeatherInsights', () => {
     stub({ forecastStatus: 503 });
     const { unmount } = await renderRoute('/equipment');
 
-    const rail = await screen.findByRole('complementary', { name: 'Weather insights' });
+    (await screen.findByRole('button', { name: /Weather insights/ })).click();
+    const rail = await screen.findByRole('dialog', { name: 'Weather insights' });
     await waitFor(() => expect(rail).toHaveTextContent(/could not be fetched/i));
     // A transient failure DOES get a retry.
     expect(within(rail).getByRole('button', { name: /retry/i })).toBeInTheDocument();
@@ -110,19 +110,22 @@ describe('WeatherInsights', () => {
     stub({ forecastStatus: 503, reason: 'flag_disabled' });
     const { unmount } = await renderRoute('/equipment');
 
-    const rail = await screen.findByRole('complementary', { name: 'Weather insights' });
+    (await screen.findByRole('button', { name: /Weather insights/ })).click();
+    const rail = await screen.findByRole('dialog', { name: 'Weather insights' });
     await waitFor(() => expect(rail).toHaveTextContent(/switched off/i));
     expect(within(rail).queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
     unmount();
   });
 
-  it('asks a customer with no site to add one', async () => {
+  it('shows a general forecast to a customer with no site, and asks them to add one', async () => {
     setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
     stub({ sites: [] });
     const { unmount } = await renderRoute('/equipment');
 
-    const rail = await screen.findByRole('complementary', { name: 'Weather insights' });
-    await waitFor(() => expect(rail).toHaveTextContent(/no project site yet/i));
+    (await screen.findByRole('button', { name: /Weather insights/ })).click();
+    const rail = await screen.findByRole('dialog', { name: 'Weather insights' });
+    await waitFor(() => expect(rail).toHaveTextContent(/general forecast/i));
+    expect(rail).toHaveTextContent(/add your project site/i);
     unmount();
   });
 
@@ -134,7 +137,7 @@ describe('WeatherInsights', () => {
     const { unmount } = await renderRoute('/equipment');
 
     await screen.findByRole('heading', { name: /equipment for hire/i });
-    expect(screen.queryByRole('complementary', { name: 'Weather insights' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Weather insights' })).not.toBeInTheDocument();
     unmount();
   });
 });

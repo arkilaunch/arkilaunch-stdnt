@@ -1,26 +1,51 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
-import type { Request } from 'express';
-import type { RequestContext } from '@arkilaunch/shared';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
+import { createZodDto } from 'nestjs-zod';
+import { DeploymentReturnSchema, TimekeeperAssignRequestSchema } from '@arkilaunch/shared';
 import { RequirePermission, STAFF_READ } from '../common/decorators/require-permission.decorator.js';
 import { SitesService } from './sites.service.js';
+import { SiteHubService } from './site-hub.service.js';
 import {
   DeploymentCreateDto,
   IncidentListQueryDto,
+  IncidentReviewDto,
   SiteCreateDto,
   SiteListQueryDto,
   SiteUpdateDto,
 } from './dto.js';
+import type { CtxRequest } from '../common/request.js';
 
-type CtxRequest = Request & { ctx: RequestContext };
+class TimekeeperAssignDto extends createZodDto(TimekeeperAssignRequestSchema) {}
+class DeploymentReturnDto extends createZodDto(DeploymentReturnSchema) {}
 
-// PRD-F4/F5 (Sites, Weather, Liability Incidents), backing S12/S13/S14
-// (cr-arkilaunch-f9-read-surface.md). Reads are open to any authenticated
-// tenant member (RLS is the isolation boundary, matching fleet/reference's
-// read posture); writes are site:manage-gated (QAD-T19 shape: an owner
-// with no data-entry permission is denied).
 @Controller()
 export class SitesController {
-  constructor(private readonly sites: SitesService) {}
+  constructor(
+    private readonly sites: SitesService,
+    private readonly hubs: SiteHubService,
+  ) {}
+
+  // Not the timekeeper, who submits only.
+  @Get('sites/:id/hub')
+  @RequirePermission('site:manage', 'report:read')
+  hub(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.hubs.hub(req.ctx, id);
+  }
+
+  @Post('sites/:id/timekeepers')
+  @RequirePermission('site:manage')
+  assignTimekeeper(@Param('id') id: string, @Body() body: TimekeeperAssignDto, @Req() req: CtxRequest) {
+    return this.hubs.setTimekeeper(req.ctx, id, body.userId, true);
+  }
+
+  @Delete('sites/:id/timekeepers/:userId')
+  @RequirePermission('site:manage')
+  unassignTimekeeper(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Req() req: CtxRequest,
+  ) {
+    return this.hubs.setTimekeeper(req.ctx, id, userId, false);
+  }
 
   @Get('sites')
   @RequirePermission(...STAFF_READ)
@@ -57,15 +82,22 @@ export class SitesController {
   returnDeployment(
     @Param('id') id: string,
     @Param('assignmentId') assignmentId: string,
+    @Body() body: DeploymentReturnDto,
     @Req() req: CtxRequest,
   ) {
-    return this.sites.returnDeployment(req.ctx, id, assignmentId);
+    return this.sites.returnDeployment(req.ctx, id, assignmentId, body);
   }
 
   @Get('sites/:id/weather')
   @RequirePermission(...STAFF_READ)
   weather(@Param('id') id: string, @Req() req: CtxRequest) {
     return this.sites.weather(req.ctx, id);
+  }
+
+  @Get('sites/:id/equipment-weather')
+  @RequirePermission(...STAFF_READ)
+  equipmentWeather(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.sites.equipmentWeather(req.ctx, id);
   }
 
   @Get('weather/advisories')
@@ -78,5 +110,18 @@ export class SitesController {
   @RequirePermission(...STAFF_READ)
   incidents(@Query() query: IncidentListQueryDto, @Req() req: CtxRequest) {
     return this.sites.incidents(req.ctx, query);
+  }
+
+  @Get('incidents/companies')
+  @RequirePermission(...STAFF_READ)
+  incidentCompanies(@Req() req: CtxRequest) {
+    return this.sites.incidentCompanies(req.ctx);
+  }
+
+  // The same people who decide a field log decide its incident.
+  @Patch('incidents/:id')
+  @RequirePermission('edtr:approve')
+  reviewIncident(@Param('id', ParseUUIDPipe) id: string, @Body() body: IncidentReviewDto, @Req() req: CtxRequest) {
+    return this.sites.reviewIncident(req.ctx, id, body);
   }
 }

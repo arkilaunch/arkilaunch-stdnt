@@ -5,6 +5,25 @@ import { Modal } from './modal.js';
 import { ConfirmDialog } from './confirm-dialog.js';
 
 describe('Modal', () => {
+  it('can open on the container while trapping focus and restoring it on close', async () => {
+    const trigger = document.createElement('button');
+    document.body.append(trigger);
+    trigger.focus();
+    const { unmount } = render(
+      <Modal open autoFocusFirst={false} onClose={() => undefined} title="Configure rental" footer={<button>Save</button>}>
+        <input aria-label="Rental start" type="datetime-local" />
+      </Modal>,
+    );
+    expect(screen.getByRole('dialog')).toHaveFocus();
+    expect(screen.getByLabelText('Rental start')).not.toHaveFocus();
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
   it('exposes itself as a dialog named by its title', () => {
     render(
       <Modal open onClose={() => undefined} title="Record a field log">
@@ -32,6 +51,35 @@ describe('Modal', () => {
     );
     await userEvent.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('fills the viewport for document capture', () => {
+    render(<Modal open size="full" onClose={() => undefined} title="Scan your ID"><p>Camera</p></Modal>);
+    expect(screen.getByRole('dialog', { name: 'Scan your ID' })).toHaveClass('h-dvh', 'max-w-none');
+  });
+
+  it('keeps a busy dialog open', async () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open closeDisabled onClose={onClose} title="Submitting company">
+        <input aria-label="Company name" />
+      </Modal>,
+    );
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // Cloudscape Modal: focus opens on the first field, never the dismiss X.
+  it('opens with focus on the first field', () => {
+    render(
+      <Modal open onClose={() => undefined} title="Add a coupon" footer={<button type="button">Save</button>}>
+        <label>
+          Code <input />
+        </label>
+      </Modal>,
+    );
+    expect(screen.getByRole('textbox', { name: 'Code' })).toHaveFocus();
   });
 });
 
@@ -74,5 +122,21 @@ describe('ConfirmDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('is an alert dialog that opens on Cancel, the safe choice', () => {
+    render(
+      <ConfirmDialog
+        open
+        title="Delete coupon?"
+        body={<p>Customers can no longer use it.</p>}
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(screen.getByRole('alertdialog', { name: 'Delete coupon?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
   });
 });

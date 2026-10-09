@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prerender": "node scripts/prerender.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && wrangler types worker/worker-configuration.d.ts && tsc -p worker/tsconfig.json",
     "test": "vitest run",
     "e2e": "playwright test"
   },
@@ -17,15 +16,18 @@
     "@tanstack/react-router": "1.121.41",
     "leaflet": "1.9.4",
     "lucide-react": "^1.28.0",
+    "maplibre-gl": "^6.11.2",
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "react-easy-crop": "^6.2.3"
+    "react-easy-crop": "^6.2.3",
+    "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
     "@playwright/test": "1.55.1",
     "@tailwindcss/vite": "4.1.18",
+    "@techstark/opencv-js": "4.12.0-release.1",
     "@testing-library/dom": "10.4.0",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.0",
@@ -39,6 +41,7 @@
     "tailwindcss": "4.1.18",
     "typescript": "5.7.3",
     "vite": "8.2.0",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "wrangler": "4.139.0"
   }
 }

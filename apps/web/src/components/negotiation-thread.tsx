@@ -1,34 +1,43 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiErrorText, apiPost } from '../lib/api-client.js';
-import { bookingsQueries } from '../lib/queries.js';
+import type { NegotiationMessageResponse } from '@arkilaunch/shared';
+import { apiErrorText, apiGet, apiPost } from '../lib/api-client.js';
 import { formatDateTime, formatPeso } from '../lib/format.js';
 import { Surface } from './surface.js';
 import { Button } from './button.js';
 import { Input } from './input.js';
 
-// The counter-offer thread behind Figma 225:3084 (Messenger Chat Nego).
-// The frame hands the customer off to Facebook Messenger; this keeps the
-// conversation on the booking instead, so an offer sits next to the quote
-// it is about. One component for both sides: the API derives who is
-// speaking from the JWT, so the customer account and the staff console
-// mount the same thread.
-export function NegotiationThread({ bookingId, disabled = false }: { bookingId: string; disabled?: boolean }) {
+// Off by default: customers negotiate in the tenant's Messenger instead (NegotiateChoice).
+export const inAppNegotiation = (): boolean => import.meta.env.VITE_ENABLE_IN_APP_NEGOTIATION === 'true';
+
+export function negotiationMessageId(base: string): string {
+  return `message${base.replace(/\W/g, '-')}`;
+}
+
+// The API derives who is speaking from the JWT, so both sides mount the same thread.
+// noOffer: an overdue customer may still message, but not propose a price.
+export function NegotiationThread({ base, disabled = false, noOffer = false }: { base: string; disabled?: boolean; noOffer?: boolean }) {
   const queryClient = useQueryClient();
-  const messages = useQuery(bookingsQueries.messages(bookingId));
+  const queryKey = ['thread', base] as const;
+  const messages = useQuery({
+    queryKey,
+    queryFn: () => apiGet<NegotiationMessageResponse[]>(`${base}/messages`),
+    refetchInterval: 10_000,
+  });
+  const fieldId = base.replace(/\W/g, '-');
   const [body, setBody] = useState('');
   const [offer, setOffer] = useState('');
 
   const send = useMutation({
     mutationFn: () =>
-      apiPost(`/bookings/${bookingId}/messages`, {
+      apiPost(`${base}/messages`, {
         body: body.trim(),
-        ...(offer ? { offerPhp: Number(offer) } : {}),
+        offerPhp: offer && !noOffer ? Number(offer) : undefined,
       }),
     onSuccess: () => {
       setBody('');
       setOffer('');
-      return queryClient.invalidateQueries({ queryKey: ['booking', bookingId, 'messages'] });
+      return queryClient.invalidateQueries({ queryKey });
     },
   });
 
@@ -39,7 +48,7 @@ export function NegotiationThread({ bookingId, disabled = false }: { bookingId: 
 
   return (
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col p-0">
-      <h2 className="border-b border-border px-4 py-3 font-display text-base font-semibold text-text">
+      <h2 className="border-b border-border px-4 py-3 text-base font-semibold text-text">
         Conversation
       </h2>
 
@@ -57,11 +66,11 @@ export function NegotiationThread({ bookingId, disabled = false }: { bookingId: 
           <li
             key={message.id}
             className={[
-              'flex max-w-[85%] flex-col gap-1 rounded-md border px-3 py-2',
+'flex max-w-[85%] flex-col gap-1 rounded-md border px-3 py-2',
               message.mine ? 'self-end border-primary bg-surface-sunk' : 'self-start border-border bg-surface',
             ].join(' ')}
           >
-            <span className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+            <span className="text-sm font-medium text-text-muted">
               {message.mine ? 'You' : message.authorRole === 'staff' ? 'Rental team' : 'Customer'} &middot;{' '}
               {formatDateTime(message.createdAt)}
             </span>
@@ -78,24 +87,24 @@ export function NegotiationThread({ bookingId, disabled = false }: { bookingId: 
       {!disabled && (
         <form onSubmit={submit} className="flex flex-col gap-3 border-t border-border px-4 py-4">
           <div className="flex flex-col gap-1">
-            <label htmlFor={`message-${bookingId}`} className="text-sm font-medium text-text">
+            <label htmlFor={negotiationMessageId(base)} className="text-sm font-medium text-text">
               Message
             </label>
             <textarea
-              id={`message-${bookingId}`}
+              id={negotiationMessageId(base)}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               maxLength={2000}
               rows={3}
               required
-              className="rounded-md border border-border bg-surface px-3 py-2 text-text"
+              className="rounded-input border border-border bg-surface px-3 py-2 text-text"
             />
           </div>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="w-48">
+            {!noOffer && <div className="w-48">
               <Input
                 label="Counter-offer (PHP, optional)"
-                id={`offer-${bookingId}`}
+                id={`offer${fieldId}`}
                 type="number"
                 min={1}
                 step="0.01"
@@ -103,7 +112,7 @@ export function NegotiationThread({ bookingId, disabled = false }: { bookingId: 
                 value={offer}
                 onChange={(e) => setOffer(e.target.value)}
               />
-            </div>
+            </div>}
             <Button type="submit" variant="primary" loading={send.isPending} disabled={!body.trim()}>
               Send
             </Button>

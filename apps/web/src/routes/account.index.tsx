@@ -1,10 +1,14 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { accountLayoutRoute } from './_account.js';
-import { Button } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
+import { PageHeader } from '../components/page-header.js';
+import { Modal } from '../components/modal.js';
+import { Skeleton } from '../components/skeleton.js';
 import { hasRequiredCompanyDocuments } from '@arkilaunch/shared';
 import { bookingsQueries, companiesQueries, customerSitesQueries } from '../lib/queries.js';
-import { CheckIcon } from '../components/icons.js';
+import { Check, ChevronRight, TriangleAlert } from 'lucide-react';
 
 export interface SetupStep {
   label: string;
@@ -12,57 +16,113 @@ export interface SetupStep {
   to: string;
 }
 
-// What a new customer still has to do before a booking can be paid. Each
-// step is derived from the records, not a stored flag.
 export function setupSteps(
   companies: { kycStatus: string; documents: { documentType: string }[] }[],
   siteCount: number,
 ): SetupStep[] {
-  const hasDocs = companies.some(
-    (c) => hasRequiredCompanyDocuments(c.documents),
-  );
+  const hasDocs = companies.some((c) => hasRequiredCompanyDocuments(c.documents));
   return [
     { label: 'Add your company', done: companies.length > 0, to: '/account/companies/new' },
-    { label: 'Upload its ID and registration', done: hasDocs, to: '/account/companies' },
-    { label: 'Add a project site', done: siteCount > 0, to: '/account/companies' },
-    { label: 'Get verified by the rental team', done: companies.some((c) => c.kycStatus === 'approved'), to: '/account/companies' },
+    { label: 'Upload its ID and registration', done: hasDocs, to: '/account/applications' },
+    { label: 'Add a project site', done: siteCount > 0, to: '/account/applications' },
+    {
+      label: 'Get verified by the rental team',
+      done: companies.some((c) => c.kycStatus === 'approved'),
+      to: '/account/applications',
+    },
   ];
 }
+
+const SEEN_KEY = 'setup-modal-seen';
 
 function SetupChecklist() {
   const companies = useQuery(companiesQueries.mine());
   const sites = useQuery(customerSitesQueries.mine());
+  const [open, setOpen] = useState(() => {
+    try {
+      return !sessionStorage.getItem(SEEN_KEY);
+    } catch {
+      return true;
+    }
+  });
+  const close = () => {
+    try {
+      sessionStorage.setItem(SEEN_KEY, '1');
+    } catch {
+      // Storage blocked: it simply pops up again next visit.
+    }
+    setOpen(false);
+  };
+  if (companies.isPending || sites.isPending) return <Skeleton label="Loading your setup steps" rows={1} />;
   if (!companies.data || !sites.data) return null;
   const steps = setupSteps(companies.data, sites.data.length);
-  if (steps.every((step) => step.done)) return null;
+  const todo = steps.filter((step) => !step.done);
+  const next = todo[0];
+  if (!next) return null;
   return (
-    <div className="rounded-md border border-border bg-surface p-6">
-      <h2 className="font-display text-base font-semibold text-text">Before your first booking</h2>
-      <p className="mt-1 text-sm text-text-muted">You can request quotes any time; payment opens once your company is verified.</p>
-      <ol className="mt-4 flex flex-col gap-2">
-        {steps.map((step) => (
-          <li key={step.label} className="flex items-center gap-3 text-sm">
-            <span
-              aria-hidden="true"
-              className={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
-                step.done ? 'border-success bg-success text-white' : 'border-border text-text-muted',
-              ].join(' ')}
-            >
-              {step.done ? <CheckIcon /> : null}
-            </span>
-            {step.done ? (
-              <span className="text-text-muted line-through">{step.label}</span>
-            ) : (
-              <Link to={step.to} className="text-accent underline">
-                {step.label}
-              </Link>
-            )}
-            <span className="sr-only">{step.done ? '(done)' : '(to do)'}</span>
-          </li>
-        ))}
-      </ol>
-    </div>
+    <>
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-surface px-4 py-3 text-left text-sm text-text hover:border-border-strong"
+      >
+        {/* Cloudscape warning status: an inline glyph beside the text, not a corner badge. */}
+        <span className="flex items-center gap-2">
+          <TriangleAlert aria-hidden="true" className="h-4 w-4 shrink-0 text-warning" />
+          <span className="font-semibold">
+            {todo.length} step{todo.length === 1 ? '' : 's'} left
+          </span>{' '}
+          <span className="text-text-muted">before you can pay for bookings</span>
+        </span>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted" />
+      </button>
+      <Modal
+        open={open}
+        onClose={close}
+        size="sm"
+        title="Before your first booking"
+        description="You can request quotes any time; payment opens once your company is verified."
+        footer={
+          <>
+            <Button variant="ghost" onClick={close}>
+              Later
+            </Button>
+            <Link to={next.to} onClick={close} className={buttonClass('primary')}>{next.label}</Link>
+          </>
+        }
+      >
+        <StepList steps={steps} onNavigate={close} />
+      </Modal>
+    </>
+  );
+}
+
+function StepList({ steps, onNavigate }: { steps: SetupStep[]; onNavigate: () => void }) {
+  return (
+    <ol className="flex flex-col gap-2">
+      {steps.map((step) => (
+        <li key={step.label} className="flex items-center gap-3 text-sm">
+          <span
+            aria-hidden="true"
+            className={[
+'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
+              step.done ? 'border-success bg-success text-white' : 'border-border text-text-muted',
+            ].join(' ')}
+          >
+            {step.done ? <Check className="size-full" /> : null}
+          </span>
+          {step.done ? (
+            <span className="text-text-muted line-through">{step.label}</span>
+          ) : (
+            <Link to={step.to} onClick={onNavigate} className="text-accent underline">
+              {step.label}
+            </Link>
+          )}
+          <span className="sr-only">{step.done ? '(done)' : '(to do)'}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -72,37 +132,33 @@ function AccountHomePage() {
     bookings?.items.filter((b) => b.status !== 'cancelled' && b.status !== 'completed').length ?? 0;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold text-text">Your account</h1>
-        <p className="text-sm text-text-muted">
-          {activeCount > 0
-            ? `${activeCount} active booking${activeCount === 1 ? '' : 's'}.`
-            : 'Manage your active operations and equipment status.'}
-        </p>
-      </div>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Home"
+        description={
+          activeCount > 0
+            ? `${activeCount} active booking${activeCount === 1 ? '' : 's'}, and what to do next.`
+            : 'Your bookings, companies and what to do next.'
+        }
+      />
       <SetupChecklist />
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="rounded-md border border-border bg-surface p-6">
-          <h2 className="font-display text-base font-semibold text-text">Rent equipment</h2>
+          <h2 className="text-heading-md text-text">Rent equipment</h2>
           <p className="mt-1 text-sm text-text-muted">
             Browse the fleet and book equipment for your project.
           </p>
-          <Link to="/equipment">
-            <Button variant="primary" className="mt-4">
-              Browse equipments
-            </Button>
+          <Link to="/equipment" className={buttonClass('primary', 'default', 'mt-4')}>
+            Browse equipments
           </Link>
         </div>
         <div className="rounded-md border border-border bg-surface p-6">
-          <h2 className="font-display text-base font-semibold text-text">Your bookings</h2>
+          <h2 className="text-heading-md text-text">Your bookings</h2>
           <p className="mt-1 text-sm text-text-muted">
             View active rentals and their return dates.
           </p>
-          <Link to="/account/bookings">
-            <Button variant="secondary" className="mt-4">
-              View bookings
-            </Button>
+          <Link to="/account/bookings" className={buttonClass('secondary', 'default', 'mt-4')}>
+            View bookings
           </Link>
         </div>
       </div>

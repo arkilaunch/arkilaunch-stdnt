@@ -5,13 +5,8 @@ import { ensureFreshToken, getAccessToken } from './auth-client.js';
 import { decodeAccessToken, isTokenExpired } from './jwt.js';
 import { currentHost, type HostKind } from './host.js';
 
-// Client-side UX guards only; the real boundary is server-side RLS + RBAC
-// (packages/db/src/seed/permission-catalog.ts is the source of truth).
-//
-// Both guards are factories returning a `beforeLoad` function (call them:
-// `beforeLoad: requireAuth()`, not `beforeLoad: requireAuth`) so they can
-// close over the route's own `location` to preserve the intended
-// destination through a login redirect.
+// UX guards only; the real boundary is server-side RLS + RBAC.
+// Factories: `beforeLoad: requireAuth()`, not `requireAuth`.
 export function requireAuth() {
   return async ({ location }: { location: ParsedLocation }) => {
     const token = getAccessToken();
@@ -19,8 +14,6 @@ export function requireAuth() {
       throw redirect({ to: '/login', search: { redirect: location.href } });
     }
     if (isTokenExpired(token)) {
-      // The 600s access-token TTL makes this a routine mid-session event,
-      // not an edge case: try a silent refresh before bouncing to login.
       try {
         await ensureFreshToken();
       } catch {
@@ -30,10 +23,6 @@ export function requireAuth() {
   };
 }
 
-// Platform pages (landing, tenant registration, /admin) exist only on the
-// bare domain; a tenant's storefront and back office only on its own host.
-// The wrong host lands on that host's own home page. `next` chains the
-// route's usual guard after the host check.
 export function onlyOn(
   kind: HostKind['kind'],
   next?: (opts: { location: ParsedLocation }) => Promise<void> | void,
@@ -57,29 +46,28 @@ export function requireRole(...roles: RoleCode[]) {
     await authGuard(opts);
     const role = getCurrentRole();
     if (!role || !roles.includes(role)) {
-      // A role mismatch (as opposed to no session at all) must NOT carry a
-      // `redirect` param: sending an authenticated user back to a page
-      // their role cannot see is a redirect loop, not a helpful return.
+      // No `redirect` param on a role mismatch: returning there would loop.
       throw redirect({ to: homeRouteForRole(role) });
     }
   };
 }
 
-// Where the brand link goes: the landing page when signed out,
-// else the signed-in role's home.
+export function redirectIfSignedIn() {
+  const token = getAccessToken();
+  if (token && !isTokenExpired(token)) throw redirect({ to: homeRouteForRole(getCurrentRole()), replace: true });
+}
+
 export function homeHref(): string {
   const role = getCurrentRole();
   return role ? homeRouteForRole(role) : '/';
 }
 
-// Home route per role, used right after login and to redirect a
-// wrong-shell visitor back to where they belong.
 export function homeRouteForRole(role: RoleCode | null): string {
   switch (role) {
     case 'customer':
       return '/account';
     case 'owner':
-      return '/app/insights';
+      return '/app';
     case 'timekeeper':
       return '/field';
     case 'platform_admin':

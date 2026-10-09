@@ -1,23 +1,17 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
-import type { RequestContext } from '@arkilaunch/shared';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { BookingsService } from './bookings.service.js';
 import {
   BookingCreateDto,
+  BookingDeliverDto,
   BookingListQueryDto,
   ChangeRequestCreateDto,
   ChangeRequestResolveDto,
   NegotiationMessageCreateDto,
 } from './dto.js';
+import type { CtxRequest } from '../common/request.js';
 
-type CtxRequest = Request & { ctx: RequestContext };
-
-// PRD-F8 (Client Booking Portal). Authenticated `customer`-role surface
-// (cr-arkilaunch-f2-f8-bookings-payments.md); staff (admin/owner/
-// platform_admin) share the same permissions to book/read on a customer's
-// behalf.
 @Controller('bookings')
 export class BookingsController {
   constructor(private readonly bookings: BookingsService) {}
@@ -52,10 +46,16 @@ export class BookingsController {
     return this.bookings.cancel(req.ctx, id);
   }
 
+  @Patch(':id/hold')
+  @RequirePermission('quote:approve')
+  extendHold(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.bookings.extendHold(req.ctx, id);
+  }
+
   @Post(':id/deliver')
   @RequirePermission('site:manage')
-  deliver(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.bookings.deliver(req.ctx, id);
+  deliver(@Param('id') id: string, @Body() body: BookingDeliverDto, @Req() req: CtxRequest) {
+    return this.bookings.deliver(req.ctx, id, body);
   }
 
   @Post(':id/return')
@@ -77,7 +77,6 @@ export class BookingsController {
     return this.bookings.requestCall(req.ctx, id);
   }
 
-  // Staff only, after phoning the customer.
   @Post(':id/call-confirmed')
   @RequirePermission('quote:approve')
   confirmCall(@Param('id') id: string, @Req() req: CtxRequest) {
@@ -103,7 +102,6 @@ export class BookingsController {
     return this.bookings.requestChange(req.ctx, id, body);
   }
 
-  // Staff only: quote:approve is the admin-side decision permission.
   @Patch(':id/change-requests/:requestId')
   @RequirePermission('quote:approve')
   resolveChange(

@@ -17,7 +17,7 @@ test.describe('customer settings', () => {
     await page.getByRole('button', { name: 'Save profile' }).click();
     await expect(page.getByText('Profile saved')).toBeVisible();
     await page.reload();
-    await expect(page.getByLabel('Mobile number')).toHaveValue('+63 917 000 1234');
+    await expect(page.getByLabel('Mobile number')).toHaveValue('917 000 1234');
 
     // Picture: a real PNG, cut from the page itself. CI's console-e2e job has
     // no storage behind the API (ci.yml), so the upload is checked locally only.
@@ -33,7 +33,7 @@ test.describe('customer settings', () => {
 
     await page.getByRole('tab', { name: 'Security' }).click();
     await page.getByLabel(/^New password/).fill('short');
-    await expect(page.getByText('Use at least 10 characters.')).toBeVisible();
+    await expect(page.getByText('Use at least 12 characters.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign out everywhere' })).toBeVisible();
 
     await page.getByRole('tab', { name: 'Notifications' }).click();

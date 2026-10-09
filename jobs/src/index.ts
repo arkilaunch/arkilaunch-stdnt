@@ -1,8 +1,9 @@
-// See README.md for the full entrypoint roster and which RFC/slice each
-// lands with.
 export { runDieselRefresh } from './diesel.js';
 export { runEdtrOcrWorker } from './edtr-ocr-worker.js';
 export { runWeatherPoll } from './weather-poll.js';
+export { runWeatherBriefing } from './weather-briefing.js';
 export { runMaintenanceNotify } from './maintenance-notify.js';
+export { runHoldExpiry } from './hold-expiry.js';
 
 export { runWeeklyBilling } from './weekly-billing.js';
+export { runTierRecompute } from './tier-recompute.js';

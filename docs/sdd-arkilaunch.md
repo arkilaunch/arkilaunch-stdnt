@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-09-07 (see docs/index.md §1); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
@@ -17,7 +17,7 @@
 
 ## 1. Architectural Vision & Principles
 
-**Architecture style:** Three-tier web application. A React single-page app on Vercel edge, a persistent NestJS API plus scheduled workers on Azure Container Apps, and managed PostgreSQL plus object storage on Supabase. It is a modular monolith on the API side (clean NestJS module boundaries per feature), not microservices; the pilot serves one anchor tenant and a shared-schema pooled multi-tenant model, so a distributed topology would add cost without buying anything at this scale.
+**Architecture style:** Three-tier web application. A React single-page app served as static assets by a Cloudflare Worker (arkilaunch.app + `*.arkilaunch.app` tenant storefronts), a persistent NestJS API plus scheduled workers on Azure Container Apps, and managed PostgreSQL plus object storage on Supabase. It is a modular monolith on the API side (clean NestJS module boundaries per feature), not microservices; the pilot serves one anchor tenant and a shared-schema pooled multi-tenant model, so a distributed topology would add cost without buying anything at this scale.
 
 **Guiding principles:**
 - **Back-end the paper, do not replace the field.** OCR the existing handwritten EDTR and reconcile it against a second independent log before any money moves. Digital entry is the primary path where a timekeeper will use it; OCR is the paper fallback (scrutiny §4).
@@ -37,10 +37,12 @@
 
 ## 2. High-Level Architecture
 
+**Platform marketing head (CR: platform-saas-landing, 2026-10-04).** The edge Worker writes title, description, canonical and social metadata plus Organization/SoftwareApplication JSON-LD into HTML for `/` on the configured platform domain, and sets `index, follow` only there. Metadata requires no API call; catalog failures do not affect the marketing head. Canonical URLs exclude query parameters. Other platform routes retain the shell's default noindex; the platform sitemap lists only `/`. Tenant head rewriting and sitemap generation remain host-specific. The browser preserves the homepage's served title and synchronizes platform metadata and robots on navigation, removing homepage-only tags and restoring noindex on registration and private routes. Existing `/help`, `/terms` and `/privacy` are available through platform chrome with platform support channels; tenant-only catalog/contact routes still redirect off the platform host.
+
 ```mermaid
 graph TD
-    subgraph ClientTier["Client tier (Vercel edge)"]
-        FE["React 19.2 + Vite 8 SPA<br/>TanStack Router v1 / Query v5<br/>Tailwind, Zod, native fetch<br/>Playwright build-time prerender on public routes only"]
+    subgraph ClientTier["Client tier (Cloudflare Workers static assets)"]
+        FE["React 19.2 + Vite 8 SPA<br/>TanStack Router v1 / Query v5<br/>Tailwind, Zod, native fetch<br/>Edge Worker writes each tenant's SEO head"]
     end
     subgraph EdgeTier["Edge and security"]
         CF["Cloudflare<br/>WAF + L3/L4/L7 DDoS"]
@@ -79,11 +81,11 @@ graph TD
 | Layer | Technology | Responsibility |
 |-------|------------|----------------|
 | Client | React 19.2 + Vite 8, TanStack Router v1 + Query v5, Tailwind, Zod, native fetch | Role-aware SPA (admin/owner/timekeeper/customer/platform); client-side image compression and resumable upload queue; printable quote output; never sees another tenant's data. Serves PRD-F1, F2, F3, F4, F5, F6, F7, F8 screens. |
-| Edge / Gateway | Cloudflare (WAF, L3/L4/L7 DDoS), Vercel edge for static delivery | TLS 1.3 termination at the edge, WAF rules, DDoS absorption, bot mitigation on the public booking portal (`/t/:tenantSlug`). |
+| Edge / Gateway | Cloudflare (WAF, L3/L4/L7 DDoS, DNS), Cloudflare Workers static assets for frontend delivery | TLS 1.3 termination at the edge, WAF rules, DDoS absorption, bot mitigation on the public booking portal (`/t/:tenantSlug`). **Addendum (2026-09-27, `cr-arkilaunch-turnstile.md`):** the API is not behind Cloudflare (it stays on the ACA ingress FQDN), so the WAF covers the frontend only; bot mitigation for the API is Cloudflare Turnstile verified server-side on signup, company registration, forgot-password, and login after repeated failures. |
 | API | NestJS 11.1 on Node 24 LTS (Azure Container Apps, persistent) | REST API, Passport-JWT identity authority, RBAC guard, per-request tenant transaction that sets the RLS GUC, PayMongo session creation and webhook verification, Azure DI extraction dispatch. Serves every PRD-F#. |
 | Service / Compute | ACA Jobs (cron) on Node 24 | Weather poll per active site (PRD-F5), PM-threshold notifications (PRD-F4), diesel-price refresh (PRD-F1), async OCR + reconciliation workers (PRD-F3). Guards overlapping runs via replica/parallelism limit or an advisory lock. |
 | Data | Supabase managed PostgreSQL + Supabase Storage; Drizzle ORM | Multi-tenant relational store with RLS by `tenant_id`; Storage holds EDTR and KYC image blobs behind short-TTL signed URLs. Not used as the session-auth authority. |
-| Infrastructure | Vercel (frontend), Azure Container Apps (API + Jobs), Supabase (DB + Storage), Cloudflare (edge); external Azure DI, PayMongo, Open-Meteo, diesel source | Hosting, private DB networking, static egress IPs, secrets in env, CI/CD from `dev`/`staging`/`main`. Detailed in §6. |
+| Infrastructure | Cloudflare Workers (frontend), Azure Container Apps (API + Jobs), Supabase (DB + Storage), Cloudflare (edge); external Azure DI, PayMongo, Open-Meteo, diesel source | Hosting, private DB networking, static egress IPs, secrets in env, CI/CD from `dev`/`staging`/`main`. Detailed in §6. |
 
 ---
 
@@ -138,7 +140,7 @@ Full column definitions follow for the multi-tenant additions and the load-beari
 | `id` | UUID | No | gen_random_uuid() | PK | |
 | `tenant_id` | UUID | No | | FK `tenants.id`, idx | RESTRICT |
 | `role_id` | UUID | No | | FK `roles.id` | global catalog |
-| `email` | TEXT | No | | UNIQUE idx (per tenant) | lowercased; `UNIQUE (tenant_id, email)` |
+| `email` | TEXT | No | | UNIQUE idx (platform-wide) | lowercased; `UNIQUE (tenant_id, email)` plus `users_email_key_uq` on `email_key(email)` (Gmail dots/+tag folded): one account per email across all tenants (cr-arkilaunch-global-email-unique) |
 | `password_hash` | TEXT | No | | | argon2id, never logged |
 | `status` | TEXT | No | 'active' | | active, disabled, locked |
 | `totp_secret` | TEXT | Yes | | | 2FA for timekeepers; encrypted at rest |
@@ -297,15 +299,15 @@ Full column definitions follow for the multi-tenant additions and the load-beari
 | 10 | `addresses` | Yes | id | tenant_id | +line1/2, city, province, postal_code, country |
 | 11 | `customer_addresses` | Yes | id | tenant_id, customer_id, address_id | +address_type |
 | 12 | `kyc_documents` | Yes | id | tenant_id, customer_id | +file_uri, ocr_payload, confidence, status |
-| 13 | `equipment_types` | No (global) | id | | shared reference catalog; +name |
-| 14 | `equipment` | Yes | id | tenant_id, equipment_type_id | +serial_no, availability_status, runtime_hours |
+| 13 | `equipment_types` | No (global) | id | | shared reference catalog; +name. `Self-Loading Truck` added (cr-arkilaunch-equipment-options) |
+| 14 | `equipment` | Yes | id | tenant_id, equipment_type_id | +serial_no, availability_status, runtime_hours, option_groups (jsonb `[{name, values[]}]`, labels only, never priced), photo_credit, photo_source_url (https; cr-arkilaunch-equipment-options) |
 | 15 | `rate_cards` | Yes | id | tenant_id, equipment_type_id | time-variant (effective_from/to) |
 | 16 | `project_sites` | Yes | id | tenant_id, address_id | +latitude, longitude (weather poll) |
-| 17 | `rentals` | Yes | id | tenant_id, customer_id, project_site_id | +status, start_date, end_date |
+| 17 | `rentals` | Yes | id | tenant_id, customer_id, project_site_id | +status, start_date, end_date (the span of its units: earliest start, latest end), site_contact, site_contact_mobile (+639XXXXXXXXX, CHECK; cr-arkilaunch-qa-feedback-batch) |
 | 18 | `quotations` | Yes | id | tenant_id, customer_id, rental_id | +revision, status, diesel_price_snapshot, price_stale |
 | 19 | `quotation_items` | Yes | id | tenant_id, quotation_id, equipment_type_id, rate_card_id | +quantity, mobilization_km, demobilization_km |
 | 20 | `rental_contracts` | Yes | id | tenant_id, quotation_id | +deposit_required, terms_ref, status |
-| 21 | `equipment_assignments` | Yes | id | tenant_id, equipment_id, rental_id | +start, end, status (double-book guard) |
+| 21 | `equipment_assignments` | Yes | id | tenant_id, equipment_id, rental_id | +start, end, status (double-book guard). Each unit keeps its own window; an extension (`booking_change_requests.assignment_id`) moves only its unit (cr-arkilaunch-qa-feedback-batch). +selected_options (jsonb, one choice per the unit's option group; cr-arkilaunch-equipment-options) |
 | 22 | `edtr` | Yes | id | tenant_id, rental_id, equipment_id | +source, ocr_payload, status |
 | 23 | `edtr_line_items` | Yes | id | tenant_id, edtr_id | +hours_active, hours_idle, notes |
 | 24 | `edtr_reconciliations` | Yes | id | tenant_id, edtr_id, counterpart_edtr_id, verified_by | the deduction gate |
@@ -320,6 +322,10 @@ Full column definitions follow for the multi-tenant additions and the load-beari
 | 33 | `refresh_tokens` | Yes | id | tenant_id, user_id, parent_id | RFC-1; token-family lineage, hashed tokens |
 | 34 | `diesel_price_readings` | No (global) | id | | RFC-3; DOE-scrape + manual-entry price cache |
 | 35 | `pricing_parameters` | Yes | id | tenant_id | RFC-3; time-variant per-tenant pricing inputs |
+
+*Added after lock by [cr-arkilaunch-coupons.md](cr-arkilaunch-coupons.md) (migration 0057; not renumbered):* `coupons` (tenant-scoped; code, discount_type, discount_value, expires_at, max_uses, once_per_customer, redeemed_count, active) and `coupon_redemptions` (tenant-scoped; coupon_id, customer_id, invoice_id UNIQUE, discount_php).
+
+*Truck routing addendum ([cr-arkilaunch-qa-truck-routing.md](cr-arkilaunch-qa-truck-routing.md), migration 0070):* `truck_requests` retains ordered `route_cities` JSONB, `route_minutes`, `dispatched_at` and `eta_at`; `dispatched` follows `paid`. New tenant-scoped `truck_ban_rules` stores city, province, weekday numbers, JSONB time windows, optional minimum GVW, permit note and verified flag. It has `(tenant_id, city, province)` uniqueness, tenant-leading index and full FORCE RLS. Unverified Metro Manila examples are seeded for existing tenants and on future tenant insertion.
 
 **Key relationships:**
 - Tenant has many Users, Customers, Equipment, RateCards, ProjectSites, Subscriptions (1:N), and is the isolation root for every tenant-owned row.
@@ -461,6 +467,12 @@ erDiagram
 
 ## 4. API Design & External Integrations
 
+**Luzon maps addendum (CR: luzon-maps):** Truck estimate/create geocoding and supplied pins, customer site creation, and project site coordinate creation/update reject locations outside Luzon mainland with 422 `outside_luzon_mainland`. A shared OSM-derived coastline polygon supplies the test; existing records are not migrated. Site hub units include the existing equipment public photo URL for the on-site map pin, under the same tenant transaction.
+
+**Customer site photo map URL (CR: truck-panel-reveal):** `GET /me/sites/:id/photo-url` requires `booking:read` and customer identity. The service checks the requested site belongs to that user inside a tenant RLS transaction, then selects its newest non-rejected `site_photo` document. The controller signs only the stored file key for a five-minute private download URL. A site without a photo returns `url: null`.
+
+**Truck routing addendum (CR: qa-truck-routing):** `POST /me/truck-requests/estimate` and request creation prefer ORS `driving-hgv` via `ORS_API_KEY`; failed or absent ORS uses OSRM with `truckSafe=false`. Staff route reads return ordered cities, which are populated asynchronously after creation and lazily for older requests. `GET /truck-ban-rules` requires `pricing:manage` or `report:read` (admin/owner); `POST /truck-ban-rules` and `PUT/DELETE /truck-ban-rules/:id` require `pricing:manage`. Every query is tenant scoped. `POST /truck-requests/:id/dispatch` requires a paid trip and `pricing:manage`, stores the arrival ETA after applying route-city ban windows, and notifies the customer. Route-city geocoding and external routing run outside tenant transactions.
+
 **API style:** REST over HTTPS, JSON, versioned under `/api/v1`. Passport-JWT bearer auth; every tenant route runs inside the RLS transaction described in §3. Request and response bodies validated with Zod (shared client/server schemas via `nestjs-zod` under evaluation).
 
 **OpenAPI / contract source:** Inline below for Must-Have paths; the OCR pipeline contract is detailed in [RFC-2](rfc-arkilaunch-ocr-edtr-reconciliation.md) and the quotation/diesel contract in [RFC-3](rfc-arkilaunch-quotation-pricing-engine.md).
@@ -498,6 +510,8 @@ erDiagram
 | `PATCH` | `/api/v1/sites/:id/deployments/:assignmentId/return` | Return deployed equipment | PRD-F4 |
 | `GET` | `/api/v1/weather/advisories` | Active advisories across every tenant site | PRD-F5 |
 | `GET` | `/api/v1/incidents` | Liability incident log, read from `events` (no new table) | PRD-F5 |
+| `GET` | `/api/v1/incidents/companies` | Used-despite-warning incidents per renting company, dismissed left out (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
+| `PATCH` | `/api/v1/incidents/:id` | Review status `open/acknowledged/dismissed` + note (a dismissal needs one), audit-logged; never money (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `GET` | `/api/v1/notifications`, `PATCH /api/v1/notifications/:id/read` | The caller's own notifications feed (`cr-arkilaunch-f9-read-surface.md`) | cross-cutting |
 | `GET` | `/api/v1/reports/financial` | Invoiced/paid/deducted totals by period (QAD-T8's financial half) | PRD-F4 |
 
@@ -635,7 +649,7 @@ Response 409:
 { "error": "equipment_unavailable", "equipment_id": uuid,
   "alternatives": [uuid] }
 ```
-Availability is checked against `equipment_assignments`; an unavailable unit returns 409 with alternatives and never overbooks (US-09).
+Availability is checked against `equipment_assignments`; an unavailable unit returns 409 with alternatives and never overbooks (US-09). The same unit twice in one request with overlapping windows is refused as 409 `equipment_unavailable`, `reason: overlaps_in_cart`. Optional `site_contact_mobile` takes a PH mobile only (cr-arkilaunch-qa-feedback-batch). Each item's `selectedOptions` must answer every option group on its unit with one of that unit's choices and nothing else, else 422 `invalid_options` (cr-arkilaunch-equipment-options).
 
 ### `POST /api/v1/webhooks/paymongo` · PRD-F2
 
@@ -802,28 +816,43 @@ sequenceDiagram
 **Data protection:**
 - PII / sensitive data: KYC and ID document images are sensitive personal information under RA 10173. Data minimization at capture, short-TTL signed URLs, retention limits, and region residency (SE Asia target); no PII (raw SEC/TIN, card/account numbers, ID images) in logs or analytics property values. Detail in the CLR.
 - Payments: PayMongo hosted checkout keeps card/account data out of our boundary entirely (no PAN/account stored; PCI-DSS L1 on PayMongo's side). We store only the returned `provider_ref` and status.
-- Secrets management: environment variables per platform (Vercel, Azure Container Apps, Supabase); never committed. Azure DI keys, PayMongo secret, Open-Meteo key, DB creds live in env only.
+- Secrets management: environment variables per platform (GitHub Environments for the Cloudflare deploy token and the frontend's build-time `VITE_*` values, Azure Container Apps, Supabase); never committed. Azure DI keys, PayMongo secret, Open-Meteo key, DB creds live in env only.
 - Input validation: Zod schemas on all API inputs (shared with the client where practical); Drizzle parameterized queries (no string-built SQL).
 - Webhooks: PayMongo signature verified before body processing; idempotency on `provider_ref` UNIQUE.
 - Transport: HTTPS everywhere, TLS 1.3 terminated at Cloudflare; private networking to the DB; static egress IPs; WAF and L3/L4/L7 DDoS at the edge.
 
 ---
 
+### 5.1 Customer support API (CR: customer-qa-payments-help)
+
+Support tickets are tenant-owned and accessed within `withTenantTx`. Customer routes also require ownership. Staff routes reuse `user:manage` and restrict actors and assignees to tenant admin/owner users. Messages are plain text. The additive table and method-list amendment are recorded in [cr-arkilaunch-customer-qa-payments-help.md](cr-arkilaunch-customer-qa-payments-help.md).
+
+| Method | Endpoint | Permission | Behaviour |
+|---|---|---|---|
+| POST | `/me/tickets` | `booking:create`, customer | Create with category, subject (1-120), message (1-4000), optional own booking ID; return ticket code. |
+| GET | `/me/tickets` | `booking:read`, customer | List own tickets. |
+| GET | `/me/tickets/:id` | `booking:read`, customer | Own ticket, otherwise 404. |
+| GET | `/tickets` | `user:manage`, admin/owner | Tenant tickets; subject/code search, status filter, limit/offset paging. |
+| GET | `/tickets/:id` | `user:manage`, admin/owner | Tenant ticket detail. |
+| PATCH | `/tickets/:id` | `user:manage`, admin/owner | Update status, priority, same-tenant staff assignee; notify customer on status change. |
+
+---
+
 ## 6. Infrastructure, CI/CD & Deployment
 
-**Hosting:** Vercel (React frontend), Azure Container Apps (persistent NestJS API + ACA Jobs cron/workers), Supabase (PostgreSQL + Storage), Cloudflare (WAF + DDoS + TLS 1.3). This corrects the naive "backend on Vercel serverless" reading: serverless cannot run the scheduler or the async OCR/reconciliation workers (scrutiny G-6), so the backend is a persistent host and Vercel keeps the frontend only.
+**Hosting:** Cloudflare Workers static assets (React frontend, `apps/web/wrangler.jsonc`, deployed by `deploy.yml`'s `web` job; CR: cloudflare-frontend), Azure Container Apps (persistent NestJS API + ACA Jobs cron/workers), Supabase (PostgreSQL + Storage), Cloudflare (WAF + DDoS + TLS 1.3). This corrects the naive "backend on serverless" reading: serverless cannot run the scheduler or the async OCR/reconciliation workers (scrutiny G-6), so the backend is a persistent host and the edge serves the static frontend only.
 
-**Public-route prerendering (CR: frontend-storefront-shell).** The frontend is a client-rendered SPA, but `build-arkilaunch.md` §5.2 requires public marketing/booking pages to be crawlable HTML, not an empty client shell. Rather than adopting SSR (which would replace the pinned Vite/TanStack Router stack), the deploy pipeline runs a Playwright-driven prerender step (`apps/web/scripts/prerender.mjs`) after `vite build`: it serves the built `dist/`, visits each public route (`/`, `/equipment`, `/equipment/:id` for the current catalog fixtures, `/contact`, `/help`, `/terms`, `/privacy`), and writes the rendered `outerHTML` back to `dist/<route>/index.html` with `noindex` swapped for `index, follow`, a canonical link, Open Graph tags, and (on `/` only) `Organization` + `SoftwareApplication` JSON-LD. Every other route (`/app/*`, `/account/*`, `/field/*`, `/platform`) is never prerendered and keeps serving the default `dist/index.html` shell, which carries `noindex, nofollow` -- Vercel's static-file lookup serves the specific prerendered file where one exists (via `vercel.json`'s catch-all rewrite to `/index.html`, which static files take priority over) and falls back to the noindexed SPA shell everywhere else. This is deliberately a build script, not a new SSR framework: zero new dependencies (Playwright is already a devDependency for e2e), and no change to the pinned stack in §1.
+**Public-route SEO head (CR: tenant-brand-kit, superseding the prerender of CR: frontend-storefront-shell).** The frontend stays a client-rendered SPA, and one shell is served on every host, so the head is written per request at the edge instead: the Cloudflare Worker script `apps/web/worker/index.ts` reads the host tenant's public branding (`GET /catalog/tenant`, and `GET /catalog/equipment/:id` on a detail page; cached 5 minutes per slug) and rewrites the shell with that tenant's title, description, canonical URL, Open Graph/Twitter tags, favicon, theme color, first-paint brand variables and, on `/`, `Organization` JSON-LD. It lifts `noindex` to `index, follow` only on the public paths (`/`, `/equipment`, `/equipment/:id`, `/contact`, `/help`, `/terms`, `/privacy`) and serves a per-tenant `robots.txt` and `sitemap.xml`; every other route keeps the shell's `noindex, nofollow`. Built files under `/assets` and `/fonts` bypass the script (`run_worker_first` in `apps/web/wrangler.jsonc`). Any failure serves the untouched shell. The old `scripts/prerender.mjs` is deleted: it was hard-coded to Almara, never ran on deploy, and on a shared shell would have served Almara's HTML on every tenant host. The tag builders are pure functions in `apps/web/src/lib/brand.ts`, shared with the SPA so client titles match. No new dependency and no change to the pinned stack in §1.
 
 **Environments:**
 - `dev`: Local Docker Compose (Postgres + API) mirroring the prod schema; feature branches off `dev`. Azure DI, PayMongo, Open-Meteo run against sandbox/test keys.
-- `staging`: `staging` branch deploys to a Vercel preview + an ACA staging revision + a Supabase staging project. Full integration, including PayMongo test webhooks and Playwright E2E.
-- `prod`: `main` branch deploys to Vercel production + ACA production + the production Supabase project, behind Cloudflare. Anchor tenant (Almara) only during the pilot, module by module behind per-feature flags.
+- `staging`: `staging` branch deploys the frontend Worker + an ACA staging revision + a Supabase staging project. (Pilot reality: `dev` is staging, served at `https://arkilaunch.app`; CR: pilot-honesty, cloudflare-frontend.) Full integration, including PayMongo test webhooks and Playwright E2E.
+- `prod`: `main` branch deploys the frontend to Cloudflare Workers (prod host decided when prod is provisioned) + ACA production + the production Supabase project, behind Cloudflare. Anchor tenant (Almara) only during the pilot, module by module behind per-feature flags.
 
 **CI/CD:** GitHub Actions on push/PR: lint, type-check, Vitest unit, Drizzle migration check (expand/contract compatibility), Postman/Newman API suite, Playwright E2E on the two load-bearing flows (OCR to reconciliation to deduction; quote to payment, including sad and abuse paths). Merge to `staging` deploys staging; a tagged release on `main` deploys prod. The CI pipeline is the single source of truth for what is live (feeds the §9 rollback).
 
 **Edge / weather / diesel operational notes:**
-- Cloudflare WAF fronts every public route; the booking portal (`/t/:tenantSlug`) additionally gets bot mitigation.
+- Cloudflare WAF fronts every public route; the booking portal (`/t/:tenantSlug`) additionally gets bot mitigation. **Addendum (2026-09-27, `cr-arkilaunch-turnstile.md`):** true for the frontend Worker only; the API is reached on its ACA FQDN. Public auth writes are gated by Turnstile instead (flag `TURNSTILE_ENABLED`, fails closed), and the throttle keys on the envoy-appended `X-Forwarded-For` hop, never on a client-settable `CF-Connecting-IP`.
 - **Open-Meteo commercial plan** (the free tier is non-commercial, up to 10k/day, CC BY 4.0; ArkiLaunch is commercial, FC-7). Quota and cost alerting live in OPS. Fallback: the last-known Luzon reading persisted per site, served with `is_stale: true`. **Addendum (2026-08-20, `cr-arkilaunch-open-meteo-free-tier.md`): the free tier ships instead** (keyless, 10,000 calls/day). Quota alerting is restated as the free-tier cap; the non-commercial-use restriction is an accepted, open exposure -- see the CR.
 - **Diesel-price source is resolved** (G-3 closed) in [RFC-3](rfc-arkilaunch-quotation-pricing-engine.md): hybrid DOE scrape + manual override. The current price is snapshotted into each quotation for reproducibility regardless of source.
 - ACA Jobs guard overlapping cron runs via a replica/parallelism limit or a Postgres advisory lock.

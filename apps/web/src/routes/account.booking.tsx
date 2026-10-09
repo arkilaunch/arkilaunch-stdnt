@@ -1,20 +1,24 @@
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BookingDetailResponse } from '@arkilaunch/shared';
+import { bookingDays, type BookingDetailResponse } from '@arkilaunch/shared';
+import { WeeklyBillingCard } from './statement.js';
 import { accountLayoutRoute } from './_account.js';
-import { bookingsQueries, equipmentQueries } from '../lib/queries.js';
+import { bookingsQueries, quotesQueries } from '../lib/queries.js';
+import { QuoteLines } from '../components/quote-lines.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { Surface } from '../components/surface.js';
-import { Button } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
 import { StatusPill, type StatusTone } from '../components/status-pill.js';
-import { CheckIcon, ClockIcon } from '../components/icons.js';
+import { Check, Clock } from 'lucide-react';
 import { Input } from '../components/input.js';
+import { Select } from '../components/select.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
 import { useToast } from '../components/toast.js';
+import { MyEquipmentWeather } from '../components/equipment-weather.js';
 import { apiErrorText, apiPatch, apiPost } from '../lib/api-client.js';
-import { formatDate, formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { formatDate, formatDateTime, formatPeso, formatStatus, shortCode } from '../lib/format.js';
 
 const STATUS_TONES: Record<string, StatusTone> = {
   confirmed: 'recon-approved',
@@ -24,14 +28,7 @@ const STATUS_TONES: Record<string, StatusTone> = {
   cancelled: 'recon-failed',
 };
 
-/**
- * How far through the hire we are, as a percentage.
- *
- * Returns null rather than a number whenever the window cannot be measured
- * -- no end date, an unparseable date, or a zero-length window -- so the
- * caller shows nothing instead of a confident "0% complete" on a booking
- * whose dates simply are not known yet.
- */
+// Null when the window cannot be measured, so the caller shows nothing rather than 0%.
 export function leaseProgress(
   start: Date | string,
   end: Date | string | null,
@@ -48,45 +45,90 @@ export function leaseProgress(
   return { pct, daysRemaining };
 }
 
-function MachineCard({ equipmentId }: { equipmentId: string }) {
-  const fleet = useQuery(equipmentQueries.list());
-  const match = fleet.data?.items.find((item) => item.id === equipmentId);
+type BookingItem = BookingDetailResponse['items'][number];
 
+export function rentalDuration(start: Date | string, end: Date | string | null): number | null {
+  const from = new Date(start).getTime();
+  const to = end ? new Date(end).getTime() : NaN;
+  if (!end || !Number.isFinite(from) || !Number.isFinite(to) || to <= from) return null;
+  return bookingDays(start, end);
+}
+
+function CostBreakdown({ booking }: { booking: BookingDetailResponse }) {
   return (
-    <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-      <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
-        Machine on hire
-      </h2>
-      {match ? (
-        <>
-          <p className="font-display text-xl font-semibold text-text">{match.model}</p>
-          <p className="font-mono text-sm text-text-muted">
-            Serial {match.serialNo} &middot; {shortCode('equipment', equipmentId)}
-          </p>
-          {/* The frame prints horsepower, operating weight and fuel system
-              beside the machine. EquipmentSummaryResponse carries model,
-              serial, status and runtime hours -- no spec sheet -- so the
-              strip shows what the fleet record actually knows. */}
-          <dl className="grid grid-cols-2 gap-3 border-t border-border pt-3 text-sm">
-            <div>
-              <dt className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-                Status
-              </dt>
-              <dd className="text-text">{formatStatus(match.availabilityStatus)}</dd>
-            </div>
-            <div>
-              <dt className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-                Runtime hours
-              </dt>
-              <dd className="font-mono text-text">{match.runtimeHours}</dd>
-            </div>
-          </dl>
-        </>
+    <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 border border-primary p-5">
+      <h2 className="text-heading-md font-semibold text-text">Equipment cost breakdown</h2>
+      <p className="text-sm text-text-muted">Equipment costs follow your saved quote and may be grouped by equipment category. Each machine's rental dates and days are shown below.</p>
+      {booking.quotation && booking.quotation.totalPhp !== null ? (
+        <DataPanel
+          title="Cost breakdown"
+          options={quotesQueries.detail(booking.quotation.id)}
+          emptyTitle="No itemized costs yet"
+          emptyDescription="The rental team has not added equipment costs to this quote yet."
+          isEmpty={(quote) => quote.lineItems.length === 0}
+          render={(quote) => (
+            <>
+              <p className="text-sm text-text-muted">Quote revision {quote.revision} &middot; {formatStatus(quote.status)}</p>
+              <QuoteLines quote={quote} detailed />
+              <p className="text-sm text-text-muted">Quoted line totals include any agreed price adjustments and line-level charges. Delivery, collection and booking discounts are shown separately. Rental days describe the booked period; pricing follows the units and rates shown above. Deposits, payments and actual usage invoices are separate from this quoted cost.</p>
+            </>
+          )}
+        />
       ) : (
-        <p className="font-mono text-sm text-text-muted">{shortCode('equipment', equipmentId)}</p>
+        <p className="text-sm text-text-muted">Your equipment costs will appear here once the rental team prepares your quote.</p>
       )}
     </Surface>
   );
+}
+
+function MachineCard({ item, onSite }: { item: BookingItem; onSite: boolean }) {
+  const { equipmentId } = item;
+  const days = rentalDuration(item.start, item.end);
+  const progress = onSite && item.status === 'active' ? leaseProgress(item.start, item.end) : null;
+
+  return (
+    <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-semibold text-text">{item.equipmentName ?? shortCode('equipment', equipmentId)}</h2>
+        <span className="text-sm text-text-muted">{formatStatus(item.status)}</span>
+      </div>
+      <dl className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <dt className="font-medium text-text-muted">Start</dt>
+          <dd className="text-text">{formatDate(item.start)}</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-text-muted">Return</dt>
+          <dd className="text-text">{item.end ? formatDate(item.end) : 'Open ended'}</dd>
+        </div>
+      </dl>
+      <p className="text-base font-semibold text-text">
+        {days === null ? 'Rental duration not yet confirmed' : `${days} rental day${days === 1 ? '' : 's'}`}
+      </p>
+      {progress && (
+        <div className="flex flex-col gap-1">
+          <div
+            role="progressbar"
+            aria-valuenow={progress.pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Hire progress, ${item.equipmentName ?? 'machine'}`}
+            className="h-2 w-full overflow-hidden rounded-sm bg-surface-sunk"
+          >
+            <div className="h-full bg-primary" style={{ width: `${progress.pct}%` }} />
+          </div>
+          <p className="text-sm text-text-muted">
+            {progress.pct}% complete &middot; {progress.daysRemaining} day{progress.daysRemaining === 1 ? '' : 's'} remaining
+          </p>
+        </div>
+      )}
+    </Surface>
+  );
+}
+
+function earliestStart(items: { start: Date | string }[]): string | null {
+  if (items.length === 0) return null;
+  return new Date(Math.min(...items.map((item) => new Date(item.start).getTime()))).toISOString();
 }
 
 export interface TimelineStep {
@@ -95,24 +137,18 @@ export interface TimelineStep {
   detail: string | null;
 }
 
-/**
- * Where the booking is in the journey, derived from the records that prove
- * each step: an accepted quote, a paid payment, and the booking status staff
- * move on site (`active` once delivered, `completed` once returned).
- */
 export function bookingTimeline(booking: BookingDetailResponse): TimelineStep[] {
-  const first = booking.items[0];
-  const onSite = booking.status === 'active' || booking.status === 'completed';
+  const firstIn = earliestStart(booking.items);
+  const lastOut = latestEnd(booking.items);
+  const { onSite, paid } = bookingStage(booking);
   const returned = booking.status === 'completed';
-  const paid =
-    onSite || booking.status === 'confirmed' || booking.payments.some((payment) => payment.status === 'paid');
   const quoted = booking.quotation?.status === 'accepted';
   return [
     { label: 'Requested', done: true, detail: formatDate(booking.createdAt) },
     { label: 'Price agreed', done: quoted || paid, detail: booking.quotation ? formatPeso(booking.quotation.totalPhp) : null },
     { label: 'Paid', done: paid, detail: null },
-    { label: 'Delivered', done: onSite, detail: first ? formatDate(first.start) : null },
-    { label: 'Returned', done: returned, detail: first?.end ? formatDate(first.end) : null },
+    { label: 'Delivered', done: onSite, detail: firstIn ? formatDate(firstIn) : null },
+    { label: 'Returned', done: returned, detail: lastOut ? formatDate(lastOut) : null },
   ];
 }
 
@@ -131,14 +167,14 @@ function Timeline({ booking }: { booking: BookingDetailResponse }) {
           <span
             aria-hidden="true"
             className={[
-              'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
+'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border',
               step.done ? 'border-success bg-success text-white' : 'border-border bg-surface text-text-muted',
             ].join(' ')}
           >
-            {step.done ? <CheckIcon /> : null}
+            {step.done ? <Check className="size-full" /> : null}
           </span>
           <span className="min-w-0">
-            <span className="block font-display text-xs font-semibold uppercase tracking-[0.04em] text-text">
+            <span className="block text-sm font-medium text-text">
               {step.label}
               <span className="sr-only">{step.done ? ' (done)' : ' (not yet)'}</span>
             </span>
@@ -152,28 +188,21 @@ function Timeline({ booking }: { booking: BookingDetailResponse }) {
 
 function NextStep({ booking }: { booking: BookingDetailResponse }) {
   const quote = booking.quotation;
-  const paid = booking.status === 'confirmed' || booking.payments.some((payment) => payment.status === 'paid');
-  if (booking.status === 'cancelled' || paid) return null;
+  const { paid, cancelled } = bookingStage(booking);
+  if (cancelled || paid) return null;
   const toNegotiation = (label: string) => (
-    <Link to="/account/negotiation/$bookingId" params={{ bookingId: booking.id }}>
-      <Button variant="primary">{label}</Button>
-    </Link>
+    <Link to="/account/negotiation/$bookingId" params={{ bookingId: booking.id }} className={buttonClass('primary')}>{label}</Link>
   );
   if (!quote) return toNegotiation('Talk to the rental team');
   if (quote.status === 'approved') return toNegotiation('Review your quote');
   if (quote.status === 'accepted') {
     return (
-      <Link to="/account/checkout/$bookingId" params={{ bookingId: booking.id }}>
-        <Button variant="primary">Pay now</Button>
-      </Link>
+      <Link to="/account/checkout/$bookingId" params={{ bookingId: booking.id }} className={buttonClass('primary')}>Pay now</Link>
     );
   }
   return toNegotiation('Open negotiation');
 }
 
-// What a customer can see grows with the booking: before payment only the
-// request and its quote; once paid, invoices, payments and the deposit;
-// once the machine is on site, hire progress and the deposit being used.
 export function bookingStage(booking: BookingDetailResponse) {
   const onSite = booking.status === 'active' || booking.status === 'completed';
   const paid = onSite || booking.status === 'confirmed' || booking.payments.some((payment) => payment.status === 'paid');
@@ -184,7 +213,7 @@ function DepositCard({ booking }: { booking: BookingDetailResponse }) {
   const { required, totalDeducted, deductions } = booking.deposit;
   return (
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-      <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">Deposit</h2>
+      <h2 className="text-sm font-medium text-text-muted">Deposit</h2>
       {required === null ? (
         <p className="text-sm text-text-muted">No deposit is held against this booking yet.</p>
       ) : (
@@ -222,11 +251,13 @@ function ChangeRequests({ booking }: { booking: BookingDetailResponse }) {
   if (booking.changeRequests.length === 0) return null;
   return (
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-2 p-5">
-      <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">Your requests</h2>
+      <h2 className="text-sm font-medium text-text-muted">Your requests</h2>
       {booking.changeRequests.map((request) => (
         <div key={request.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
           <span className="text-text">
-            {request.kind === 'extend' ? `Extend to ${formatDate(request.requestedEnd)}` : 'Cancel booking'}
+            {request.kind === 'extend'
+              ? `Extend ${booking.items.find((item) => item.id === request.assignmentId)?.equipmentName ?? 'all machines'} to ${formatDate(request.requestedEnd)}`
+              : 'Cancel booking'}
           </span>
           <span className="text-text-muted">{formatStatus(request.status)}</span>
         </div>
@@ -236,9 +267,10 @@ function ChangeRequests({ booking }: { booking: BookingDetailResponse }) {
 }
 
 function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
-  const first = booking.items[0];
   const { paid, onSite } = bookingStage(booking);
-  const progress = first && onSite ? leaseProgress(first.start, first.end) : null;
+  const firstIn = earliestStart(booking.items);
+  const lastOut = latestEnd(booking.items);
+  const several = booking.items.length > 1;
   const invoiceTotal = booking.invoices.reduce((sum, invoice) => sum + invoice.amount, 0);
   const paidTotal = booking.payments
     .filter((payment) => payment.status === 'paid')
@@ -251,18 +283,14 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
           <Timeline booking={booking} />
           <NextStep booking={booking} />
         </Surface>
+        <CostBreakdown booking={booking} />
         {booking.items.map((item) => (
-          <MachineCard key={`${item.equipmentId}-${String(item.start)}`} equipmentId={item.equipmentId} />
+          <MachineCard key={item.id} item={item} onSite={onSite} />
         ))}
 
-        {/* A booking with no equipment lines is a real state in this data --
-            the seeded active booking has none -- and the page used to fall
-            through to the timeline's "no return date" copy, which told the
-            customer the wrong thing about a booking that has no machine on
-            it at all. Say which it is. */}
         {booking.items.length === 0 && (
           <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-2 p-5">
-            <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
+            <h2 className="text-sm font-medium text-text-muted">
               Machine on hire
             </h2>
             <p className="text-sm text-text-muted">
@@ -272,67 +300,35 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
           </Surface>
         )}
 
-        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
-              {onSite ? 'Lease timeline' : paid ? 'Scheduled dates' : 'Requested dates'}
+        {booking.items.length > 0 && (
+          <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
+            <h2 className="text-sm font-medium text-text-muted">
+              {onSite ? 'Hire period' : paid ? 'Scheduled dates' : 'Requested dates'}
             </h2>
-            {progress && (
-              <p className="font-display text-sm font-semibold text-text">
-                {progress.daysRemaining} day{progress.daysRemaining === 1 ? '' : 's'} remaining
+            {several && (
+              <p className="text-sm text-text-muted">
+                Each machine keeps its own dates, shown on its card. This is the whole booking, first machine in to
+                last one back.
               </p>
             )}
-          </div>
-
-          {progress ? (
-            <>
-              <div
-                role="progressbar"
-                aria-valuenow={progress.pct}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label="Lease progress"
-                className="h-2 w-full overflow-hidden rounded-sm bg-surface-sunk"
-              >
-                <div className="h-full bg-primary" style={{ width: `${progress.pct}%` }} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="text-sm font-medium text-text-muted">{several ? 'First start' : 'Start date'}</p>
+                <p className="text-text">{firstIn ? formatDate(firstIn) : '--'}</p>
               </div>
-              <p className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-                {progress.pct}% complete
-              </p>
-            </>
-          ) : !onSite ? null : (
-            <p className="text-sm text-text-muted">
-              {booking.items.length === 0
-                ? 'This booking has no equipment lines, so there is no hire period to track.'
-                : 'No return date is set on this booking yet, so there is no progress to show.'}
-            </p>
-          )}
-
-          <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-2">
-            {first && (
-              <>
-                <div>
-                  <p className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-                    Start date
-                  </p>
-                  <p className="text-text">{formatDate(first.start)}</p>
-                </div>
-                <div>
-                  <p className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
-                    Return date
-                  </p>
-                  <p className="text-text">{first.end ? formatDate(first.end) : 'Open ended'}</p>
-                </div>
-              </>
-            )}
-          </div>
-        </Surface>
+              <div>
+                <p className="text-sm font-medium text-text-muted">{several ? 'Last return' : 'Return date'}</p>
+                <p className="text-text">{lastOut ? formatDate(lastOut) : 'Open ended'}</p>
+              </div>
+            </div>
+          </Surface>
+        )}
       </div>
 
       <div className="flex min-w-0 flex-col gap-4">
       {!paid ? (
         <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-          <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">Price</h2>
+          <h2 className="text-sm font-medium text-text-muted">Price</h2>
           {booking.quotation?.totalPhp != null ? (
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-text-muted">Quoted ({formatStatus(booking.quotation.status)})</span>
@@ -341,10 +337,17 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
           ) : (
             <p className="text-sm text-text-muted">The rental team is preparing your quote. Invoices and your deposit show here once you pay.</p>
           )}
+          {booking.status === 'pending' && booking.holdExpiresAt && (
+            <p className="rounded-md border border-border bg-surface-sunk px-3 py-2 text-sm text-text">
+              {new Date(booking.holdExpiresAt) > new Date()
+                ? `Your dates are held until ${formatDateTime(booking.holdExpiresAt)}. Accept the quote and pay before then to lock them; after that they may go to another customer.`
+                : 'The hold on your dates lapsed. You can still pay while they are free; contact the rental team if you need more time.'}
+            </p>
+          )}
         </Surface>
       ) : (
       <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-        <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
+        <h2 className="text-sm font-medium text-text-muted">
           Financial ledger
         </h2>
         {booking.quotation && (
@@ -371,27 +374,24 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
           <span className="font-mono text-text">{formatPeso(paidTotal)}</span>
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
-          <span className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text">
+          <span className="text-sm font-medium text-text">
             Invoiced
           </span>
-          <span className="font-mono text-lg font-semibold text-text">
+          <span className="font-mono text-heading-md text-text">
             {formatPeso(invoiceTotal)}
           </span>
         </div>
-        {/* The frame's "excl. VAT (20%)" line is not reproduced: nothing in
-            the API states a tax rate, and 20% is not the Philippine rate the
-            rest of this product is priced in. */}
+        {/* No VAT line: the API states no tax rate. */}
       </Surface>
       )}
       {paid && <DepositCard booking={booking} />}
+      {paid && <WeeklyBillingCard rentalId={booking.id} scope="me" />}
       <ChangeRequests booking={booking} />
       </div>
     </div>
   );
 }
 
-// Before paying, a customer cancels outright; after, it is a request the
-// billing team resolves (they also issue any refund).
 function CancelAction({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -437,6 +437,56 @@ function CancelAction({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
+// Approved days only, never pending. Billable = running + idle.
+export function FieldLogTable({ booking }: { booking: BookingDetailResponse }) {
+  const logs = booking.fieldLogs;
+  if (!logs || logs.days.length === 0) return null;
+  const h = (n: number) => n.toFixed(1);
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
+      <h2 className="text-sm font-medium text-text-muted">Daily logs</h2>
+      <p className="text-sm text-text">
+        Billed <span className="font-mono font-semibold">{h(logs.billable)} h</span> (running {h(logs.running)} h + idle{' '}
+        {h(logs.idle)} h). Not billed: breakdown {h(logs.breakdown)} h, weather {h(logs.weather)} h
+        {logs.otherDowntime > 0 ? `, other ${h(logs.otherDowntime)} h` : ''}.
+      </p>
+      {logs.downtimeDays > 0 && (
+        <p className="text-sm text-text-muted">
+          {logs.downtimeDays} full day{logs.downtimeDays === 1 ? ' was' : 's were'} lost to downtime. You can ask to
+          extend your rental by those days.
+        </p>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <caption className="sr-only">Approved daily logs</caption>
+          <thead>
+            <tr className="text-left text-text-muted">
+              <th className="p-2">Day</th>
+              <th className="p-2">Machine</th>
+              <th className="p-2 text-right">Running</th>
+              <th className="p-2 text-right">Idle</th>
+              <th className="p-2 text-right">Downtime</th>
+              <th className="p-2 text-right">Billed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.days.map((d) => (
+              <tr key={`${d.date}-${d.equipmentName}`} className="border-t border-border">
+                <td className="p-2">{formatDate(d.date)}</td>
+                <td className="p-2">{d.equipmentName}</td>
+                <td className="p-2 text-right font-mono">{h(d.hours.running)}</td>
+                <td className="p-2 text-right font-mono">{h(d.hours.idle)}</td>
+                <td className="p-2 text-right font-mono">{h(d.hours.breakdown + d.hours.weather + d.hours.otherDowntime)}</td>
+                <td className="p-2 text-right font-mono font-semibold">{h(d.hours.billable)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Surface>
+  );
+}
+
 function BookingDetailPage() {
   const { bookingId } = accountBookingRoute.useParams();
   const booking = useQuery(bookingsQueries.detail(bookingId));
@@ -445,8 +495,7 @@ function BookingDetailPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="My bookings"
-        title={shortCode('booking', bookingId)}
+        title={booking.data?.code ?? 'Booking'}
         description="Where this hire stands and what it has cost."
         actions={
           <>
@@ -454,13 +503,11 @@ function BookingDetailPage() {
               <StatusPill
                 tone={STATUS_TONES[status] ?? 'recon-review'}
                 label={formatStatus(status)}
-                icon={status === 'confirmed' ? <CheckIcon /> : <ClockIcon />}
+                icon={status === 'confirmed' ? <Check className="size-full" /> : <Clock className="size-full" />}
               />
             )}
             {booking.data && bookingStage(booking.data).paid && !bookingStage(booking.data).cancelled && (
-              <Link to="/account/bookings/$bookingId/extend" params={{ bookingId }}>
-                <Button variant="secondary">Extend rental</Button>
-              </Link>
+              <Link to="/account/bookings/$bookingId/extend" params={{ bookingId }} className={buttonClass('secondary')}>Extend rental</Link>
             )}
             {booking.data && <CancelAction booking={booking.data} />}
           </>
@@ -474,13 +521,22 @@ function BookingDetailPage() {
         isEmpty={(data) => !data?.id}
         render={(data) => <BookingDetail booking={data} />}
       />
+      {booking.data && <FieldLogTable booking={booking.data} />}
+      {booking.data && (status === 'active' || status === 'confirmed') && <MyEquipmentWeather siteId={booking.data.projectSiteId} />}
     </div>
   );
 }
 
-// Figma 231:5204 (Extend Rental) and 237:1855 (Extend Rental Submitted).
-// The customer asks for a new return date; staff approve it after the
-// server re-checks that no other booking has those days.
+function latestEnd(items: { end: Date | string | null }[]): string | null {
+  let latest: number | null = null;
+  for (const item of items) {
+    if (item.end === null) return null;
+    const t = new Date(item.end).getTime();
+    if (latest === null || t > latest) latest = t;
+  }
+  return latest === null ? null : new Date(latest).toISOString();
+}
+
 function ExtendRentalPage() {
   const { bookingId } = accountBookingExtendRoute.useParams();
   const navigate = useNavigate();
@@ -488,12 +544,16 @@ function ExtendRentalPage() {
   const [end, setEnd] = useState('');
   const [reason, setReason] = useState('');
   const [sent, setSent] = useState(false);
-  const currentEnd = booking.data?.items[0]?.end ?? null;
+  const units = (booking.data?.items ?? []).filter((item) => item.status !== 'cancelled' && item.status !== 'completed');
+  const [chosen, setChosen] = useState('');
+  const unit = units.find((item) => item.id === chosen) ?? (units.length === 1 ? units[0] : undefined);
+  const currentEnd = unit?.end ? new Date(unit.end).toISOString() : null;
 
   const request = useMutation({
     mutationFn: () =>
       apiPost(`/bookings/${bookingId}/change-requests`, {
         kind: 'extend',
+        assignmentId: unit?.id,
         requestedEnd: new Date(`${end}T17:00:00`).toISOString(),
         ...(reason.trim() ? { reason: reason.trim() } : {}),
       }),
@@ -509,11 +569,11 @@ function ExtendRentalPage() {
     return (
       <div className="mx-auto flex w-full max-w-xl flex-col gap-4">
         <Surface radius="md" elevation="sm" className="flex flex-col items-start gap-4 p-6">
-          <StatusPill tone="recon-review" label="Submitted" icon={<ClockIcon />} />
-          <h1 className="font-display text-2xl font-semibold text-text">Extension requested</h1>
+          <StatusPill tone="recon-review" label="Submitted" icon={<Clock className="size-full" />} />
+          <h1 className="text-display-md text-text">Extension requested</h1>
           <p className="text-sm text-text-muted">
-            The rental team checks the machines are free until {formatDate(`${end}T17:00:00`)} and
-            confirms. You get a notification either way; any extra charge is quoted before you pay it.
+            The rental team checks {unit?.equipmentName ?? 'the machine'} is free until{' '}
+            {formatDate(`${end}T17:00:00`)} and confirms. Your other machines keep their dates. You get a notification either way; any extra charge is quoted before you pay it.
           </p>
           <Button variant="primary" onClick={() => navigate({ to: '/account/bookings/$bookingId', params: { bookingId } })}>
             Back to booking
@@ -527,21 +587,43 @@ function ExtendRentalPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader eyebrow="My bookings" title="Extend rental" description={`Booking ${shortCode('booking', bookingId)}`} />
+      <PageHeader title="Extend rental" {...(booking.data ? { description: `Booking ${booking.data.code}` } : {})} />
       <Surface radius="md" elevation="sm" className="flex max-w-xl flex-col gap-4 p-6">
-        <p className="text-sm text-text-muted">
-          Currently due back {currentEnd ? formatDate(currentEnd) : 'on an open date'}.
-        </p>
         <form className="flex flex-col gap-4" onSubmit={submit}>
+          {units.length > 1 && (
+            <Select
+              label="Machine to extend"
+              id="extend-unit"
+              required
+              value={unit?.id ?? ''}
+              onChange={(e) => {
+                setChosen(e.target.value);
+                setEnd('');
+              }}
+            >
+              <option value="" disabled>
+                Select...
+              </option>
+              {units.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.equipmentName ?? 'Machine'} (due back {item.end ? formatDate(item.end) : 'open'})
+                </option>
+              ))}
+            </Select>
+          )}
+          {unit && (
+            <p className="text-sm text-text-muted">
+              {units.length === 1 && unit.equipmentName ? `${unit.equipmentName}: currently` : 'Currently'} due back{' '}
+              {currentEnd ? formatDate(currentEnd) : 'on an open date'}.
+            </p>
+          )}
           <Input label="New return date" type="date" required min={minDate} value={end} onChange={(e) => setEnd(e.target.value)} />
           <Input label="Reason (optional)" maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} />
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" variant="primary" loading={request.isPending} disabled={!end}>
+            <Button type="submit" variant="primary" loading={request.isPending} disabled={!end || !unit}>
               Request extension
             </Button>
-            <Link to="/account/bookings/$bookingId" params={{ bookingId }}>
-              <Button variant="ghost">Cancel</Button>
-            </Link>
+            <Link to="/account/bookings/$bookingId" params={{ bookingId }} className={buttonClass('ghost')}>Cancel</Link>
           </div>
           {request.isError && <p role="alert" className="text-sm text-error">{apiErrorText(request.error)}</p>}
         </form>

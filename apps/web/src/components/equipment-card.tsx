@@ -7,29 +7,21 @@ export interface EquipmentCardProps {
   imageUrl?: string;
   model: string;
   make: string;
-  // The catalog's upfront price; none reads "Price on request".
   rateValue?: number | null;
-  rateType?: string | null;
-  // No status label on the customer side: a "Deployed" badge on a card you
-  // cannot rent is click bait. An unrentable unit is greyed and inert.
+  priceNote?: string;
   unavailable?: boolean;
   rentLabel?: string;
   onRent?: () => void;
-  // Rent now opens the configure-rental dialog rather than walking to the
-  // listing, so the model name carries the route to the detail page. Without
-  // it the catalog has no way through to /equipment/$equipmentId at all.
   onViewDetails?: () => void;
 }
 
-// The Figma "Product Info Card": schematic, model, make, Rent action. The
-// unit of the storefront catalog grid.
 export function EquipmentCard({
   imageAlt,
   imageUrl,
   model,
   make,
   rateValue = null,
-  rateType = null,
+  priceNote = 'Price on request',
   unavailable = false,
   rentLabel = 'Rent',
   onRent,
@@ -37,28 +29,20 @@ export function EquipmentCard({
 }: EquipmentCardProps) {
   return (
     <div
-      className={[
-        'flex flex-col gap-4 rounded-mk-lg bg-surface-mk p-4 shadow-mk-card',
-        unavailable ? 'opacity-50 grayscale' : '',
-      ].join(' ')}
+      className="flex flex-col overflow-hidden rounded-md border border-border bg-surface transition-shadow hover:shadow-md"
     >
       <div
         aria-label={imageAlt}
         className={[
-          'relative flex h-48 items-center justify-center overflow-hidden rounded-mk-sm bg-bg-mk-frame',
+'relative flex h-52 items-center justify-center overflow-hidden bg-surface-sunk',
           imageUrl ? '' : 'p-6',
         ].join(' ')}
       >
         <EquipmentSchematic typeName={make} {...(imageUrl ? { imageUrl } : {})} className="max-h-full" />
       </div>
-      {/* min-w-0 so the name can shrink instead of forcing the row wider, and
-          the action never gives up its width to a long machine name. */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-1 flex-col gap-4 p-5">
         <div className="min-w-0">
-          {/* The machine's name is the card's heading. As a <p> the whole
-              catalog was one flat run of text with no way to jump between
-              items. */}
-          <h3 className="text-sm font-medium text-text">
+          <h3 className="text-heading-md text-text">
             {onViewDetails ? (
               <button
                 type="button"
@@ -71,14 +55,14 @@ export function EquipmentCard({
               model
             )}
           </h3>
-          <p className="text-xs text-text-muted">{make}</p>
-          <p className="text-sm font-semibold text-text" data-testid="equipment-card-price">
+          <p className="text-sm text-text-muted">{make}</p>
+          <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
             {rateValue != null
-              ? `${formatPeso(rateValue)} / ${rateType === 'daily' ? 'day' : 'hour'}`
-              : 'Price on request'}
+              ? `${formatPeso(rateValue)} / hour`
+              : priceNote}
           </p>
         </div>
-        <Button size="default" variant="primary" className="shrink-0" disabled={unavailable} onClick={onRent}>
+        <Button size="default" variant="primary" className="mt-auto self-start" disabled={unavailable} onClick={onRent}>
           {rentLabel}
         </Button>
       </div>

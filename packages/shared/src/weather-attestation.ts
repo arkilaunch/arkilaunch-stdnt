@@ -1,29 +1,17 @@
 import type { WeatherObservation } from './weather-port.js';
 import { DEFAULT_WEATHER_THRESHOLDS, evaluateSeverity, type WeatherSeverity, type WeatherThresholds } from './weather.js';
 
-// EDTR v2 (docs/proposal-edtr-weather-attestation.md, CR
-// docs/cr-arkilaunch-edtr-v2-weather.md): the timekeeper ticks the weather
-// per half-day and a reason for idle hours; the system checks those
-// against the site's own polled readings. Pure, like evaluateSeverity and
-// evaluateGate, so the sheet generator, the OCR worker and the tests read
-// the same codes in the same order.
-
-// Printed tick-box order on the sheet. The OCR parser reads boxes by
-// position, so changing an order here changes the printed form and the
-// reader together.
+// Printed tick-box order: the OCR parser reads boxes by position, so this order is the form.
 export const WEATHER_CODES = ['C', 'O', 'LR', 'HR', 'W', 'T'] as const;
 export type WeatherCode = (typeof WEATHER_CODES)[number];
 
 export const IDLE_REASONS = ['weather', 'breakdown', 'no_operator', 'client_hold', 'other'] as const;
 export type IdleReason = (typeof IDLE_REASONS)[number];
 
-// Default shift halves when the row carries no usable in/out pair,
-// minutes since midnight, Manila.
 export const DEFAULT_AM_WINDOW: [number, number] = [7 * 60, 12 * 60];
 export const DEFAULT_PM_WINDOW: [number, number] = [13 * 60, 17 * 60];
 
 export interface TimedReading {
-  // Minutes since Manila midnight on the report date.
   minute: number;
   observed: WeatherObservation;
 }
@@ -35,7 +23,7 @@ export interface HalfDaySystemView {
   worstSeverity: WeatherSeverity;
 }
 
-const SEVERITY_RANK: Record<WeatherSeverity, number> = { none: 0, watch: 1, warning: 2 };
+export const SEVERITY_RANK: Record<WeatherSeverity, number> = { none: 0, watch: 1, warning: 2 };
 
 export function summarizeReadings(
   readings: TimedReading[],
@@ -62,8 +50,57 @@ export interface ReportedWeatherDay {
   idleHours: number | null;
   idleReason: IdleReason | null;
   hoursActive: number;
+  weatherHours?: number | null;
   amWindow?: [number, number] | null;
   pmWindow?: [number, number] | null;
+}
+
+const asCode = (v: string | null | undefined): WeatherCode | null =>
+  v && (WEATHER_CODES as readonly string[]).includes(v) ? (v as WeatherCode) : null;
+
+// One reading of a day for the OCR worker and typed entries alike: v3 weather hours stand in for a weather idle reason.
+export function reportedWeatherDay(input: {
+  weatherAm?: string | null | undefined;
+  weatherPm?: string | null | undefined;
+  hoursActive: number;
+  weatherHours?: number | null | undefined;
+  idleHours?: number | null | undefined;
+  idleReason?: IdleReason | null | undefined;
+  amWindow?: [number, number] | null | undefined;
+  pmWindow?: [number, number] | null | undefined;
+}): ReportedWeatherDay {
+  const weatherHours = input.weatherHours ?? null;
+  const weatherIdle = (weatherHours ?? 0) > 0;
+  return {
+    weatherAm: asCode(input.weatherAm),
+    weatherPm: asCode(input.weatherPm),
+    idleHours: weatherIdle ? weatherHours : (input.idleHours ?? null),
+    idleReason: weatherIdle ? 'weather' : (input.idleReason ?? null),
+    hoursActive: input.hoursActive,
+    weatherHours,
+    amWindow: input.amWindow ?? null,
+    pmWindow: input.pmWindow ?? null,
+  };
+}
+
+// Ticks that mean work should have stopped. LR is printed as "light rain, work continued".
+export const BAD_WEATHER_CODES: readonly WeatherCode[] = ['HR', 'W', 'T'];
+
+// The sheet's own word against its own hours: running hours in a half the timekeeper ticked HR, W or T.
+// Evidence for a person (RFC-2), never money.
+export function workedInReportedWeather(day: ReportedWeatherDay): ('am' | 'pm' | 'day')[] {
+  if (!(day.hoursActive > 0)) return [];
+  const bad = (['am', 'pm'] as const).filter((half) =>
+    BAD_WEATHER_CODES.includes((half === 'am' ? day.weatherAm : day.weatherPm) as WeatherCode),
+  );
+  if (bad.length === 0) return [];
+  // A v2 sheet writes each half's time in/out: a filled window is proof the machine ran that half.
+  if (day.amWindow || day.pmWindow) {
+    return bad.filter((half) => (half === 'am' ? day.amWindow : day.pmWindow));
+  }
+  // ponytail: day-total heuristic without time windows; read per-half hours if false positives show up.
+  if (bad.length === 2) return ['day'];
+  return (day.weatherHours ?? 0) > 0 ? [] : bad;
 }
 
 export type WeatherDiscrepancyRule = 'D1' | 'D2';
@@ -75,12 +112,7 @@ export interface WeatherDiscrepancy {
   system: HalfDaySystemView;
 }
 
-// D1 unverified weather stoppage: idle hours put down to weather on a day
-// the site saw no advisory and less than the watch rainfall. D2 unreported
-// hazard: a warning-level half-day the sheet calls clear or cloudy while
-// the machine worked the full day. Both hold the day for a human (RFC-2);
-// neither changes money. No readings = unverifiable, never a flag against
-// the timekeeper. D3-D5 are later (CR rollout step 4).
+// Both flags hold the day for a human (RFC-2) and never change money; no readings is never a flag.
 export function compareReportedWeather(
   day: ReportedWeatherDay,
   readings: TimedReading[],
@@ -116,11 +148,7 @@ export function compareReportedWeather(
   return flags;
 }
 
-// One tick-box group read out of an Azure DI table cell: prebuilt-layout
-// writes each selection mark inside a cell as ":selected:" or
-// ":unselected:" in reading order. Exactly one ticked box of the expected
-// count gives its option; none, several, a wrong box count, or a cell under
-// the confidence gate is null (unread, never guessed).
+// Exactly one ticked box of the expected count, above the gate; anything else is null, never guessed.
 export function readTickGroup<T extends string>(
   content: string,
   options: readonly T[],

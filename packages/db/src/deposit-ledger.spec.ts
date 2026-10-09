@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { crossesLowBalance, depositForQuote, splitDeduction } from './deposit-ledger.js';
+import { coverAccruals, crossesLowBalance, depositForQuote, resolveDepositLedger, splitDeduction } from './deposit-ledger.js';
+import { customers, invoices, projectSites, rentals } from './schema/index.js';
+import { withTenantTx } from './with-tenant-tx.js';
+import postgres from 'postgres';
 
 describe('deposit rollover math', () => {
+  it('pays waiting hours from the deposit left before any weekly invoice, splitting the row it runs out on', () => {
+    const rows = [
+      { id: 'a', amount: 9000, hours: 7.5 },
+      { id: 'b', amount: 11400, hours: 9.5 },
+    ];
+    // Enough deposit: nothing to invoice.
+    const all = coverAccruals(201600, rows);
+    expect(all.remaining).toEqual([]);
+    expect(all.balanceAfter).toBe(181200);
+    // Runs out inside the second row: 3000 of it (2.5 h) from the deposit, 8400 (7 h) invoiced.
+    const part = coverAccruals(12000, rows);
+    expect(part.covered.map((c) => [c.row.id, c.amount, c.hours])).toEqual([['a', 9000, 7.5], ['b', 3000, 2.5]]);
+    expect(part.remaining.map((r) => [r.row.id, r.amount, r.hours])).toEqual([['b', 8400, 7]]);
+    // Nothing left: all invoiced.
+    expect(coverAccruals(0, rows).remaining).toHaveLength(2);
+  });
+
   it('takes the whole charge from a deposit that covers it', () => {
     expect(splitDeduction(5000, 3400)).toEqual({ deducted: 3400, accrued: 0, balanceAfter: 1600 });
   });
@@ -36,5 +56,43 @@ describe('depositForQuote', () => {
     expect(depositForQuote(settings, null)).toBe(5000);
     expect(depositForQuote(settings, 0)).toBe(5000);
     expect(depositForQuote({ minDepositPhp: 5000, depositPct: 0 }, 100000)).toBe(5000);
+  });
+});
+
+describe('resolveDepositLedger', () => {
+  it('reports totalDeducted to the cent, with no float drift', async () => {
+    const direct = postgres(process.env.DATABASE_URL_DIRECT ?? '', { max: 1 });
+    const [tenant] = await direct`select id from tenants where slug = 'test-tenant-a'`;
+    await direct.end();
+    const tenantId = (tenant as { id: string }).id;
+    const rollback = new Error('rollback');
+    await expect(
+      withTenantTx({ tenantId, userId: tenantId, role: 'admin' }, async (tx) => {
+        const [customer] = await tx.select({ id: customers.id }).from(customers).limit(1);
+        const [site] = await tx.select({ id: projectSites.id }).from(projectSites).limit(1);
+        const [rental] = await tx
+          .insert(rentals)
+          .values({
+            tenantId,
+            customerId: customer!.id,
+            projectSiteId: site!.id,
+            status: 'active',
+            startDate: new Date('2037-01-01T00:00:00Z'),
+          })
+          .returning();
+        await tx.insert(invoices).values(
+          ['100.10', '200.20'].map((amount) => ({
+            tenantId,
+            rentalId: rental!.id,
+            invoiceType: 'deposit_deduction',
+            amount,
+            status: 'issued',
+            dueDate: new Date(),
+          })),
+        );
+        expect((await resolveDepositLedger(tx, rental!.id, tenantId)).totalDeducted).toBe(300.3);
+        throw rollback;
+      }),
+    ).rejects.toBe(rollback);
   });
 });

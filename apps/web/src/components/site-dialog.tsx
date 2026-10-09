@@ -1,46 +1,29 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import type { CustomerSiteResponse } from '@arkilaunch/shared';
+import { onLuzonMainland, type CustomerSiteResponse, type SiteDocumentType } from '@arkilaunch/shared';
 import { apiErrorText, apiPost } from '../lib/api-client.js';
 import { reverseGeocode } from '../lib/reverse-geocode.js';
 import { Modal } from './modal.js';
+import { Alert } from './alert.js';
 import { Button } from './button.js';
 import { Input } from './input.js';
+import { SiteProofFields, uploadSiteDocument } from './site-proof.js';
+import { PinMap } from './pin-map.js';
 
-// Metro Manila: where most of the yard's work is.
-const DEFAULT_CENTER: L.LatLngTuple = [14.5995, 120.9842];
-
-// Leaflet's default marker points at image files the bundler does not
-// ship, so the pin is a plain CSS dot instead.
-const pinIcon = L.divIcon({
-  className: '',
-  html: '<span style="display:block;width:18px;height:18px;border-radius:50%;background:#c2410c;border:3px solid #fff;box-shadow:0 0 0 1px #0006"></span>',
-  iconSize: [18, 18],
-  iconAnchor: [9, 9],
-});
-
-/**
- * Where to deliver: typed address plus a pin the weather and deployment
- * screens read coordinates from. Click the map (or use your location) to
- * drop the pin; drag it to adjust.
- */
-export function SiteDialog({
-  open,
-  onClose,
-  customerId,
-  onCreated,
-}: {
+interface SiteDialogProps {
   open: boolean;
   onClose: () => void;
   customerId: string;
   onCreated?: (site: CustomerSiteResponse) => void;
-}) {
+}
+
+// Mounted only while open, so closing resets every field.
+export function SiteDialog(props: SiteDialogProps) {
+  return props.open ? <SiteDialogBody {...props} /> : null;
+}
+
+function SiteDialogBody({ onClose, customerId, onCreated }: SiteDialogProps) {
   const queryClient = useQueryClient();
-  const mapEl = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
   const [pin, setPin] = useState<{ lat: number; lng: number } | null>(null);
   const [line1, setLine1] = useState('');
   const [barangay, setBarangay] = useState('');
@@ -48,9 +31,12 @@ export function SiteDialog({
   const [province, setProvince] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [looking, setLooking] = useState(false);
+  const [proofType, setProofType] = useState<SiteDocumentType>('building_permit');
+  const [proof, setProof] = useState<File | null>(null);
+  const [photo, setPhoto] = useState<File | null>(null);
+  // Kept across a retry after a failed upload, so the site is never POSTed twice.
+  const created = useRef<CustomerSiteResponse | null>(null);
 
-  // A dropped or dragged pin fills the address from OpenStreetMap; the
-  // fields stay editable and a part OSM does not know is left as typed.
   async function fillFromPin(lat: number, lng: number) {
     setLooking(true);
     const found = await reverseGeocode(lat, lng);
@@ -66,46 +52,11 @@ export function SiteDialog({
   const [locateError, setLocateError] = useState<string | null>(null);
 
   function placePin(lat: number, lng: number) {
+    if (!onLuzonMainland(lat, lng)) { setLocateError('Choose a location on Luzon mainland.'); return; }
+    setLocateError(null);
     setPin({ lat, lng });
     void fillFromPin(lat, lng);
-    const map = mapRef.current;
-    if (!map) return;
-    if (markerRef.current) {
-      markerRef.current.setLatLng([lat, lng]);
-    } else {
-      markerRef.current = L.marker([lat, lng], { draggable: true, icon: pinIcon, keyboard: true, title: 'Site location' })
-        .addTo(map)
-        .on('dragend', (e) => {
-          const at = (e.target as L.Marker).getLatLng();
-          setPin({ lat: at.lat, lng: at.lng });
-          void fillFromPin(at.lat, at.lng);
-        });
-    }
   }
-
-  // The modal mounts its body only while open, so the map is built on open
-  // and torn down on close.
-  useEffect(() => {
-    if (!open) return;
-    const frame = requestAnimationFrame(() => {
-      if (!mapEl.current || mapRef.current) return;
-      const map = L.map(mapEl.current).setView(DEFAULT_CENTER, 11);
-      // ponytail: OSM's public tiles, fine at pilot volume under their usage
-      // policy; move to a paid tile source if traffic grows.
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors',
-      }).addTo(map);
-      map.on('click', (e: L.LeafletMouseEvent) => placePin(e.latlng.lat, e.latlng.lng));
-      mapRef.current = map;
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      mapRef.current?.remove();
-      mapRef.current = null;
-      markerRef.current = null;
-    };
-  }, [open]);
 
   function useMyLocation() {
     if (!navigator.geolocation) {
@@ -118,7 +69,6 @@ export function SiteDialog({
       (pos) => {
         setLocating(false);
         placePin(pos.coords.latitude, pos.coords.longitude);
-        mapRef.current?.setView([pos.coords.latitude, pos.coords.longitude], 16);
       },
       () => {
         setLocating(false);
@@ -129,45 +79,53 @@ export function SiteDialog({
   }
 
   const create = useMutation({
-    mutationFn: () =>
-      apiPost<CustomerSiteResponse>('/me/sites', {
-        customerId,
-        line1: line1.trim(),
-        ...(barangay.trim() ? { barangay: barangay.trim() } : {}),
-        city: city.trim(),
-        province: province.trim(),
-        ...(postalCode.trim() ? { postalCode: postalCode.trim() } : {}),
-        latitude: pin!.lat,
-        longitude: pin!.lng,
-      }),
+    mutationFn: async () => {
+      const site =
+        created.current ??
+        (await apiPost<CustomerSiteResponse>('/me/sites', {
+          customerId,
+          line1: line1.trim(),
+          barangay: barangay.trim() || undefined,
+          city: city.trim(),
+          province: province.trim(),
+          postalCode: postalCode.trim() || undefined,
+          latitude: pin!.lat,
+          longitude: pin!.lng,
+        }));
+      created.current = site;
+      await uploadSiteDocument(site.id, proofType, proof!);
+      await uploadSiteDocument(site.id, 'site_photo', photo!);
+      return site;
+    },
+    onError: () => void queryClient.invalidateQueries({ queryKey: ['me', 'sites'] }),
     onSuccess: async (site) => {
       await queryClient.invalidateQueries({ queryKey: ['me', 'sites'] });
       onCreated?.(site);
-      setLine1('');
-      setBarangay('');
-      setCity('');
-      setProvince('');
-      setPostalCode('');
-      setPin(null);
       onClose();
     },
   });
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (pin) create.mutate();
+    if (pin && proof && photo) create.mutate();
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Add a project site" description="Where the machines are delivered." size="lg">
-      <form onSubmit={submit} className="flex flex-col gap-4">
+    <Modal open onClose={onClose} title="Add a project site" description="Where the machines are delivered." size="lg"
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="new-site-form" variant="primary" loading={create.isPending} disabled={!pin || !proof || !photo}>
+            Save site
+          </Button>
+        </>
+      }
+    >
+      <form id="new-site-form" onSubmit={submit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
-          <div
-            ref={mapEl}
-            role="application"
-            aria-label="Map. Click to place the site pin."
-            className="h-72 w-full overflow-hidden rounded-md border border-border"
-          />
+          <PinMap label="Site location" value={pin} onChange={(at) => placePin(at.lat, at.lng)} className="h-72" />
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-text-muted" aria-live="polite">
               {pin
@@ -178,7 +136,7 @@ export function SiteDialog({
               Use my location
             </Button>
           </div>
-          {locateError && <p className="text-sm text-error">{locateError}</p>}
+          {locateError && <Alert type="error">{locateError}</Alert>}
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <Input label="Street address" required maxLength={300} value={line1} onChange={(e) => setLine1(e.target.value)} />
@@ -187,15 +145,8 @@ export function SiteDialog({
           <Input label="Province" required maxLength={120} value={province} onChange={(e) => setProvince(e.target.value)} />
           <Input label="ZIP code" inputMode="numeric" pattern="\d{4}" maxLength={4} value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
         </div>
-        {create.isError && <p className="text-sm text-error">{apiErrorText(create.error)}</p>}
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" loading={create.isPending} disabled={!pin}>
-            Save site
-          </Button>
-        </div>
+        <SiteProofFields idPrefix="new-site" proofType={proofType} onProofTypeChange={setProofType} onProofFile={setProof} onPhotoFile={setPhoto} />
+        {create.isError && <Alert type="error">{apiErrorText(create.error)}</Alert>}
       </form>
     </Modal>
   );

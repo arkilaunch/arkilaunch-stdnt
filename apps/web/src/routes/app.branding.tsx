@@ -3,16 +3,17 @@ import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
 import { BrandingForm } from '../components/branding-form.js';
 import { PageHeader } from '../components/page-header.js';
+import { TestimonialsForm } from '../components/testimonials-form.js';
 
 function BrandingPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Administration"
         title="Storefront branding"
         description="How your company looks on your storefront and in the ArkiLaunch directory."
       />
       <BrandingForm basePath="/tenants/me" />
+      <TestimonialsForm />
     </div>
   );
 }

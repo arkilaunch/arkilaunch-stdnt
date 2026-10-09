@@ -1,30 +1,12 @@
-// The EDTR screen used to render the raw ApiError as JSON. Every gate on the
-// money path answers with a machine code, and several of them are refusals by
-// design rather than faults -- a reviewer needs to know which is which, and
-// what to do next, without reading a payload.
+import { ApiError, apiErrorText, payloadField } from './api-client.js';
 
 export interface EdtrErrorExplanation {
   readonly title: string;
   readonly detail: string;
 }
 
-function codeOf(error: unknown): string | null {
-  if (typeof error !== 'object' || error === null) return null;
-  const payload = (error as { payload?: unknown }).payload;
-  if (typeof payload !== 'object' || payload === null) return null;
-  const code = (payload as { error?: unknown }).error;
-  return typeof code === 'string' ? code : null;
-}
-
-function fieldOf(error: unknown, key: string): string | null {
-  if (typeof error !== 'object' || error === null) return null;
-  const payload = (error as { payload?: Record<string, unknown> }).payload;
-  const value = payload?.[key];
-  return typeof value === 'string' ? value : null;
-}
-
 export function explainEdtrError(error: unknown): EdtrErrorExplanation {
-  switch (codeOf(error)) {
+  switch (payloadField(error, 'error')) {
     case 'reconciliation_not_found':
       return {
         title: 'No such reconciliation',
@@ -34,7 +16,7 @@ export function explainEdtrError(error: unknown): EdtrErrorExplanation {
     case 'reconciliation_belongs_to_other_edtr':
       return {
         title: 'That reconciliation belongs to a different field log',
-        detail: `It is attached to log ${(fieldOf(error, 'edtrId') ?? '').slice(0, 8)}. Approve it from that log.`,
+        detail: `It is attached to log ${String(payloadField(error, 'edtrId') ?? '').slice(0, 8)}. Approve it from that log.`,
       };
     case 'reconciliation_discrepancy':
       return {
@@ -64,6 +46,18 @@ export function explainEdtrError(error: unknown): EdtrErrorExplanation {
         detail:
           'Rate cards exist for this equipment but none is effective on the report date, so the hours cannot be priced. Nothing was deducted.',
       };
+    case 'equipment_not_deployed':
+      return {
+        title: 'That machine is not on site',
+        detail:
+          'Field logs are recorded only for a machine that is on site now on this booking. Pick it from the list, or ask the office to mark it delivered first.',
+      };
+    case 'sheet_unit_out_of_scope':
+      return {
+        title: 'This sheet is for another machine',
+        detail:
+          "The sheet's QR code names a booking or machine that is not on site at your sites. Check you photographed the right sheet.",
+      };
     case 'line_items_required':
       return {
         title: 'Transcribed hours are needed',
@@ -76,12 +70,57 @@ export function explainEdtrError(error: unknown): EdtrErrorExplanation {
         detail:
           'Automatic extraction is enabled here, so the scan alone is captured and the hours come from the extractor.',
       };
+    case 'report_date_outside_rental':
+      return {
+        title: 'That day is outside the rental',
+        detail: 'Pick a day between the rental start and its return, or check the machine was on this rental that day.',
+      };
+    case 'site_not_assigned':
+      return {
+        title: 'You are not assigned to this site',
+        detail: 'Ask the office to add you as a timekeeper for this site, then record the log again.',
+      };
     case 'file_required':
       return { title: 'The scan is missing', detail: 'A paper log needs the photographed or uploaded sheet attached.' };
     default:
       return {
         title: 'That did not go through',
-        detail: 'The request was refused and nothing was changed. The technical detail below says why.',
+        // A plain Error is our own validation message; a TypeError is a raw network failure.
+        detail:
+          error instanceof ApiError
+            ? apiErrorText(error)
+            : error instanceof Error && error.name === 'Error'
+              ? error.message
+              : 'Try again in a moment.',
       };
+  }
+}
+
+// The worker's reason for giving up on a sheet (edtr.last_error), in words a timekeeper can act on.
+export function failureText(reason: string | null | undefined): string {
+  if (!reason) return 'The sheet could not be read.';
+  const [code, rows] = reason.split(':');
+  // The worker names days by date (2026-10-11); a timekeeper reads them as the sheet prints them (10/11).
+  const days = rows?.split(',').map((d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(5, 7)}/${d.slice(8, 10)}` : d));
+  const where = days ? ` (for ${days.join(', ')})` : '';
+  switch (code) {
+    case 'missing_raw_file_uri':
+      return 'The photo never finished uploading. Take it again.';
+    case 'no_timesheet_table':
+      return 'No timesheet was found in the photo. Take it again flat and straight, with the whole sheet in the frame.';
+    case 'unreadable_date':
+      return `A date could not be read clearly${where}. Write it clearly and retake, or type the hours in.`;
+    case 'unreadable_total_hours':
+      return `The hours could not be read clearly${where}. Type the hours in from the sheet.`;
+    case 'hours_filled':
+      return `Some hours were worked out from the row's total${days ? ` (${days.join(', ')})` : ''}. Check them against the sheet before approving.`;
+    case 'row_mismatch':
+      return "The day's hours do not add up to its TOTAL. Check the sheet before approving.";
+    case 'duplicate_date':
+      return `The same date is written twice${days ? ` (${days.join(', ')})` : ''}. Correct the sheet and retake.`;
+    case 'no_dated_rows':
+      return 'No filled-in days were found on the sheet.';
+    default:
+      return 'The sheet could not be read.';
   }
 }

@@ -1,4 +1,5 @@
 import { createRoute, Link } from '@tanstack/react-router';
+import { tenantsQueries } from '../lib/queries.js';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { TenantApplication } from '@arkilaunch/shared';
@@ -7,24 +8,11 @@ import { DataPanel } from '../components/data-panel.js';
 import { EmptyState } from '../components/empty-state.js';
 import { PageHeader } from '../components/page-header.js';
 import { Surface } from '../components/surface.js';
-import { Button } from '../components/button.js';
+import { buttonClass } from '../components/button.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
-import {
-  ApplicationActions,
-  applicationsListQuery,
-} from '../components/application-actions.js';
+import { ApplicationActions } from '../components/application-actions.js';
 import { formatDate, shortCode } from '../lib/format.js';
-
-// Figma splits company approval across four frames: Pending Company Approval
-// (621:8341), Approved Companies (621:8533), Manage Company Application
-// (369:1589) and Registration Review (349:942). The API backs the first two:
-// GET /tenants/applications (pending), a SECURITY DEFINER read; approved
-// companies are managed as tenants on /admin/companies. There is no per-application query and no KYC
-// list, so the detail page reads from the pending list and says plainly what
-// it cannot show -- the same choice cr-arkilaunch-frontend-storefront-shell.md
-// made for the screens it could not wire. This pending queue is the platform
-// admin's home (the old /app/platform-applications duplicate is gone).
 
 function CompanyLink({ application }: { application: TenantApplication }) {
   return (
@@ -39,9 +27,9 @@ function CompanyLink({ application }: { application: TenantApplication }) {
 }
 
 const COLUMNS: TableColumn<TenantApplication>[] = [
-  { header: 'Company', cell: (row) => <CompanyLink application={row} /> },
+  { header: 'Company', kind: 'text', cell: (row) => <CompanyLink application={row} /> },
   {
-    header: 'Representative',
+    header: 'Representative', kind: 'text',
     cell: (row) => (
       <span className="flex flex-col">
         <span>{`${row.contactFirstName} ${row.contactLastName}`}</span>
@@ -49,8 +37,8 @@ const COLUMNS: TableColumn<TenantApplication>[] = [
       </span>
     ),
   },
-  { header: 'Submitted', cell: (row) => formatDate(row.createdAt) },
-  { header: 'Actions', cell: (row) => <ApplicationActions application={row} /> },
+  { header: 'Submitted', kind: 'date', cell: (row) => formatDate(row.createdAt) },
+  { header: 'Actions', kind: 'action', cell: (row) => <ApplicationActions application={row} /> },
 ];
 
 function CompaniesPendingPage() {
@@ -59,13 +47,12 @@ function CompaniesPendingPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Companies"
         title="Applications"
         description="Businesses waiting on a decision before they get a workspace."
       />
       <DataPanel
         title="Pending applications"
-        options={applicationsListQuery(PAGE_SIZE, offset)}
+        options={tenantsQueries.applications(PAGE_SIZE, offset)}
         emptyTitle="No companies waiting"
         emptyDescription="New company registrations appear here for review."
         isEmpty={(data) => data.total === 0}
@@ -89,7 +76,7 @@ function CompaniesPendingPage() {
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5 border-t border-border pt-3">
-      <span className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+      <span className="text-sm font-medium text-text-muted">
         {label}
       </span>
       <span className="text-text">{value}</span>
@@ -99,19 +86,16 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 
 function CompanyApplicationPage() {
   const { applicationId } = appCompanyApplicationRoute.useParams();
-  const applications = useQuery(applicationsListQuery(PAGE_SIZE, 0));
+  const applications = useQuery(tenantsQueries.applications(PAGE_SIZE, 0));
   const application = applications.data?.items.find((row) => row.applicationId === applicationId);
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Companies"
         title={application?.companyName ?? 'Company application'}
         description="Who applied, and what they told us."
         actions={
-          <Link to="/admin/applications">
-            <Button variant="ghost">Back</Button>
-          </Link>
+          <Link to="/admin/applications" className={buttonClass('ghost')}>Back</Link>
         }
       />
 
@@ -127,7 +111,7 @@ function CompanyApplicationPage() {
       {application && (
         <div className="grid gap-4 lg:grid-cols-[1fr_minmax(260px,340px)]">
           <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
-            <h2 className="font-display text-lg font-semibold text-text">Entity details</h2>
+            <h2 className="text-heading-md text-text">Entity details</h2>
             <DetailRow label="Company" value={application.companyName} />
             <DetailRow
               label="Representative"
@@ -141,20 +125,14 @@ function CompanyApplicationPage() {
 
           <div className="flex min-w-0 flex-col gap-4">
             <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
-              <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
+              <h2 className="text-sm font-medium text-text-muted">
                 Decision
               </h2>
               <ApplicationActions application={application} />
             </Surface>
 
-            {/* The frame also carries a compliance repository (business
-                permit, SEC certificate, tax ID, each with a verified date)
-                and a verification trail. GET /kyc/:id reads one document by
-                its own id and nothing lists a tenant's documents, so neither
-                panel can be populated. Recorded in the alignment report
-                rather than mocked up with sample filenames. */}
             <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-5">
-              <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted">
+              <h2 className="text-sm font-medium text-text-muted">
                 Compliance documents
               </h2>
               <p className="text-sm text-text-muted">

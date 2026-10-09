@@ -1,14 +1,17 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import type { CompanyResponse, UserSelfResponse } from '@arkilaunch/shared';
+import { localPhMobile, normalizePhMobile, type CompanyResponse, type UserSelfResponse } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
 import { companiesQueries, usersQueries } from '../lib/queries.js';
 import { apiErrorText, apiPatch, apiPost, apiPostForm } from '../lib/api-client.js';
 import { clearTokens } from '../lib/auth-client.js';
 import { companyStatusLabel } from '../lib/cart-validation.js';
 import { Surface } from '../components/surface.js';
+import { PageHeader } from '../components/page-header.js';
+import { Tabs } from '../components/tabs.js';
 import { Input } from '../components/input.js';
+import { MobileInput } from '../components/mobile-input.js';
 import { Button } from '../components/button.js';
 import { LoadError } from '../components/load-error.js';
 import { Skeleton } from '../components/skeleton.js';
@@ -26,7 +29,7 @@ function useSaveMe() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Surface radius="md" elevation="sm" className="flex flex-col gap-4 p-4 sm:p-6">
-      <h2 className="font-display text-lg font-semibold text-text">{title}</h2>
+      <h2 className="text-heading-md text-text">{title}</h2>
       {children}
     </Surface>
   );
@@ -40,12 +43,17 @@ function initials(me: UserSelfResponse) {
 function ProfileTab({ me }: { me: UserSelfResponse }) {
   const toast = useToast();
   const save = useSaveMe();
-  const [phone, setPhone] = useState(me.phone ?? '');
+  // Held as +639XXXXXXXXX; a legacy non-PH number shows blank and is kept unless retyped.
+  const initialPhone = me.phone && localPhMobile(me.phone) ? normalizePhMobile(me.phone) : '';
+  const [phone, setPhone] = useState(initialPhone);
   const [address, setAddress] = useState(me.address ?? '');
 
   const update = useMutation({
     mutationFn: () =>
-      apiPatch<UserSelfResponse>('/users/me', { phone: phone.trim() || null, address: address.trim() || null }),
+      apiPatch<UserSelfResponse>('/users/me', {
+        ...(phone !== initialPhone ? { phone: phone || null } : {}),
+        address: address.trim() || null,
+      }),
     onSuccess: (data) => {
       save(data);
       toast.success('Profile saved');
@@ -72,12 +80,12 @@ function ProfileTab({ me }: { me: UserSelfResponse }) {
           ) : (
             <span
               aria-hidden="true"
-              className="flex h-20 w-20 items-center justify-center rounded-full bg-primary font-display text-2xl font-semibold text-text"
+              className="flex h-20 w-20 items-center justify-center rounded-full bg-primary text-display-md text-text"
             >
               {initials(me)}
             </span>
           )}
-          <label className="inline-flex min-h-11 cursor-pointer items-center rounded-mk-sm border border-border px-4 text-sm font-medium text-text hover:bg-surface-sunk focus-within:outline focus-within:outline-2 focus-within:outline-focus-ring">
+          <label className="inline-flex min-h-11 cursor-pointer items-center rounded-sm border border-border px-4 text-sm font-medium text-text hover:bg-surface-sunk focus-within:outline focus-within:outline-2 focus-within:outline-focus-ring">
             {avatar.isPending ? 'Uploading…' : 'Upload a photo'}
             <input
               type="file"
@@ -96,6 +104,12 @@ function ProfileTab({ me }: { me: UserSelfResponse }) {
       </Section>
 
       <Section title="Personal information">
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <div><dt className="text-sm font-medium text-text">Contact first name</dt><dd className="break-words text-text">{me.contactFirstName || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Contact last name</dt><dd className="break-words text-text">{me.contactLastName || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Job title/position</dt><dd className="break-words text-text">{me.jobTitle || 'Not provided'}</dd></div>
+          <div><dt className="text-sm font-medium text-text">Account mobile</dt><dd className="text-text">{me.phone || 'Not provided'}</dd></div>
+        </dl>
         <form
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e: FormEvent) => {
@@ -114,7 +128,7 @@ function ProfileTab({ me }: { me: UserSelfResponse }) {
             <p className="text-sm font-medium text-text">Email</p>
             <p className="break-all text-text">{me.email}</p>
           </div>
-          <Input label="Mobile number" type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <MobileInput label="Mobile number" value={phone} onChange={setPhone} />
           <Input label="Home address" autoComplete="street-address" value={address} onChange={(e) => setAddress(e.target.value)} />
           <div className="sm:col-span-2">
             <Button type="submit" loading={update.isPending}>
@@ -131,11 +145,11 @@ function CompanyForm({ company }: { company: CompanyResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const verified = company.kycStatus === 'approved';
-  // A submitted company waiting on review takes only what the reviewer
-  // unlocked; otherwise TIN and SEC lock once verified.
   const waiting = isWaitingForReview(company);
+  // The server copies the number off a scanned SEC certificate and refuses a retyped one.
+  const secScanned = company.documents.some((d) => d.documentType === 'sec_certificate');
   const editable = (field: string) =>
-    waiting ? company.unlockedFields.includes(field) : field === 'billingAddress' || !verified;
+    !waiting && (field === 'billingAddress' || (!verified && !(field === 'secNumber' && secScanned)));
   const [tin, setTin] = useState(company.tin ?? '');
   const [secNumber, setSecNumber] = useState(company.secNumber ?? '');
   const [billingAddress, setBillingAddress] = useState(company.billingAddress ?? '');
@@ -180,6 +194,7 @@ function CompanyForm({ company }: { company: CompanyResponse }) {
         value={secNumber}
         disabled={!editable('secNumber')}
         onChange={(e) => setSecNumber(e.target.value)}
+        {...(secScanned && !verified ? { hint: 'Read from your SEC certificate.' } : {})}
       />
       <div className="sm:col-span-2">
         <Input
@@ -212,7 +227,7 @@ function CompanyTab() {
         <p className="text-sm text-text-muted">You have not registered a company yet.</p>
       )}
       {companies.data?.map((c) => <CompanyForm key={c.id} company={c} />)}
-      <Link to="/account/companies" className="text-sm font-medium text-text underline">
+      <Link to="/account/applications" className="text-sm font-medium text-text underline">
         Manage companies and documents
       </Link>
     </Section>
@@ -225,7 +240,7 @@ function SecurityTab() {
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const mismatch = confirm !== '' && confirm !== next;
-  const tooShort = next !== '' && next.length < 10;
+  const tooShort = next !== '' && next.length < 12;
 
   const change = useMutation({
     mutationFn: () => apiPost('/users/me/password', { currentPassword: current, newPassword: next }),
@@ -264,7 +279,7 @@ function SecurityTab() {
             value={next}
             onChange={(e) => setNext(e.target.value)}
             required
-            {...(tooShort ? { error: 'Use at least 10 characters.' } : {})}
+            {...(tooShort ? { error: 'Use at least 12 characters.' } : {})}
           />
           <Input
             label="Confirm new password"
@@ -342,28 +357,10 @@ function AccountSettingsPage() {
   const [tab, setTab] = useState<Tab>('Profile');
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="font-display text-2xl font-semibold text-text">Settings</h1>
-      <div role="tablist" aria-label="Settings sections" className="flex gap-1 overflow-x-auto border-b border-border">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            id={`tab-${t}`}
-            aria-selected={tab === t}
-            aria-controls="settings-panel"
-            onClick={() => setTab(t)}
-            className={[
-              'min-h-11 shrink-0 border-b-2 px-3 text-sm font-medium',
-              tab === t ? 'border-primary text-text' : 'border-transparent text-text-muted hover:text-text',
-            ].join(' ')}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-      <div id="settings-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
+      <PageHeader title="Settings" description="Your profile, companies, sign-in and notifications." />
+      <Tabs label="Settings sections" items={TABS.map((t) => ({ id: t, label: t }))} value={tab} onChange={setTab} />
+      <div id="settings-panel" role="tabpanel" aria-label={tab} className="flex flex-col gap-4">
         {query.isPending && <Skeleton label="Loading your profile" rows={2} />}
         {query.isError && (
           <LoadError

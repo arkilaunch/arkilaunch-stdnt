@@ -13,6 +13,8 @@ export default defineConfig({
   testDir: './e2e',
   webServer: {
     command: 'pnpm dev',
+    // The journeys drive the in-app negotiation chat, which is off by default.
+    env: { VITE_ENABLE_IN_APP_NEGOTIATION: 'true' },
     url: baseURL,
     ignoreHTTPSErrors: true,
     reuseExistingServer: !process.env.CI,
@@ -45,7 +47,7 @@ export default defineConfig({
     {
       name: 'mobile',
       use: { ...devices['Pixel 5'], baseURL, ignoreHTTPSErrors: true },
-      testMatch: /(storefront-ui|cart|equipment-browse|customer-journey|settings|truck-request|kyc-review-crop|field-logs)\.spec\.ts/,
+      testMatch: /(storefront-ui|cart|equipment-browse|customer-journey|settings|truck-request|kyc-review-crop|field-logs|document-scanner|signup-kyc|support-payments|storefront-testimonials|mobile-rental-journey|ux-responsive)\.spec\.ts/,
     },
   ],
 });

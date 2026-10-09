@@ -1,18 +1,9 @@
-import { index, jsonb, pgPolicy, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgPolicy, pgTable, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { appAuthenticated, tenantIsolationPolicy } from '../rls.js';
 
-// --- Global tables (not tenant-scoped; SDD §3 lists 7) ---
-
-// `tenants` is global rather than tenant-owned, so it carries
-// `tenant_self` (keyed on id) instead of the shared tenantIsolationPolicy
-// (keyed on tenant_id). The policy and its FORCE RLS have been live since
-// migration 0016, but were never expressed here -- and the drizzle-kit
-// snapshot is what `generate` diffs against, so the next generate would
-// have emitted DROP POLICY "tenant_self" ON tenants and re-opened
-// cross-tenant read of the whole tenant registry
-// (audit-db-tenant-isolation.md #1). Declared here so schema, snapshot
-// and database agree.
+// tenants is global, so it carries `tenant_self` (keyed on id). Declared here or
+// drizzle-kit generate emits DROP POLICY and re-opens the whole tenant registry.
 export const tenants = pgTable(
   'tenants',
   {
@@ -21,11 +12,16 @@ export const tenants = pgTable(
     slug: text('slug').notNull().unique(),
     status: text('status').notNull().default('onboarding'), // onboarding, active, suspended
     kycState: text('kyc_state').notNull().default('unverified'), // unverified, submitted, verified
-    // Public storefront branding (migration 0051). Written only through
-    // tenants_update_branding / tenants_set_branding_image.
+    // Written only through tenants_update_branding / tenants_set_branding_image (SECURITY DEFINER).
     logoKey: text('logo_key'),
     heroKey: text('hero_key'),
+    iconKey: text('icon_key'),
+    loginKey: text('login_key'),
     primaryColor: text('primary_color'), // #rrggbb, CHECK in 0051
+    headerColor: text('header_color'), // #rrggbb, CHECK in 0060
+    font: text('font'), // 'inter', 'plex' or NULL (Inter), CHECK in 0061
+    facebookUrl: text('facebook_url'), // https Facebook page, CHECK in 0060
+    messengerUrl: text('messenger_url'), // https m.me / Messenger link, CHECK in 0067
     tagline: text('tagline'),
     about: text('about'),
     phone: text('phone'),
@@ -33,8 +29,7 @@ export const tenants = pgTable(
     address: text('address'),
     city: text('city'),
     province: text('province'),
-    // PayMongo child account (org_..., CHECK in 0053). NULL = cash only.
-    // Written only through tenants_set_paymongo_account.
+    // NULL = cash only. Written only through tenants_set_paymongo_account.
     paymongoAccountId: text('paymongo_account_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -77,8 +72,6 @@ export const rolePermissions = pgTable('role_permissions', {
     .references(() => permissions.id),
 });
 
-// --- Tenant-owned identity/RBAC/audit tables ---
-
 export const subscriptions = pgTable(
   'subscriptions',
   {
@@ -111,14 +104,16 @@ export const users = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash').notNull(), // argon2id, never logged
     status: text('status').notNull().default('active'), // active, disabled, locked
-    totpSecret: text('totp_secret'), // 2FA; encrypted at rest. Not enrolled by this slice.
-    // Legal name read off a customer's National ID (KYC), written only by a
-    // staff decide() approval -- never set directly by the customer.
+    totpSecret: text('totp_secret'), // 2FA; encrypted at rest
+    // Written only by a staff KYC approval, never by the customer.
     firstName: text('first_name'),
     middleName: text('middle_name'),
     lastName: text('last_name'),
-    // Self-service profile (migration 0030). avatarKey is an object key in the
-    // private KYC bucket, never a public URL.
+    // Signup contact details are distinct from the staff-confirmed legal name.
+    contactFirstName: text('contact_first_name'),
+    contactLastName: text('contact_last_name'),
+    jobTitle: text('job_title'),
+    // avatarKey is a private-bucket object key, never a public URL.
     phone: text('phone'),
     address: text('address'),
     avatarKey: text('avatar_key'),
@@ -130,20 +125,14 @@ export const users = pgTable(
   },
   (table) => [
     tenantIsolationPolicy(),
-    // Live since migration 0002; declared here so `generate` stops
-    // proposing to drop it (audit-db-tenant-isolation.md #1).
+    // Declared so drizzle-kit generate stops proposing to drop it.
     unique('users_tenant_email_uq').on(table.tenantId, table.email),
     index('users_email_idx').on(table.email),
+    uniqueIndex('users_email_key_uq').on(sql`email_key(${table.email})`),
   ],
 );
 
-// POST /tenants/register (backend-unblock plan workstream 1). Holds the
-// company-facing details a self-registered tenant submits; the tenant +
-// owner user rows themselves are created directly by the
-// tenants_register() SECURITY DEFINER function (see
-// migrations/0008_tenant_registration.sql), not by app code through
-// withTenantTx -- there is no JWT, so no tenant context, at registration
-// time.
+// Tenant + owner rows come from the tenants_register() SECURITY DEFINER function: no JWT, no tenant context.
 export const tenantApplications = pgTable(
   'tenant_applications',
   {
@@ -169,7 +158,7 @@ export const tenantApplications = pgTable(
   ],
 );
 
-// RFC-1 §3: token-family lineage backing rotation + reuse detection.
+// Token-family lineage backing refresh rotation + reuse detection (RFC-1).
 export const refreshTokens = pgTable(
   'refresh_tokens',
   {
@@ -195,9 +184,7 @@ export const refreshTokens = pgTable(
   ],
 );
 
-// Append-only: INSERT + SELECT only for app_authenticated (UPDATE/DELETE
-// revoked in the migration). SDD §3: "lets an invoice cite the exact
-// reconciliation ... behind a deduction."
+// Append-only: INSERT + SELECT only for app_authenticated.
 export const auditLogs = pgTable(
   'audit_logs',
   {
@@ -211,7 +198,6 @@ export const auditLogs = pgTable(
     action: text('action').notNull(), // CREATE, UPDATE, DELETE, APPROVE, DEDUCT
     entity: text('entity').notNull(),
     entityId: uuid('entity_id').notNull(),
-    // Why, for actions that must carry one (runtime correction, 0035).
     reason: text('reason'),
     timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
   },

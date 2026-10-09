@@ -1,6 +1,6 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
-import { apiErrorText, apiPost } from '../lib/api-client.js';
+import { apiErrorText, apiPost, followCheckout } from '../lib/api-client.js';
 import { useToast } from '../components/toast.js';
 import type { InvoiceDetailResponse } from '@arkilaunch/shared';
 import { accountLayoutRoute } from './_account.js';
@@ -8,9 +8,10 @@ import { invoicesQueries } from '../lib/queries.js';
 import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { Surface } from '../components/surface.js';
-import { Button } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
 import { StatusPill, type StatusTone } from '../components/status-pill.js';
-import { CheckIcon, AlertIcon, ClockIcon } from '../components/icons.js';
+import { Check, Clock, TriangleAlert } from 'lucide-react';
+import { PrintFrame } from '../components/print-frame.js';
 import {
   condenseIds,
   formatDate,
@@ -21,10 +22,10 @@ import {
 } from '../lib/format.js';
 
 const STATUS_META: Record<string, { tone: StatusTone; icon: ReactElement }> = {
-  paid: { tone: 'recon-approved', icon: <CheckIcon /> },
-  issued: { tone: 'recon-review', icon: <AlertIcon /> },
-  draft: { tone: 'recon-failed', icon: <ClockIcon /> },
-  void: { tone: 'recon-failed', icon: <ClockIcon /> },
+  paid: { tone: 'recon-approved', icon: <Check className="size-full" /> },
+  issued: { tone: 'recon-review', icon: <TriangleAlert className="size-full" /> },
+  draft: { tone: 'recon-failed', icon: <Clock className="size-full" /> },
+  void: { tone: 'recon-failed', icon: <Clock className="size-full" /> },
 };
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
@@ -36,13 +37,6 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-// The Figma frame (168:2304) pairs a left summary card with a right address
-// card, then an itemized table whose header band and totals band share one
-// accent fill. That accent is the prototype's teal; Yardboard's structural
-// equivalent is --color-success, already used for a table header band on the
-// dashboard, so the layout carries over without importing the palette.
-// A weekly invoice (hours past the deposit) is paid the same two ways as a
-// booking: PayMongo, or cash at the office which staff then record.
 function PayWeekly({ invoiceId }: { invoiceId: string }) {
   const toast = useToast();
   const [pending, setPending] = useState<'online' | 'cash' | null>(null);
@@ -50,7 +44,8 @@ function PayWeekly({ invoiceId }: { invoiceId: string }) {
     setPending(cash ? 'cash' : 'online');
     try {
       const res = await apiPost<{ checkoutUrl: string | null }>(`/me/invoices/${invoiceId}/checkout`, cash ? { cash: true } : {});
-      if (res.checkoutUrl) window.location.assign(res.checkoutUrl);
+      if (followCheckout(res.checkoutUrl)) return;
+      if (res.checkoutUrl) toast.error('Online payment is off', 'Online payment is not switched on in this environment, so nothing was charged.');
       else toast.success('Pay at the office', 'Staff will mark this invoice paid when they receive the cash.');
     } catch (err) {
       toast.error('Could not start the payment', apiErrorText(err));
@@ -76,13 +71,33 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <PrintFrame
+        title={invoice.status === 'paid' ? 'Invoice (paid)' : 'Invoice'}
+        docRef={shortCode('invoice', invoice.id)}
+        issuedAt={invoice.createdAt}
+        details={[
+          ...(invoice.billTo
+            ? ([
+                ['Bill to', invoice.billTo.companyName],
+                ['Customer TIN', invoice.billTo.tin ?? '--'],
+                ['Billing address', invoice.billTo.billingAddress ?? '--'],
+              ] as [string, string][])
+            : []),
+          [invoice.truckRequestId ? 'Truck service' : 'Equipment rental', invoice.bookingCode ?? '--'],
+          ['Type', formatInvoiceType(invoice.invoiceType)],
+          ['Due', formatDate(invoice.dueDate)],
+          ['Status', formatStatus(invoice.status)],
+          ...(invoice.receiptNo ? ([['Official receipt', invoice.receiptNo]] as [string, string][]) : []),
+          ['Amount due', formatPeso(invoice.status === 'paid' ? 0 : invoice.amount)],
+        ]}
+      />
       <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
         <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
           <div className="flex flex-col items-start gap-3">
             <StatusPill tone={meta.tone} label={formatStatus(invoice.status)} icon={meta.icon} />
             <div>
-              <p className="font-mono text-2xl font-semibold text-text">{formatPeso(invoice.amount)}</p>
-              <p className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+              <p className="font-mono text-display-md text-text">{formatPeso(invoice.amount)}</p>
+              <p className="text-sm font-medium text-text-muted">
                 Total amount due
               </p>
             </div>
@@ -90,22 +105,17 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
           <div className="flex flex-col gap-3">
             <SummaryRow label="Invoice type" value={formatInvoiceType(invoice.invoiceType)} />
             <SummaryRow label="Reference" value={shortCode('invoice', invoice.id)} />
-            {invoice.truckRequestId ? (
-              <SummaryRow label="Truck request" value={shortCode('booking', invoice.truckRequestId)} />
-            ) : (
-              <SummaryRow label="Rental" value={invoice.rentalId ? shortCode('rental', invoice.rentalId) : '--'} />
-            )}
+            <SummaryRow
+              label={invoice.truckRequestId ? 'Truck service' : 'Equipment rental'}
+              value={invoice.bookingCode ?? '--'}
+            />
             <SummaryRow label="Due" value={formatDate(invoice.dueDate)} />
           </div>
           {invoice.invoiceType === 'weekly' && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
         </Surface>
 
-        {/* The prototype's billing/shipping address pair has no counterpart in
-            the API -- an invoice carries a rental, not an address. The slot
-            shows the deduction's evidence trail instead, which is what RFC-2
-            requires a customer be able to see behind a charge. */}
         <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
-          <h2 className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+          <h2 className="text-sm font-medium text-text-muted">
             Evidence for this charge
           </h2>
           {invoice.edtrEvidence ? (
@@ -135,7 +145,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
 
       <Surface radius="md" elevation="sm" className="overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-2 bg-success px-4 py-3 text-white">
-          <h2 className="font-display text-sm font-semibold uppercase tracking-[0.04em]">
+          <h2 className="text-sm font-medium">
             Itemized costs
           </h2>
           <p className="text-sm">Issued {formatDate(invoice.createdAt)}</p>
@@ -144,16 +154,16 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
           <table className="w-full min-w-[520px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-border text-left">
-                <th className="px-4 py-3 font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+                <th className="px-4 py-3 text-sm font-medium text-text-muted">
                   Description
                 </th>
-                <th className="px-4 py-3 text-right font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+                <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
                   Qty
                 </th>
-                <th className="px-4 py-3 text-right font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+                <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
                   Unit price
                 </th>
-                <th className="px-4 py-3 text-right font-display text-xs font-semibold uppercase tracking-[0.04em] text-text-muted">
+                <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
                   Total
                 </th>
               </tr>
@@ -180,10 +190,10 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             <span className="font-mono text-text">{formatPeso(subtotal)}</span>
           </div>
           <div className="flex w-full max-w-xs items-center justify-between border-t border-border pt-2">
-            <span className="font-display text-sm font-semibold uppercase tracking-[0.04em] text-text">
+            <span className="text-sm font-medium text-text">
               Total
             </span>
-            <span className="font-mono text-lg font-semibold text-text">
+            <span className="font-mono text-heading-md text-text">
               {formatPeso(invoice.amount)}
             </span>
           </div>
@@ -199,17 +209,11 @@ function AccountInvoicePage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Billing"
         title={`Invoice ${shortCode('invoice', invoiceId)}`}
         description="What was charged, and the evidence behind it."
         actions={
           <>
-            <Link to="/account/bookings" data-print-hide>
-              <Button variant="ghost">Back</Button>
-            </Link>
-            {/* The frame's "Download PDF" / "Print Statement" pair: print is
-                the browser's and needs no endpoint. A generated PDF does, so
-                it is left out rather than offered and broken. */}
+            <Link to="/account/bookings" data-print-hide className={buttonClass('ghost')}>Back</Link>
             <Button variant="secondary" data-print-hide onClick={() => window.print()}>
               Print statement
             </Button>

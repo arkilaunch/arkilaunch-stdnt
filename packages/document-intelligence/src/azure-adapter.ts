@@ -3,32 +3,18 @@ import {
   type DocumentExtractionResult,
   type DocumentIntelligencePort,
   type BoundingRegion,
+  type DocumentText,
   type ExtractedField,
   type ExtractedTable,
 } from '@arkilaunch/shared';
 import { QUERY_FIELD_TO_PORT_KEY, resolveModelRequest, type ModelRequest } from './model-registry.js';
 
-// Native fetch, not an Azure SDK -- same "native fetch over a client SDK"
-// precedent as apps/api/src/storage/storage.service.ts and
-// apps/api/src/ports/payments.port.ts (AGENTS.md §5 restraint ladder). The
-// wire contract is small (one POST, one poll loop) and owning it directly
-// avoids a second copy of @opentelemetry/instrumentation-class dependencies
-// and a node10-vs-exports-map resolution fight in apps/api's tsconfig.
 const API_VERSION = '2024-11-30';
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 60_000;
-// Per-request socket timeout. POLL_TIMEOUT_MS is a poll-LOOP budget,
-// checked only after a response comes back, so it could never fire on a
-// connection that hangs with no response and no RST: `await fetch` simply
-// never settled, the EDTR row stayed 'extracting' and locked, and the
-// worker process was held past its cron interval
-// (audit-ocr-money-path.md #4).
+// Per-request socket timeout: POLL_TIMEOUT_MS is only checked after a response, so a hung socket never fails.
 const REQUEST_TIMEOUT_MS = 30_000;
 
-// A hung socket must fail the request, not the process. AbortSignal
-// rejects with an AbortError, which the caller already treats as an
-// analysis failure, so the row goes to its retry/hard_fail path instead
-// of sitting locked forever.
 async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
   try {
     return await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -42,11 +28,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
   }
 }
 
-// The F0 tier throttles hard: six concurrent analyses drew 429 on three of
-// their polls (measured 2026-09-24), and a throttled call used to fail the
-// whole analysis -- losing a customer's upload over a busy second. A 429 is
-// a "try again shortly", so wait what Azure asks (Retry-After, default 2s)
-// and retry, within the caller's deadline.
+// F0 throttles hard; a 429 means retry after Retry-After (default 2s), within the deadline.
 async function fetchThrottled(url: string, init: RequestInit, deadline: number): Promise<Response> {
   for (;;) {
     const res = await fetchWithTimeout(url, init);
@@ -56,10 +38,7 @@ async function fetchThrottled(url: string, init: RequestInit, deadline: number):
   }
 }
 
-// Thrown instead of ExtractionUnavailableError: this is not "the service is
-// unreachable", it is "the service answered but the answer cannot be
-// trusted" -- a distinct failure the caller must not treat the same way
-// (RFC-2 §2, AGENTS.md "never fabricate a value").
+// "Answered but untrustworthy", distinct from ExtractionUnavailableError; never fabricate a value.
 export class DocumentAnalysisError extends Error {}
 
 interface AzureAnalyzeField {
@@ -98,14 +77,16 @@ interface AzureBoundingRegion {
   polygon?: number[];
 }
 
-// Azure reports polygons in the page's own `unit` -- inches for a PDF,
-// pixels for an image -- so a page's width and height are what make them
-// comparable. Without both, there is nothing to normalise against.
+// Polygons are in the page's own unit, so width and height are needed to normalise them.
 interface AzurePage {
   pageNumber?: number;
   width?: number;
   height?: number;
   words?: AzureWord[];
+  // Tick boxes: a cell holding only ticks has no words, so its confidence comes from these.
+  selectionMarks?: AzureWord[];
+  lines?: AzureLine[];
+  barcodes?: { kind?: string; value?: string; confidence?: number }[];
 }
 
 interface AzureWord {
@@ -113,10 +94,16 @@ interface AzureWord {
   span?: AzureSpan;
 }
 
+interface AzureLine {
+  polygon?: number[];
+  spans?: AzureSpan[];
+}
+
 interface AzureAnalyzeOperation {
   status: 'notStarted' | 'running' | 'succeeded' | 'failed';
   error?: { code?: string; message?: string };
   analyzeResult?: {
+    content?: string;
     pages?: AzurePage[];
     documents?: Array<{ fields?: Record<string, AzureAnalyzeField> }>;
     tables?: AzureAnalyzeTable[];
@@ -126,10 +113,7 @@ interface AzureAnalyzeOperation {
 export interface AzureDocumentIntelligenceAdapterOptions {
   endpoint: string;
   apiKey: string;
-  // F0 analyzes only the first 2 pages per document and silently returns a
-  // complete-looking result computed from the truncated remainder -- the
-  // exact class of silent lie cr-arkilaunch-pilot-honesty.md removed
-  // elsewhere. Set this to 2 for an F0 resource (dev); leave unset for S0.
+  // F0 reads only the first 2 pages and silently returns a truncated result: set 2 for F0, unset for S0.
   maxPagesPerDocument?: number;
 }
 
@@ -146,11 +130,7 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
 
   async analyze(modelId: string, imageStream: Buffer): Promise<DocumentExtractionResult> {
     if (imageStream.length === 0) {
-      // Both current callers (jobs/src/edtr-ocr-worker.ts,
-      // apps/api/src/kyc/kyc.service.ts) pass Buffer.alloc(0) until their
-      // storage-read wiring lands. Failing loudly here beats sending an
-      // empty base64Source and getting back a result that reads as "the
-      // sheet really was blank".
+      // Fail loudly: an empty base64Source comes back reading as a genuinely blank sheet.
       throw new DocumentAnalysisError('empty input buffer');
     }
 
@@ -170,16 +150,25 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
       this.maxPagesPerDocument !== undefined &&
       (analyzeResult.pages?.length ?? 0) >= this.maxPagesPerDocument
     ) {
-      // The document may have more pages than this tier reads. Hard-fail
-      // rather than hand back a result computed from a truncated document --
-      // it would look identical to a genuine short-document extraction.
+      // Hard-fail: a truncated extraction looks identical to a genuine short document.
       throw new DocumentAnalysisError(
         `document has >= ${this.maxPagesPerDocument} pages; this Document Intelligence tier only reads the first ${this.maxPagesPerDocument}`,
       );
     }
 
     const tables = mapTables(analyzeResult.tables, analyzeResult.pages);
-    return { fields: this.mapFields(request, analyzeResult), ...(tables.length > 0 ? { tables } : {}) };
+    const text = mapText(analyzeResult.content, analyzeResult.pages);
+    const barcodes = (analyzeResult.pages ?? []).flatMap((page) =>
+      (page.barcodes ?? []).flatMap((b) =>
+        typeof b.value === 'string' ? [{ kind: b.kind ?? 'unknown', value: b.value, confidence: unitConfidence(b.confidence) }] : [],
+      ),
+    );
+    return {
+      fields: this.mapFields(request, analyzeResult),
+      ...(tables.length > 0 ? { tables } : {}),
+      ...(text ? { text } : {}),
+      ...(barcodes.length > 0 ? { barcodes } : {}),
+    };
   }
 
   private async startAnalyze(request: ModelRequest, imageStream: Buffer): Promise<string> {
@@ -187,6 +176,8 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
     if (request.kind === 'query-fields') {
       query.set('features', 'queryFields');
       query.set('queryFields', request.queryFields.join(','));
+    } else if (request.features?.length) {
+      query.set('features', request.features.join(','));
     }
 
     const res = await fetchThrottled(
@@ -206,9 +197,7 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
       throw new ExtractionUnavailableError('no_credentials');
     }
     if (res.status === 404) {
-      // The model does not exist yet (e.g. arkilaunch-edtr-neural-v1 before
-      // training) -- a hard failure the caller must surface, not a silent
-      // empty result.
+      // Model not trained/deployed yet: surface it, never a silent empty result.
       throw new DocumentAnalysisError(`model not found: ${request.modelId}`);
     }
     if (res.status !== 202) {
@@ -259,28 +248,26 @@ export class AzureDocumentIntelligenceAdapter implements DocumentIntelligencePor
       const value = extractValue(field);
       if (value === null) continue;
 
-      // A missing/null confidence must floor to 0 (routes to human review),
-      // never default to 1 (would sail through the 0.90 auto-accept gate).
-      // It is not established that queryFields returns a per-field
-      // confidence for PH corporate documents at all -- this is the safe
-      // assumption until that is confirmed against a real response. An
-      // out-of-range value (e.g. a malformed 1.5) also floors to 0, never
-      // clamps up to 1.
-      const confidence =
-        typeof field.confidence === 'number' && Number.isFinite(field.confidence) && field.confidence >= 0 && field.confidence <= 1
-          ? field.confidence
-          : 0;
-
-      fields[key] = { value, confidence };
+      fields[key] = { value, confidence: unitConfidence(field.confidence) };
     }
 
     return fields;
   }
 }
 
-// The lowest word confidence overlapping a cell's spans. Words carry
-// confidence and offsets into the same content string the cell's spans
-// index into, so this is a real measurement rather than a stand-in.
+// A missing or out-of-range confidence floors to 0 (human review), never 1 (would pass the auto-accept gate).
+function unitConfidence(c: number | undefined): number {
+  return typeof c === 'number' && Number.isFinite(c) && c >= 0 && c <= 1 ? c : 0;
+}
+
+// Scaled into 0..1 of the page; undefined when malformed, since a box in the wrong place is worse than none.
+function scalePolygon(polygon: number[] | undefined, width: number, height: number): number[] | undefined {
+  if (!polygon || polygon.length < 8 || polygon.length % 2 !== 0) return undefined;
+  const scaled = polygon.map((v, i) => (i % 2 === 0 ? v / width : v / height));
+  return scaled.some((n) => !Number.isFinite(n)) ? undefined : scaled;
+}
+
+// The lowest confidence of the words overlapping a cell's spans.
 function cellConfidence(spans: AzureSpan[] | undefined, words: AzureWord[]): number {
   const ranges = (spans ?? [])
     .filter((s) => typeof s.offset === 'number' && typeof s.length === 'number')
@@ -293,44 +280,29 @@ function cellConfidence(spans: AzureSpan[] | undefined, words: AzureWord[]): num
     const length = word.span?.length;
     if (typeof offset !== 'number' || typeof length !== 'number') continue;
     if (!ranges.some(([start, end]) => offset < end && offset + length > start)) continue;
-    const c = word.confidence;
-    // Same flooring rule the field mapper uses: an absent or out-of-range
-    // confidence becomes 0, never 1.
-    min = Math.min(min, typeof c === 'number' && Number.isFinite(c) && c >= 0 && c <= 1 ? c : 0);
+    min = Math.min(min, unitConfidence(word.confidence));
   }
   return Number.isFinite(min) ? min : 0;
 }
 
-// A cell's polygon, scaled into 0..1 of its own page. Returns undefined
-// rather than a guess when the polygon is malformed or the page reported no
-// usable dimensions -- a box drawn in the wrong place over a timesheet is
-// worse than no box, because it tells a reviewer the model read a cell it
-// did not.
 function normaliseRegion(
   regions: AzureBoundingRegion[] | undefined,
   pagesByNumber: Map<number, AzurePage>,
 ): BoundingRegion | undefined {
   const region = regions?.[0];
-  const polygon = region?.polygon;
-  if (!polygon || polygon.length < 8 || polygon.length % 2 !== 0) return undefined;
+  if (!region) return undefined;
   const pageNumber = region.pageNumber ?? 1;
   const page = pagesByNumber.get(pageNumber);
-  const width = page?.width;
-  const height = page?.height;
-  if (!width || !height) return undefined;
-
-  const scaled = polygon.map((coordinate, index) =>
-    index % 2 === 0 ? coordinate / width : coordinate / height,
-  );
-  if (scaled.some((n) => !Number.isFinite(n))) return undefined;
-  return { page: pageNumber, polygon: scaled };
+  if (!page?.width || !page.height) return undefined;
+  const scaled = scalePolygon(region.polygon, page.width, page.height);
+  return scaled ? { page: pageNumber, polygon: scaled } : undefined;
 }
 
 function mapTables(
   tables: AzureAnalyzeTable[] | undefined,
   pages: AzurePage[] | undefined,
 ): ExtractedTable[] {
-  const words = (pages ?? []).flatMap((p) => p.words ?? []);
+  const words = (pages ?? []).flatMap((p) => [...(p.words ?? []), ...(p.selectionMarks ?? [])]);
   const pagesByNumber = new Map(
     (pages ?? []).map((page, index) => [page.pageNumber ?? index + 1, page] as const),
   );
@@ -344,9 +316,6 @@ function mapTables(
         .flatMap((c) => {
           const content = (c.content ?? '').replace(/\s+/g, ' ').trim();
           const confidence = cellConfidence(c.spans, words);
-          // A merged cell's covered positions all carry the merged cell's
-          // own box, which is exactly the area a reviewer should see
-          // highlighted for any of them.
           const boundingRegion = normaliseRegion(c.boundingRegions, pagesByNumber);
           const out: ExtractedTable['cells'] = [];
           for (let dr = 0; dr < Math.max(1, c.rowSpan ?? 1); dr++) {
@@ -363,6 +332,30 @@ function mapTables(
           return out;
         }),
     }));
+}
+
+// The page text with every word and line as a span of it; a line without a usable polygon, span or page size is left out.
+function mapText(content: string | undefined, pages: AzurePage[] | undefined): DocumentText | undefined {
+  if (!content) return undefined;
+  const words: DocumentText['words'] = [];
+  const lines: DocumentText['lines'] = [];
+  (pages ?? []).forEach((page, index) => {
+    for (const w of page.words ?? []) {
+      const { offset, length } = w.span ?? {};
+      if (typeof offset !== 'number' || typeof length !== 'number') continue;
+      words.push({ offset, length, confidence: unitConfidence(w.confidence) });
+    }
+    const { width, height } = page;
+    if (!width || !height) return;
+    for (const line of page.lines ?? []) {
+      const { offset, length } = line.spans?.[0] ?? {};
+      if (typeof offset !== 'number' || typeof length !== 'number') continue;
+      const scaled = scalePolygon(line.polygon, width, height);
+      if (!scaled) continue;
+      lines.push({ offset, length, page: page.pageNumber ?? index + 1, polygon: scaled });
+    }
+  });
+  return { content, words, lines };
 }
 
 function extractValue(field: AzureAnalyzeField): string | null {

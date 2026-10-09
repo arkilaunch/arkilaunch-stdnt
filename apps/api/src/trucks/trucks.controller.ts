@@ -1,35 +1,38 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { createZodDto } from 'nestjs-zod';
-import type { Request } from 'express';
 import {
   NegotiationMessageCreateSchema,
   TollRateCreateSchema,
   TollRateUpdateSchema,
+  TruckBanRuleSchema,
+  TruckAcceptPriceSchema,
   TruckAgreeSchema,
+  TruckCrewSchema,
   TruckEstimateRequestSchema,
   TruckKmConfirmSchema,
   TruckRequestCreateSchema,
+  TruckRequestListQuerySchema,
   TruckSettingsSchema,
-  type RequestContext,
 } from '@arkilaunch/shared';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { TrucksService } from './trucks.service.js';
-
-type CtxRequest = Request & { ctx: RequestContext };
+import type { CtxRequest } from '../common/request.js';
 
 class TruckEstimateDto extends createZodDto(TruckEstimateRequestSchema) {}
 class TruckRequestCreateDto extends createZodDto(TruckRequestCreateSchema) {}
+class TruckRequestListQueryDto extends createZodDto(TruckRequestListQuerySchema) {}
 class TruckKmConfirmDto extends createZodDto(TruckKmConfirmSchema) {}
 class TruckAgreeDto extends createZodDto(TruckAgreeSchema) {}
+class TruckAcceptPriceDto extends createZodDto(TruckAcceptPriceSchema) {}
+class TruckCrewDto extends createZodDto(TruckCrewSchema) {}
 class TruckMessageDto extends createZodDto(NegotiationMessageCreateSchema) {}
 class TruckSettingsDto extends createZodDto(TruckSettingsSchema) {}
 class TollRateDto extends createZodDto(TollRateCreateSchema) {}
 class TollRateUpdateDto extends createZodDto(TollRateUpdateSchema) {}
+class TruckBanRuleDto extends createZodDto(TruckBanRuleSchema) {}
 
-// /me/truck-requests is the customer's own; /truck-requests and
-// /truck-settings are the tenant admin's. Tenant comes from the JWT (RLS);
-// ownership on the customer side is requested_by = ctx.userId.
+// Tenant comes from the JWT (RLS); customer-side ownership is requested_by = ctx.userId.
 @Controller()
 export class TrucksController {
   constructor(private readonly trucks: TrucksService) {}
@@ -51,8 +54,16 @@ export class TrucksController {
 
   @Get('me/truck-requests')
   @RequirePermission('booking:read')
-  mine(@Req() req: CtxRequest) {
-    return this.trucks.list(req.ctx, 'mine');
+  mine(@Query() query: TruckRequestListQueryDto, @Req() req: CtxRequest) {
+    return this.trucks.list(req.ctx, 'mine', query);
+  }
+
+  // route() limits a customer to requests they made.
+  @Get('me/truck-requests/:id/route')
+  @RequirePermission('booking:read')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  myRoute(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.trucks.route(req.ctx, id);
   }
 
   @Post('me/truck-requests/:id/cancel')
@@ -92,16 +103,30 @@ export class TrucksController {
     return this.trucks.agree(req.ctx, id, body.pricePhp);
   }
 
+  @Patch('truck-requests/:id/crew')
+  @RequirePermission('pricing:manage')
+  crew(@Param('id') id: string, @Body() body: TruckCrewDto, @Req() req: CtxRequest) {
+    return this.trucks.setCrew(req.ctx, id, body);
+  }
+
   @Get('truck-requests')
   @RequirePermission('pricing:manage')
-  all(@Req() req: CtxRequest) {
-    return this.trucks.list(req.ctx, 'all');
+  all(@Query() query: TruckRequestListQueryDto, @Req() req: CtxRequest) {
+    return this.trucks.list(req.ctx, 'all', query);
+  }
+
+  // Routes against the public OSRM demo server, so throttled like the customer estimate.
+  @Get('truck-requests/:id/route')
+  @RequirePermission('pricing:manage')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  route(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.trucks.route(req.ctx, id);
   }
 
   @Patch('truck-requests/:id/km')
   @RequirePermission('pricing:manage')
   confirmKm(@Param('id') id: string, @Body() body: TruckKmConfirmDto, @Req() req: CtxRequest) {
-    return this.trucks.confirmKm(req.ctx, id, body.km, body.tollRateIds);
+    return this.trucks.confirmKm(req.ctx, id, body);
   }
 
   @Post('me/truck-requests/:id/request-call')
@@ -113,8 +138,8 @@ export class TrucksController {
 
   @Post('me/truck-requests/:id/approve-price')
   @RequirePermission('booking:create')
-  approvePrice(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.trucks.approveOverCap(req.ctx, id);
+  approvePrice(@Param('id') id: string, @Body() body: TruckAcceptPriceDto, @Req() req: CtxRequest) {
+    return this.trucks.acceptPrice(req.ctx, id, body.pricePhp);
   }
 
   @Post('truck-requests/:id/call-confirmed')
@@ -128,6 +153,30 @@ export class TrucksController {
   tolls(@Req() req: CtxRequest) {
     return this.trucks.listTolls(req.ctx);
   }
+
+  @Post('truck-requests/:id/dispatch')
+  @RequirePermission('pricing:manage')
+  dispatch(@Param('id') id: string, @Req() req: CtxRequest) {
+    return this.trucks.dispatch(req.ctx, id);
+  }
+
+  @Get('truck-ban-rules')
+  @RequirePermission('pricing:manage', 'report:read')
+  banRules(@Req() req: CtxRequest) { return this.trucks.listBanRules(req.ctx); }
+
+  @Post('truck-ban-rules')
+  @RequirePermission('pricing:manage')
+  addBanRule(@Body() body: TruckBanRuleDto, @Req() req: CtxRequest) { return this.trucks.addBanRule(req.ctx, body); }
+
+  @Put('truck-ban-rules/:id')
+  @RequirePermission('pricing:manage')
+  updateBanRule(@Param('id') id: string, @Body() body: TruckBanRuleDto, @Req() req: CtxRequest) {
+    return this.trucks.updateBanRule(req.ctx, id, body);
+  }
+
+  @Delete('truck-ban-rules/:id')
+  @RequirePermission('pricing:manage')
+  removeBanRule(@Param('id') id: string, @Req() req: CtxRequest) { return this.trucks.removeBanRule(req.ctx, id); }
 
   @Post('toll-rates')
   @RequirePermission('pricing:manage')

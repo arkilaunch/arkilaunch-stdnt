@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import postgres from 'postgres';
-import { events, pricingParameters, rateCards, withTenantTx } from '@arkilaunch/db';
+import { auditLogs, customers, events, negotiationMessages, recomputeCustomerTier, pricingParameters, rateCards, rentals, withTenantTx } from '@arkilaunch/db';
 import { eq, and, desc } from 'drizzle-orm';
 import type { RequestContext } from '@arkilaunch/shared';
 import { QuotesService } from '../src/quotes/quotes.service.js';
@@ -22,6 +22,7 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
   let customerIdA: string;
   let customerCtxA: RequestContext;
   let otherCustomerIdA: string;
+  let siteIdA: string;
 
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
@@ -47,11 +48,7 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     equipmentTypeIdA = (rateCardA as { equipment_type_id: string }).equipment_type_id;
     customerIdA = (customerA as { id: string }).id;
 
-    // audit-api-surface.md #1: `customer` is an intra-tenant role, so RLS
-    // alone does not stop one customer reading another's quote. The
-    // fixture seeds exactly one customers row per tenant (linked to the
-    // customer user), so a SECOND, unowned customer is needed to prove the
-    // ownership predicate actually bites.
+    // RLS alone doesn't stop one customer reading another's quote, so a second, unowned customer is needed.
     const [customerUserA] = await sql`select id from users where tenant_id = ${(tenantA as { id: string }).id} and email = 'customer@test-tenant-a.test'`;
     customerCtxA = {
       tenantId: (tenantA as { id: string }).id,
@@ -73,11 +70,26 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
       `;
       otherCustomerIdA = (inserted as { id: string }).id;
     }
-    // Quotes now require a verified company (company_not_verified).
-    await sql`update customers set kyc_status = 'approved' where id = ${otherCustomerIdA}`;
+    // Quotes need a verified company, and it must not be linked to the seeded customer's login.
+    await sql`update customers set kyc_status = 'approved', user_id = null where id = ${otherCustomerIdA}`;
+
+    const [siteA] = await sql`select id from project_sites where tenant_id = ${(tenantA as { id: string }).id} order by created_at limit 1`;
+    siteIdA = (siteA as { id: string }).id;
 
     await sql.end();
   });
+
+  // Every quote prices a booking now (the standard price book; no quote
+  // drawn up per company), so each test quotes a fresh draft booking.
+  async function bookingFor(customerId: string): Promise<string> {
+    return withTenantTx(ctxA, async (tx) => {
+      const [row] = await tx
+        .insert(rentals)
+        .values({ tenantId: ctxA.tenantId, customerId, projectSiteId: siteIdA, status: 'draft', startDate: new Date() })
+        .returning({ id: rentals.id });
+      return row!.id;
+    });
+  }
 
   function itemsFor(rateCardId: string, equipmentTypeId: string) {
     return [
@@ -97,7 +109,8 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     const startedAt = Date.now();
     const result = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -121,7 +134,8 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
   it('QAD-T44: a persisted quote is reproducible after the diesel price and pricing params move', async () => {
     const created = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -146,10 +160,7 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     expect(reFetched.lineItems[0]!.hourlyRate).toBe(created.lineItems[0]!.hourlyRate);
   });
 
-  // QAD-T44/T48: a superseded rate card must not affect an already-issued
-  // quote, and must not be usable to price a NEW quote (Phase 1A fix to
-  // PricingEngineService.priceItem). Uses its own dedicated rate card, not
-  // the shared rateCardIdA fixture other tests in this file depend on.
+  // Uses its own rate card, not the shared rateCardIdA fixture.
   it('QAD-T44/T48: superseding a rate card leaves the issued quote untouched and rejects a new quote citing it', async () => {
     const dedicatedCardId = await withTenantTx(ctxA, async (tx) => {
       const [inserted] = await tx
@@ -168,15 +179,13 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
 
     const created = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(dedicatedCardId, equipmentTypeIdA),
     });
 
-    // Supersede: close the old row, insert a successor with a materially
-    // different value (append-only pattern; PATCH /rate-cards does this via
-    // a service in Phase 1C -- this test drives the same DB shape directly
-    // so it does not depend on that endpoint existing yet).
+    // Supersede directly: close the old row, insert a materially different successor.
     const now = new Date();
     await withTenantTx(ctxA, async (tx) => {
       await tx.update(rateCards).set({ effectiveTo: now }).where(eq(rateCards.id, dedicatedCardId));
@@ -200,7 +209,8 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     await expect(
       quotes.create(ctxA, {
         customerId: customerIdA,
-        projectSiteId: '00000000-0000-0000-0000-000000000000',
+        projectSiteId: siteIdA,
+        rentalId: await bookingFor(customerIdA),
         discount: { type: 'none', value: 0 },
         items: itemsFor(dedicatedCardId, equipmentTypeIdA),
       }),
@@ -224,10 +234,7 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     );
     const staleDate = new Date();
     staleDate.setDate(staleDate.getDate() - 30);
-    // Through the scrape function, not a direct INSERT: app_authenticated
-    // no longer holds INSERT on diesel_price_readings (migration 0020,
-    // audit-db-tenant-isolation.md #7), which is the same path the real
-    // cron takes.
+    // Through the scrape function: app_authenticated can't INSERT diesel_price_readings.
     const { recordScrapeDieselReading } = await import('@arkilaunch/db');
     await recordScrapeDieselReading({
       region: 'STALE_TEST',
@@ -273,7 +280,8 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
   it('QAD-T46: rounded line-item subtotals reconcile to the rounded quote total within PHP 0.01', async () => {
     const priced = await quotes.preview(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: [
         ...itemsFor(rateCardIdA, equipmentTypeIdA),
@@ -289,14 +297,16 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
   it('QAD-T47: /revise creates revision n+1, links the parent, and leaves the parent unchanged', async () => {
     const original = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
 
     const revised = await quotes.revise(ctxA, original.id, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'fixed', value: 500 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -309,11 +319,42 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     expect(parentAfter.total).toBe(original.total); // parent's numbers are unchanged
   });
 
+  it('/revise refuses a customer other than the one on the quote', async () => {
+    const rentalId = await bookingFor(customerIdA);
+    const body = { customerId: customerIdA, projectSiteId: siteIdA, rentalId, discount: { type: 'none' as const, value: 0 }, items: itemsFor(rateCardIdA, equipmentTypeIdA) };
+    const original = await quotes.create(ctxA, body);
+    await expect(quotes.revise(ctxA, original.id, { ...body, customerId: '00000000-0000-4000-8000-000000000000' })).rejects.toMatchObject({
+      response: { error: 'quote_customer_mismatch' },
+    });
+  });
+
+  // Standard price book: an approved quote stands until the customer
+  // negotiates (writes in the booking's thread, or declines it).
+  it('re-quoting an approved quote needs a negotiation from the customer', async () => {
+    const rentalId = await bookingFor(customerIdA);
+    const body = { customerId: customerIdA, projectSiteId: siteIdA, rentalId, discount: { type: 'none' as const, value: 0 }, items: itemsFor(rateCardIdA, equipmentTypeIdA) };
+    const original = await quotes.create(ctxA, body);
+    await quotes.approve(ctxA, original.id);
+
+    await expect(quotes.revise(ctxA, original.id, { ...body, discount: { type: 'fixed', value: 500 } })).rejects.toMatchObject({
+      response: { error: 'quote_not_in_negotiation' },
+    });
+    await expect(quotes.create(ctxA, body)).rejects.toMatchObject({ response: { error: 'quote_not_in_negotiation' } });
+
+    await withTenantTx(ctxA, (tx) =>
+      tx.insert(negotiationMessages).values({ tenantId: ctxA.tenantId, rentalId, authorUserId: customerCtxA.userId, authorRole: 'customer', body: 'Can you do 10% less?' }),
+    );
+    const revised = await quotes.revise(ctxA, original.id, { ...body, discount: { type: 'fixed', value: 500 } });
+    expect(revised.revision).toBe(2);
+    expect(revised.mobilization).toBe(original.mobilization); // fixed by the price book
+  });
+
   // QAD-T48: authz/isolation -- Tenant A cannot read Tenant B's quote (RLS).
   it('QAD-T48: a quote created under Tenant A is invisible to Tenant B', async () => {
     const created = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -321,13 +362,11 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     await expect(quotes.get(ctxB, created.id)).rejects.toThrow(NotFoundException);
   });
 
-  // audit-api-surface.md #1. `customer` holds quote:read, and GET /quotes/:id
-  // had no ownership predicate, so any customer JWT plus any quotation id
-  // returned another customer's rates, discounts and totals.
   it('a customer cannot read another customer’s quote in the same tenant', async () => {
     const theirs = await quotes.create(ctxA, {
       customerId: otherCustomerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(otherCustomerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -339,7 +378,8 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
   it('a customer can still read their own quote', async () => {
     const mine = await quotes.create(ctxA, {
       customerId: customerIdA,
-      projectSiteId: '00000000-0000-0000-0000-000000000000',
+      projectSiteId: siteIdA,
+      rentalId: await bookingFor(customerIdA),
       discount: { type: 'none', value: 0 },
       items: itemsFor(rateCardIdA, equipmentTypeIdA),
     });
@@ -347,4 +387,51 @@ describe('Quotation engine (RFC-3): QAD-T43..T48', () => {
     const read = await quotes.get(customerCtxA, mine.id);
     expect(read.id).toBe(mine.id);
   });
+
+  // UC 005: the customer's tier caps the discount; above it, the Owner decides.
+  describe('tier negotiation cap', () => {
+    const setTier = (tier: string) =>
+      withTenantTx(ctxA, (tx) => tx.update(customers).set({ tier }).where(eq(customers.id, customerIdA)));
+    const discounted = async (pct: number) => {
+      const rentalId = await bookingFor(customerIdA);
+      const body = { customerId: customerIdA, projectSiteId: siteIdA, rentalId, discount: { type: 'percent' as const, value: pct }, items: itemsFor(rateCardIdA, equipmentTypeIdA) };
+      return quotes.create(ctxA, body);
+    };
+
+    it('applies a discount within the cap and audits the decision', async () => {
+      await setTier('silver'); // default cap 3%
+      try {
+        const quote = await discounted(2);
+        expect(quote.capStatus).toBe('within');
+        const audit = await withTenantTx(ctxA, (tx) => tx.select().from(auditLogs).where(eq(auditLogs.entityId, quote.id)));
+        expect(audit.some((row) => row.reason?.startsWith('cap ok: silver'))).toBe(true);
+        await expect(quotes.approve(ctxA, quote.id)).resolves.toMatchObject({ status: 'approved' });
+      } finally {
+        await setTier('bronze');
+      }
+    });
+
+    it('sends a discount above the cap to the Owner: admin cannot approve, Owner can', async () => {
+      await setTier('bronze'); // other specs settle invoices, which can promote the fixture customer
+      const quote = await discounted(5); // bronze cap 0%
+      expect(quote.capStatus).toBe('pending_owner');
+      await expect(quotes.approve(ctxA, quote.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+      const ruled = await quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, true);
+      expect(ruled).toMatchObject({ status: 'approved', capStatus: 'owner_approved' });
+    });
+
+    it('an Owner rejection keeps the quote from going out', async () => {
+      await setTier('bronze');
+      const quote = await discounted(5);
+      await quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, false);
+      await expect(quotes.approve(ctxA, quote.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+      await expect(quotes.approveCap({ ...ctxA, role: 'owner' }, quote.id, true)).rejects.toMatchObject({ response: { error: 'quote_not_pending_owner' } });
+    });
+
+    it('a new customer with no settled invoice computes to bronze', async () => {
+      const fresh = await withTenantTx(ctxA, (tx) => recomputeCustomerTier(tx, ctxA.tenantId, otherCustomerIdA));
+      expect(fresh.tier).toBe('bronze');
+    });
+  });
 });
+

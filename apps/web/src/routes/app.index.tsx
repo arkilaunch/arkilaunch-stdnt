@@ -1,26 +1,47 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { useRef, useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import type { IncidentResponse, InvoiceSummaryResponse, WeatherSeverity } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
+import { getCurrentRole } from '../lib/guards.js';
 import {
+  companiesQueries,
   edtrQueries,
-  equipmentQueries,
+  referenceQueries,
   fleetUtilizationPct,
   incidentsQueries,
   invoicesQueries,
   reportQueries,
   sitesQueries,
+  trucksQueries,
   weatherQueries,
+  type ReportsSnapshot,
 } from '../lib/queries.js';
-import { WeatherBanner, type WeatherTone } from '../components/weather-banner.js';
+import { Table, type TableColumn } from '../components/table.js';
+import { PAGE_SIZE, Pagination } from '../components/pagination.js';
+import { MachineName } from '../components/machine-name.js';
+import { StatusPill } from '../components/status-pill.js';
+import { Check, Wrench } from 'lucide-react';
+import { StatTile } from '../components/stat-tile.js';
+import { PageHeader } from '../components/page-header.js';
+import { Skeleton } from '../components/skeleton.js';
+import { WeatherBanner } from '../components/weather-banner.js';
+import type { WeatherTone } from '../lib/weather-code.js';
 import { Surface } from '../components/surface.js';
 import { Modal } from '../components/modal.js';
+import { Container } from '../components/container.js';
+import { Tabs } from '../components/tabs.js';
+import { Alert } from '../components/alert.js';
+import { Button } from '../components/button.js';
+import { ExpandableSection } from '../components/expandable-section.js';
 import { formatRelativeTime } from '../lib/format-time.js';
 import { explainAdvisory } from '../lib/weather-explain.js';
 import {
+  addDaysIso,
   formatDate,
   formatDateTime,
+  formatHours,
+  formatInvoiceType,
   formatPeso,
   formatSeverity,
   shortCode,
@@ -28,9 +49,6 @@ import {
 } from '../lib/format.js';
 import { InvoiceDetail } from './app.payments.js';
 
-// Plain-English headline first (readable without knowing the PAGASA scale),
-// PAGASA's own label kept as a secondary tag (BRAND.md §0: the scale is
-// deliberately the one Filipino users already recognize from the news).
 const SEVERITY_META: Record<
   WeatherSeverity,
   { tone: WeatherTone; headline: string; tag?: string; condition: string }
@@ -50,55 +68,66 @@ const SEVERITY_META: Record<
   },
 };
 
-// The dashboard's one repeated shape: a titled panel whose header carries its
-// running count on the right, so the queue size reads before the rows do.
-// Local to this route on purpose -- nothing else uses it yet.
-function ConsoleCard({
-  title,
-  badge,
-  children,
-}: {
-  title: ReactNode;
-  badge?: ReactNode;
-  children: ReactNode;
-}) {
+function Kpi({ label, value, tone, pending, action }: { label: string; value: string; tone?: 'success'; pending?: boolean; action?: { label: string; onClick: () => void } }) {
   return (
-    <Surface radius="md" elevation="sm" className="overflow-hidden p-0">
-      <div className="flex items-stretch justify-between gap-2 bg-success text-white">
-        <div className="px-4 py-2.5 font-display text-sm font-semibold uppercase tracking-[0.04em]">
-          {title}
-        </div>
-        {badge && (
-          <p className="flex items-center bg-primary px-4 py-2.5 font-display text-sm font-semibold uppercase tracking-[0.04em] text-text">
-            {badge}
-          </p>
-        )}
-      </div>
-      {children}
-    </Surface>
-  );
-}
-
-// One headline figure. Four of these replaced a seven-row summary rail: the
-// rail printed every number the API had, which left nothing looking more
-// important than anything else.
-function Kpi({ label, value, tone }: { label: string; value: string; tone?: 'success' }) {
-  return (
-    <div className="flex flex-col gap-0.5 border-r border-border px-4 py-3 last:border-r-0">
-      <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-text-muted">
+    <div className="flex min-w-0 flex-col items-start gap-0.5 border-r border-border px-4 py-3 even:border-r-0 sm:even:border-r sm:last:border-r-0">
+      <span className="text-sm font-medium text-text-muted">
         {label}
       </span>
-      <span
-        className={[
-          'font-mono text-xl font-medium tabular-nums sm:text-2xl',
-          tone === 'success' ? 'text-success' : 'text-text',
-        ].join(' ')}
-      >
-        {value}
-      </span>
+      {pending ? (
+        <span aria-hidden="true" className="h-7 w-24 animate-pulse rounded-sm bg-border/60 sm:h-8" />
+      ) : (
+        <span
+          className={[
+            'max-w-full font-mono text-lg font-medium tabular-nums [overflow-wrap:anywhere] sm:text-xl xl:text-2xl',
+            tone === 'success' ? 'text-success' : 'text-text',
+          ].join(' ')}
+        >
+          {value}
+        </span>
+      )}
+      {action && !pending && (
+        <button type="button" onClick={action.onClick} className="text-sm font-medium text-accent hover:underline">
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }
+
+const UTILIZATION_COLUMNS: TableColumn<ReportsSnapshot['utilization']['fleet'][number]>[] = [
+  { header: 'Machine', kind: 'text', cell: (row) => <MachineName equipmentId={row.equipmentId} /> },
+  { header: 'Hours run', kind: 'number', cell: (row) => formatHours(row.runtimeHours) },
+  { header: 'Utilization', kind: 'number', cell: (row) => `${row.utilizationPct.toFixed(1)}%` },
+  {
+    header: 'Maintenance', kind: 'text',
+    cell: (row) =>
+      row.maintenanceDue ? (
+        <StatusPill tone="fleet-maintenance" label="Due" icon={<Wrench className="size-full" />} />
+      ) : (
+        <StatusPill tone="fleet-available" label="On schedule" icon={<Check className="size-full" />} />
+      ),
+  },
+];
+
+const BREAKDOWN_COLUMNS: TableColumn<[string, number]>[] = [
+  { header: 'Invoice type', kind: 'text', cell: (row) => formatInvoiceType(row[0]) },
+  { header: 'Invoiced', kind: 'money', cell: (row) => formatPeso(row[1]) },
+];
+
+function breakdownRows(f: ReportsSnapshot['financial']): [string, number][] {
+  return [
+    ...Object.entries(f.invoiced.byType),
+    ...(f.depositDeducted > 0 && !('deposit_deduction' in f.invoiced.byType)
+      ? [['deposit_deduction', f.depositDeducted] as [string, number]]
+      : []),
+  ];
+}
+
+const ROW =
+  'flex w-full items-center justify-between gap-3 border-b border-border px-5 py-2.5 text-left text-sm last:border-0 hover:bg-surface-sunk focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring';
+const QueueLoading = ({ label }: { label: string }) => <Skeleton label={label} rows={2} className="px-5 py-3 [&>div]:h-8" />;
+const FOOT_LINK = 'block border-t border-border px-5 py-2.5 text-sm font-medium text-accent hover:underline';
 
 type QueueTab = 'payments' | 'incidents' | 'weather';
 
@@ -109,49 +138,35 @@ const TABS: { id: QueueTab; label: string }[] = [
 ];
 
 function AdminDashboardPage() {
-  // Same query key as app.insights.tsx -- navigating between the two shares
-  // the cache instead of re-fetching.
   const { data: snapshot } = useQuery(reportQueries.snapshot());
   const utilizationPct = fleetUtilizationPct(snapshot?.utilization);
   const { data: sites } = useQuery(sitesQueries.list());
-  const { data: edtrList } = useQuery(edtrQueries.list());
+  const { data: edtrList } = useQuery(edtrQueries.review());
   const { data: advisories } = useQuery(weatherQueries.advisories());
-  const { data: invoices } = useQuery(invoicesQueries.list());
+  // Unpaid filtered server-side: filtering page one client-side misses unpaid invoices.
+  const { data: invoices } = useQuery(invoicesQueries.list(6, 0, 'issued'));
   const { data: incidents } = useQuery(incidentsQueries.list());
-  const { data: fleet } = useQuery(equipmentQueries.list());
+  const { data: fleet } = useQuery(referenceQueries.equipment());
+  const reviewCount = useQuery(edtrQueries.reviewCount());
+  const openTrucks = useQuery(trucksQueries.list(1, 0, '', 'open'));
+  // Registrations are admin-only; the owner has no page to act on this.
+  const isAdmin = getCurrentRole() === 'admin';
+  const kycPending = useQuery({ ...companiesQueries.review('pending', 1, 0), retry: false, enabled: isAdmin });
   const advisoryBySite = new Map((advisories?.items ?? []).map((a) => [a.siteId, a]));
 
-  // Three secondary queues used to stack down the page, so the one queue
-  // with a human decision attached (the review queue) was the third thing
-  // read. They share one panel now, one visible at a time.
   const [tab, setTab] = useState<QueueTab>('payments');
-  const tabRefs = useRef<Record<QueueTab, HTMLButtonElement | null>>({
-    payments: null,
-    incidents: null,
-    weather: null,
-  });
-  // Advisories opened as a stack of full banners above everything else --
-  // on a bad weather day that pushed the entire dashboard below the fold.
   const [advisoriesOpen, setAdvisoriesOpen] = useState(false);
-  // Row clicks open the detail in place; the full pages stay one link away.
   const [invoiceOpen, setInvoiceOpen] = useState<InvoiceSummaryResponse | null>(null);
   const [incidentOpen, setIncidentOpen] = useState<IncidentResponse | null>(null);
   const [siteOpen, setSiteOpen] = useState<string | null>(null);
+  const [report, setReport] = useState<'breakdown' | 'fleet' | null>(null);
+  const [fleetOffset, setFleetOffset] = useState(0);
 
   const alerts = (sites?.items ?? []).filter(
     (s) => s.latestSeverity && s.latestSeverity !== 'none',
   );
-  const reviewItems = (
-    (edtrList?.items ?? []) as {
-      id: string;
-      status?: string;
-      equipmentId?: string;
-      reportDate?: string;
-    }[]
-  ).filter((e) => e.status === 'review');
+  const reviewItems = edtrList?.items ?? [];
 
-  // One row per machine-week, not per daily log: a week of one excavator
-  // is one decision, not seven (weekly EDTR sheet, proposal §2.2).
   const reviewGroups = [
     ...reviewItems
       .reduce((groups, item) => {
@@ -166,103 +181,102 @@ function AdminDashboardPage() {
 
   function weekLabel(week: string): string {
     if (!week) return 'Undated';
-    const end = new Date(week);
-    end.setUTCDate(end.getUTCDate() + 6);
-    return `Week of ${formatDate(week)} - ${formatDate(end)}`;
+    return `Week of ${formatDate(week)} - ${formatDate(addDaysIso(week, 6))}`;
   }
 
-  // Name the machine rather than print a UUID stub: this is the first work
-  // list anyone sees after signing in.
   function machineName(equipmentId: string | undefined): string {
-    const match = (fleet?.items ?? []).find((item) => item.id === equipmentId);
+    const match = fleet?.find((item) => item.id === equipmentId);
     return match ? match.model : 'Unknown machine';
   }
 
-  const fleetItems = fleet?.items ?? [];
+  const fleetItems = fleet ?? [];
   const inMaintenance = fleetItems.filter((e) => e.availabilityStatus === 'maintenance').length;
   const recoveredHours =
     snapshot?.utilization.fleet.reduce((sum, u) => sum + u.runtimeHours, 0) ?? null;
-  // The approval queue is what has been invoiced and not settled; paid and
-  // void rows are not waiting on anyone.
-  const pendingInvoices = (invoices?.items ?? []).filter(
-    (i) => i.status !== 'paid' && i.status !== 'void',
-  );
-
-  function onTabKeyDown(event: React.KeyboardEvent, index: number) {
-    const delta = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-    if (delta === 0) return;
-    event.preventDefault();
-    const next = TABS[(index + delta + TABS.length) % TABS.length]!;
-    setTab(next.id);
-    tabRefs.current[next.id]?.focus();
-  }
+  const pendingInvoices = invoices?.items ?? [];
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-primary px-5 py-3">
-        <div>
-          <p className="font-display text-xs font-semibold uppercase tracking-[0.04em] text-text">
-            Control room
-          </p>
-          <h1 className="font-display text-2xl font-semibold uppercase tracking-[0.02em] text-text">
-            Dashboard
-          </h1>
-        </div>
-        <p className="text-sm font-medium text-text">Fleet, weather, and work-queue overview.</p>
-      </div>
+      <PageHeader title="Dashboard" description="Fleet, weather, and work-queue overview." />
 
-      {/* ---- The four figures worth leading with ---- */}
       <Surface radius="md" elevation="sm" className="p-0">
         <div className="grid grid-cols-2 divide-y divide-border sm:grid-cols-4 sm:divide-y-0">
           <Kpi
             label="Invoiced"
+            pending={!snapshot}
             value={snapshot ? formatPeso(snapshot.financial.invoiced.total) : '--'}
+            action={{ label: 'Breakdown', onClick: () => setReport('breakdown') }}
+          />
+          <Kpi
+            label="Paid"
+            pending={!snapshot}
+            value={snapshot ? formatPeso(snapshot.financial.paid) : '--'}
           />
           <Kpi
             label="Utilization"
+            pending={!snapshot}
             value={utilizationPct === null ? '--' : `${utilizationPct.toFixed(1)}%`}
             tone="success"
+            action={{ label: 'By machine', onClick: () => { setFleetOffset(0); setReport('fleet'); } }}
           />
           <Kpi
             label="Runtime"
+            pending={!snapshot}
             value={recoveredHours === null ? '--' : `${recoveredHours.toFixed(1)} h`}
           />
-          <Kpi
-            label="Deposit deducted"
-            value={snapshot ? formatPeso(snapshot.financial.depositDeducted) : '--'}
-          />
         </div>
-        {/* Counts that tell you where to navigate, not what to decide. */}
-        <p className="border-t border-border px-4 py-2 text-sm text-text-muted">
-          {sites?.total ?? '--'} sites &middot; {fleet?.total ?? '--'} machines &middot;{' '}
-          {fleet ? inMaintenance : '--'} in maintenance &middot;{' '}
-          {fleet ? fleetItems.filter((e) => e.availabilityStatus === 'available').length : '--'}{' '}
-          available
-        </p>
+        <div className="border-t border-border px-4">
+          <ExpandableSection header={<span className="text-sm font-medium">Fleet details</span>}>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 pb-3 text-sm sm:grid-cols-4">
+              {(
+                [
+                  ['Sites', sites?.total],
+                  ['Machines', fleet?.length],
+                  ['In maintenance', fleet ? inMaintenance : null],
+                  ['Available', fleet ? fleetItems.filter((e) => e.availabilityStatus === 'available').length : null],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-text-muted">{label}</dt>
+                  <dd className="font-mono tabular-nums text-text">{value ?? '--'}</dd>
+                </div>
+              ))}
+            </dl>
+          </ExpandableSection>
+        </div>
       </Surface>
 
       {alerts.length > 0 && (
-        <button
-          type="button"
-          onClick={() => setAdvisoriesOpen(true)}
-          className="flex w-full items-center justify-between gap-3 rounded-md border-l-[3px] border-error bg-surface px-4 py-3 text-left hover:bg-surface-sunk focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <span className="min-w-0 text-sm font-medium text-text">
-            {alerts.length} {alerts.length === 1 ? 'site is' : 'sites are'} under a weather advisory
-          </span>
-          <span className="shrink-0 text-sm font-medium text-accent">Read the advisories</span>
-        </button>
+        <Alert
+          type="warning"
+          header={`${alerts.length} ${alerts.length === 1 ? 'site is' : 'sites are'} under a weather advisory`}
+          action={
+            <Button variant="secondary" onClick={() => setAdvisoriesOpen(true)}>
+              Read the advisories
+            </Button>
+          }
+        />
       )}
 
-      {/* ---- The one queue with a human decision attached (RFC-2) ---- */}
-      <ConsoleCard
-        title="Needs you"
-        badge={<span>Waiting: {edtrList ? reviewGroups.length : '--'}</span>}
+      <Container
+        flush
+        header={{
+          title: 'Needs you',
+          count: reviewCount.data?.total ?? null,
+          description: 'Field logs the two-source match could not settle.',
+        }}
+        footer={
+          <Link to="/app/ocr" search={{ status: 'review' }} className={FOOT_LINK}>
+            Open field logs
+          </Link>
+        }
       >
         {reviewItems.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-text-muted">
-            {edtrList ? 'Queue clear. No field logs waiting on a human decision.' : 'Loading...'}
-          </p>
+          edtrList ? (
+            <p className="px-5 py-3 text-sm text-text-muted">Queue clear. No field logs waiting on a human decision.</p>
+          ) : (
+            <QueueLoading label="Loading field logs" />
+          )
         ) : (
           reviewGroups.slice(0, 5).map((group) => (
             <Link
@@ -272,186 +286,125 @@ function AdminDashboardPage() {
                 ...(group.equipmentId ? { equipment: group.equipmentId } : {}),
                 ...(group.week ? { week: group.week } : {}),
               }}
-              className="flex items-center justify-between border-b border-border px-4 py-2.5 text-sm last:border-0 hover:bg-surface-sunk focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
+              className={ROW}
             >
               <span className="flex flex-col">
                 <span className="font-medium text-text">{machineName(group.equipmentId)}</span>
                 <span className="text-xs text-text-muted">{weekLabel(group.week)}</span>
               </span>
-              <span className="text-accent">
+              <span className="shrink-0 text-accent">
                 Review {group.count} {group.count === 1 ? 'log' : 'logs'}
               </span>
             </Link>
           ))
         )}
-        <Link
-          to="/app/ocr"
-          className="block border-t border-border px-4 py-2 text-sm font-medium text-accent hover:underline"
-        >
-          Open field logs
-        </Link>
-      </ConsoleCard>
+      </Container>
 
-      {/* ---- Everything else, one at a time ---- */}
-      <ConsoleCard
-        title={
-          <div role="tablist" aria-label="Secondary queues" className="-my-2.5 -ml-4 flex">
-            {TABS.map((entry, index) => (
-              <button
-                key={entry.id}
-                ref={(node) => {
-                  tabRefs.current[entry.id] = node;
-                }}
-                type="button"
-                role="tab"
-                id={`queue-tab-${entry.id}`}
-                aria-selected={tab === entry.id}
-                aria-controls={`queue-panel-${entry.id}`}
-                tabIndex={tab === entry.id ? 0 : -1}
-                onClick={() => setTab(entry.id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
-                className={[
-                  'px-4 py-2.5 font-display text-sm font-semibold uppercase tracking-[0.04em] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
-                  tab === entry.id ? 'bg-primary text-on-primary' : 'text-white hover:bg-white/15',
-                ].join(' ')}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
-        }
-      >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatTile
+          label="Open truck requests"
+          value={openTrucks.data?.total ?? null}
+          hint="Not yet paid or cancelled."
+          action={
+            <Link to="/app/bookings" search={{ service: 'truck' }} className="hover:underline">
+              Open truck service
+            </Link>
+          }
+        />
+        {isAdmin && (
+          <StatTile
+            label="Companies to verify"
+            value={kycPending.isError ? '--' : (kycPending.data?.total ?? null)}
+            hint="Customer companies waiting on KYC."
+            action={<Link to="/app/registration/pending" className="hover:underline">Open registrations</Link>}
+          />
+        )}
+      </div>
+
+      <Container flush>
+        <Tabs label="Secondary queues" items={TABS} value={tab} onChange={setTab} />
+
         {tab === 'payments' && (
-          <div id="queue-panel-payments" role="tabpanel" aria-labelledby="queue-tab-payments">
+          <div role="tabpanel" aria-label="Payments">
             {pendingInvoices.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-text-muted">
-                {invoices ? 'Nothing awaiting payment.' : 'Loading...'}
-              </p>
+              invoices ? (
+                <p className="px-5 py-3 text-sm text-text-muted">Nothing awaiting payment.</p>
+              ) : (
+                <QueueLoading label="Loading invoices" />
+              )
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-text">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs uppercase tracking-[0.04em] text-text-muted">
-                      <th className="px-4 py-2 font-medium">Invoice</th>
-                      <th className="px-4 py-2 font-medium">Type</th>
-                      <th className="px-4 py-2 text-right font-medium">Amount</th>
-                      <th className="px-4 py-2 font-medium">Due</th>
-                      <th className="px-4 py-2 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pendingInvoices.slice(0, 6).map((invoice) => (
-                      <tr
-                        key={invoice.id}
-                        onClick={() => setInvoiceOpen(invoice)}
-                        className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-sunk"
-                      >
-                        <td className="px-4 py-2 font-mono">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setInvoiceOpen(invoice);
-                            }}
-                            className="text-accent hover:underline"
-                          >
-                            {shortCode('invoice', invoice.id)}
-                          </button>
-                        </td>
-                        <td className="px-4 py-2">{invoice.invoiceType}</td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums">
-                          {formatPeso(invoice.amount)}
-                        </td>
-                        <td className="px-4 py-2 text-text-muted">{formatDate(invoice.dueDate)}</td>
-                        <td className="px-4 py-2 uppercase text-text-muted">{invoice.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              pendingInvoices.slice(0, 6).map((invoice) => (
+                <button type="button" key={invoice.id} onClick={() => setInvoiceOpen(invoice)} className={ROW}>
+                  <span className="flex flex-col">
+                    <span className="font-medium text-text">{formatInvoiceType(invoice.invoiceType)}</span>
+                    <span className="text-xs text-text-muted">Due {formatDate(invoice.dueDate)}</span>
+                  </span>
+                  <span className="shrink-0 font-mono tabular-nums text-text">{formatPeso(invoice.amount)}</span>
+                </button>
+              ))
             )}
-            <Link
-              to="/app/payments"
-              className="block border-t border-border px-4 py-2 text-sm font-medium text-accent hover:underline"
-            >
+            <Link to="/app/payments" className={FOOT_LINK}>
               Open invoices
             </Link>
           </div>
         )}
 
         {tab === 'incidents' && (
-          <div id="queue-panel-incidents" role="tabpanel" aria-labelledby="queue-tab-incidents">
+          <div role="tabpanel" aria-label="Incidents">
             {(incidents?.items ?? []).length === 0 ? (
-              <p className="px-4 py-3 text-sm text-text-muted">
-                {incidents ? 'No weather incidents logged.' : 'Loading...'}
-              </p>
+              incidents ? (
+                <p className="px-5 py-3 text-sm text-text-muted">No weather incidents logged.</p>
+              ) : (
+                <QueueLoading label="Loading incidents" />
+              )
             ) : (
               (incidents?.items ?? []).slice(0, 5).map((incident) => (
-                <button
-                  type="button"
-                  key={incident.id}
-                  onClick={() => setIncidentOpen(incident)}
-                  className="flex w-full items-center justify-between border-b border-border px-4 py-2.5 text-left text-sm last:border-0 hover:bg-surface-sunk focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <span className="flex flex-col border-l-[3px] border-error pl-3">
+                <button type="button" key={incident.id} onClick={() => setIncidentOpen(incident)} className={ROW}>
+                  <span className="flex flex-col">
                     <span className="font-medium text-text">
-                      {incident.siteCity ?? incident.siteProvince ?? 'Unnamed site'}
-                      {incident.severity ? ` - ${formatSeverity(incident.severity)}` : ''}
+                      {incident.kind === 'used_despite_warning'
+                        ? `Used during warning - ${incident.customerName ?? 'Unknown company'}`
+                        : `${incident.siteCity ?? incident.siteProvince ?? 'Unnamed site'}${incident.severity ? ` - ${formatSeverity(incident.severity)}` : ''}`}
                     </span>
-                    <span className="text-xs text-text-muted">
-                      {formatDateTime(incident.occurredAt)}
-                    </span>
+                    <span className="text-xs text-text-muted">{formatDateTime(incident.occurredAt)}</span>
                   </span>
-                  <span className="text-accent">View</span>
+                  <span className="shrink-0 text-accent">View</span>
                 </button>
               ))
             )}
-            <Link
-              to="/app/incidents"
-              className="block border-t border-border px-4 py-2 text-sm font-medium text-accent hover:underline"
-            >
+            <Link to="/app/incidents" className={FOOT_LINK}>
               Open the incident log
             </Link>
           </div>
         )}
 
         {tab === 'weather' && (
-          <div id="queue-panel-weather" role="tabpanel" aria-labelledby="queue-tab-weather">
+          <div role="tabpanel" aria-label="Weather">
             {(sites?.items ?? []).length === 0 ? (
-              <p className="px-4 py-3 text-sm text-text-muted">
-                {sites ? 'No sites registered yet.' : 'Loading...'}
-              </p>
+              sites ? (
+                <p className="px-5 py-3 text-sm text-text-muted">No sites registered yet.</p>
+              ) : (
+                <QueueLoading label="Loading sites" />
+              )
             ) : (
-              // Sites under advisory first: a clear site is the row nobody
-              // needs to read.
               [...(sites?.items ?? [])]
                 .sort((a, b) => Number(!!b.latestSeverity && b.latestSeverity !== 'none') - Number(!!a.latestSeverity && a.latestSeverity !== 'none'))
                 .slice(0, 8)
                 .map((site) => (
-                  <button
-                    type="button"
-                    key={site.id}
-                    onClick={() => setSiteOpen(site.id)}
-                    className="flex w-full items-center justify-between border-b border-border px-4 py-2 text-left text-sm last:border-0 hover:bg-surface-sunk focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
-                  >
-                    <span className="truncate text-text">
-                      {site.city ?? site.province ?? 'Unnamed site'}
-                    </span>
-                    <span className="text-text-muted">
+                  <button type="button" key={site.id} onClick={() => setSiteOpen(site.id)} className={ROW}>
+                    <span className="truncate text-text">{site.city ?? site.province ?? 'Unnamed site'}</span>
+                    <span className="shrink-0 text-text-muted">
                       {SEVERITY_META[(site.latestSeverity ?? 'none') as WeatherSeverity].headline}
                     </span>
                   </button>
                 ))
             )}
-            <Link
-              to="/app/deployment"
-              className="block border-t border-border px-4 py-2 text-sm font-medium text-accent hover:underline"
-            >
+            <Link to="/app/deployment" className={FOOT_LINK}>
               Open sites
             </Link>
           </div>
         )}
-      </ConsoleCard>
+      </Container>
 
       <Modal
         open={advisoriesOpen}
@@ -471,7 +424,7 @@ function AdminDashboardPage() {
         title={invoiceOpen ? `Invoice ${shortCode('invoice', invoiceOpen.id)}` : 'Invoice'}
         size="sm"
       >
-        {invoiceOpen && <InvoiceDetail invoice={invoiceOpen} />}
+        {invoiceOpen && <InvoiceDetail invoice={invoiceOpen} onDone={() => setInvoiceOpen(null)} />}
         <Link to="/app/payments" className="mt-3 block text-sm font-medium text-accent hover:underline">
           Open invoices
         </Link>
@@ -480,13 +433,35 @@ function AdminDashboardPage() {
       <Modal
         open={incidentOpen != null}
         onClose={() => setIncidentOpen(null)}
-        title="Weather incident"
+        title={incidentOpen?.kind === 'used_despite_warning' ? 'Used during a weather warning' : 'Weather incident'}
         size="md"
       >
         {incidentOpen && <IncidentDetail incident={incidentOpen} />}
         <Link to="/app/incidents" className="mt-3 block text-sm font-medium text-accent hover:underline">
           Open the incident log
         </Link>
+      </Modal>
+
+      {/* No deposit-deducted KPI: it is a breakdown line, and two figures read as a double charge. */}
+      <Modal open={report === 'breakdown'} onClose={() => setReport(null)} title="Financial breakdown" description="Invoiced amounts by invoice type.">
+        {snapshot && report === 'breakdown' && <Table columns={BREAKDOWN_COLUMNS} rows={breakdownRows(snapshot.financial)} rowKey={(row) => row[0]} />}
+      </Modal>
+
+      <Modal open={report === 'fleet'} onClose={() => setReport(null)} title="Fleet utilization" description="Hours run and maintenance status per machine." size="lg">
+        {snapshot && (
+          <Table
+            header={{
+              title: 'Machines',
+              count: snapshot.utilization.fleet.length,
+              pagination: (
+                <Pagination offset={fleetOffset} limit={PAGE_SIZE} total={snapshot.utilization.fleet.length} onOffsetChange={setFleetOffset} noun="machines" />
+              ),
+            }}
+            columns={UTILIZATION_COLUMNS}
+            rows={snapshot.utilization.fleet.slice(fleetOffset, fleetOffset + PAGE_SIZE)}
+            rowKey={(row) => row.equipmentId}
+          />
+        )}
       </Modal>
 
       <Modal open={siteOpen != null} onClose={() => setSiteOpen(null)} title="Site weather" size="lg">
@@ -519,8 +494,17 @@ function AdminDashboardPage() {
   }
 }
 
-// What the poller saw when it logged the incident (events.properties.observed).
 function IncidentDetail({ incident }: { incident: IncidentResponse }) {
+  // A field-log incident stores the log's hours, not a weather reading: its detail line says what happened.
+  if (incident.kind !== 'weather') {
+    return (
+      <div className="flex flex-col gap-2 text-sm text-text">
+        <p className="font-medium">{incident.customerName ?? 'Unknown company'}</p>
+        <p className="text-text-muted">{formatDateTime(incident.occurredAt)}</p>
+        <p>{incident.detail}</p>
+      </div>
+    );
+  }
   const observed = incident.observed as
     | { tempC: number; windKph: number; precipMm: number; code: number }
     | null;

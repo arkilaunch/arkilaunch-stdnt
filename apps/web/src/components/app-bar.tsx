@@ -1,40 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
-import { Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
-import { describeNotification, notificationQueries } from './notification-feed.js';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link, useRouterState } from '@tanstack/react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { describeNotification, feedAreaOf, NotificationKindLabel, notificationRowClass, UnreadBadge } from './notification-feed.js';
+import { apiPatch } from '../lib/api-client.js';
 import { formatStatus } from '../lib/format.js';
-import { ShoppingCart } from 'lucide-react';
+import { Bell, LogOut, Menu, ShoppingCart, TriangleAlert, X } from 'lucide-react';
 import { clearTokens } from '../lib/auth-client.js';
 import { useCart } from '../lib/cart-client.js';
 import { getCurrentRole, homeHref } from '../lib/guards.js';
-import { edtrQueries, notificationsQueries } from '../lib/queries.js';
-import { StatusPill } from './status-pill.js';
-import { applicationsListQuery } from './application-actions.js';
-import { AlertIcon, BellIcon, LogOutIcon } from './icons.js';
+import { edtrQueries, notificationsQueries, tenantsQueries } from '../lib/queries.js';
+import { useHeaderColor, useTenant } from '../lib/tenant.js';
+
+const TILE = 'hover:bg-current/10';
 
 export interface AppBarProps {
   tenantLabel: string;
   onMenuClick?: () => void;
+  /** Phone nav that drops under the bar while `menuOpen`. */
+  menu?: ReactNode;
+  menuOpen?: boolean;
+  onMenuClose?: () => void;
 }
 
-// DESIGN.md §4.1 Nav shell (role-aware): tenant mark leads, review-queue
-// count and unread notifications surface here, account menu stays in the same
-// app-bar position on every authed screen (SC 3.2.6). A failed badge fetch
-// renders no badge rather than a stale or wrong number.
-//
-// The bar stays ONE row at every width. It used to wrap instead: that was
-// the cheapest way to stop a 360px overflow, but live QA showed what it
-// actually produced on a phone -- "Review queue" broken across two lines
-// inside its own pill, "Sign out" split in half, and the whole header
-// eating ~100px of an 800px screen before any content. Below `sm` the
-// counts render as icon + number and only the label is dropped, so the
-// tenant name (which truncates) absorbs the squeeze instead of the
-// controls. DESIGN.md §6: 44x44px touch targets, never color-only -- every
-// icon-only control keeps a real accessible name.
-// Always present, right of the cart. A disclosure button, not <details>:
-// <details> carries an implicit `group` role, and the card lists (and their
-// specs) find cards by that role. Closes on an outside click or Escape. The
-// panel is the feed's own first page of five, fetched on open.
+// A disclosure button, not <details>: <details> has an implicit `group` role, which card lists find cards by.
 function NotificationBell({
   unreadCount,
   seeMorePath,
@@ -44,7 +32,8 @@ function NotificationBell({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const latest = useQuery({ ...notificationQueries.list(5, 0), enabled: open, retry: false });
+  const queryClient = useQueryClient();
+  const latest = useQuery({ ...notificationsQueries.list(5, 0), enabled: open, retry: false });
 
   useEffect(() => {
     if (!open) return;
@@ -63,6 +52,10 @@ function NotificationBell({
   }, [open]);
 
   const closePanel = () => setOpen(false);
+  const area = feedAreaOf(useRouterState({ select: (s) => s.location.pathname }));
+  const markRead = (id: string) => {
+    void apiPatch(`/notifications/${id}/read`, {}).then(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }));
+  };
 
   return (
     <div ref={ref} className="relative">
@@ -71,20 +64,26 @@ function NotificationBell({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : 'Notifications'}
-        className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-sm text-text-muted hover:text-text"
+        className={`flex min-h-11 min-w-11 items-center justify-center rounded-sm ${TILE}`}
       >
-        <BellIcon aria-hidden="true" className="h-5 w-5" />
-        {unreadCount !== null && unreadCount > 0 && (
-          <span className="rounded-full bg-primary px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-text">
-            {unreadCount}
-          </span>
-        )}
+        {/* AWS console style: the count sits on the bell's shoulder, not beside it. */}
+        <span className="relative">
+          <Bell aria-hidden="true" className="h-5 w-5" />
+          {unreadCount !== null && unreadCount > 0 && (
+            <span
+              aria-hidden="true"
+              className="absolute -right-2 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none tabular-nums text-on-primary"
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
+        </span>
       </button>
       {open && (
         <div
           role="region"
           aria-label="Latest notifications"
-          className="fixed inset-x-3 top-14 z-50 overflow-hidden rounded-md border border-border bg-surface shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80"
+          className="fixed inset-x-3 top-14 z-50 flex max-h-[min(32rem,calc(100dvh-5rem))] flex-col overflow-hidden rounded-md border border-border bg-surface shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80"
         >
           {latest.isPending && <p className="px-4 py-3 text-sm text-text-muted">Loading…</p>}
           {latest.isError && (
@@ -93,22 +92,41 @@ function NotificationBell({
           {latest.data?.items.length === 0 && (
             <p className="px-4 py-3 text-sm text-text-muted">Nothing needs you right now.</p>
           )}
-          <ul>
+          <ul className="scroll-thin min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {latest.data?.items.map((n) => {
-              const described = describeNotification(n.notificationType, n.payload);
-              return (
-                <li key={n.id} className="border-b border-border px-4 py-3 last:border-b-0">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-text">
-                    {n.status === 'unread' && (
-                      <span
-                        aria-label="Unread"
-                        className="h-2 w-2 shrink-0 rounded-full bg-primary"
-                      />
-                    )}
+              const described = describeNotification(n.notificationType, n.payload, area);
+              const body = (
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <p className="flex items-center gap-2">
+                    <NotificationKindLabel type={n.notificationType} />
+                    {n.status === 'unread' && <UnreadBadge />}
+                  </p>
+                  <p className={`text-sm text-text ${n.status === 'unread' ? 'font-bold' : ''}`}>
+                    {n.status === 'unread' && <span className="sr-only">Unread: </span>}
                     {described?.title ?? formatStatus(n.notificationType)}
                   </p>
                   {described && (
                     <p className="line-clamp-2 text-xs text-text-muted">{described.body}</p>
+                  )}
+                </div>
+              );
+              return (
+                <li key={n.id} className={`border-b border-border last:border-b-0 ${notificationRowClass(n.status === 'unread')}`}>
+                  {described?.action ? (
+                    <Link
+                      to={described.action.to}
+                      params={described.action.params}
+                      {...(described.action.search ? { search: described.action.search } : {})}
+                      onClick={() => {
+                        if (n.status === 'unread') markRead(n.id);
+                        closePanel();
+                      }}
+                      className="block px-4 py-3 hover:bg-surface-sunk"
+                    >
+                      {body}
+                    </Link>
+                  ) : (
+                    <div className="px-4 py-3">{body}</div>
                   )}
                 </li>
               );
@@ -117,7 +135,7 @@ function NotificationBell({
           <Link
             to={seeMorePath}
             onClick={closePanel}
-            className="block border-t border-border px-4 py-3 text-center text-sm font-medium text-text hover:bg-surface-sunk"
+            className="block shrink-0 border-t border-border bg-surface px-4 py-3 text-center text-sm font-medium text-accent hover:bg-surface-sunk"
           >
             See more
           </Link>
@@ -127,129 +145,111 @@ function NotificationBell({
   );
 }
 
-export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
+export function AppBar({ tenantLabel, onMenuClick, menu, menuOpen = false, onMenuClose }: AppBarProps) {
   const role = getCurrentRole();
-  // The same bar renders inside the account shell, where /app/* is a role
-  // bounce rather than a destination.
   const isCustomer = role === 'customer';
-  const notificationsPath = isCustomer ? '/account/notifications' : '/app/notifications';
+  const notificationsPath = isCustomer
+    ? '/account/notifications'
+    : role === 'platform_admin'
+      ? '/admin/notifications'
+      : '/app/notifications';
 
-  const notifications = useQuery({ ...notificationsQueries.list(), retry: false });
-  // GET /edtr is staff-only, so this fired a guaranteed 403 on every page a
-  // customer loaded -- a console error and a wasted round trip each time,
-  // for a badge they can never see. The bar has rendered in the account
-  // shell since it was written; moving the catalog into that shell just made
-  // it happen on more pages.
-  // The platform admin runs no tenant's field logs; its queue is the company
-  // applications waiting on a decision, so the pill counts those instead.
+  const notifications = useQuery({ ...notificationsQueries.unreadCount(), retry: false });
   const isPlatformAdmin = role === 'platform_admin';
   const edtrList = useQuery({
-    ...edtrQueries.list(),
+    ...edtrQueries.reviewCount(),
     retry: false,
-    enabled: !isCustomer && !isPlatformAdmin,
+    // Staff-only endpoint (edtr:read): anyone else gets a guaranteed 403.
+    enabled: !isCustomer && !isPlatformAdmin && role !== 'timekeeper',
   });
   const applications = useQuery({
-    ...applicationsListQuery(1, 0),
+    ...tenantsQueries.applications(1, 0),
     retry: false,
     enabled: isPlatformAdmin,
   });
-  // The cart sits in the bar beside Sign out (Figma 185:1599 puts it in the
-  // top bar, not the sidebar). Customer-only: staff have no cart, and the bar
-  // is shared with the admin shell.
   const cartCount = useCart().length;
 
-  const unreadItems = notifications.data?.items;
-  const unreadCount = unreadItems ? unreadItems.filter((n) => n.status === 'unread').length : null;
-  const reviewItems = edtrList.data?.items as { status?: string }[] | undefined;
-  const reviewQueueCount = isPlatformAdmin
-    ? (applications.data?.total ?? null)
-    : reviewItems
-      ? reviewItems.filter((e) => e.status === 'review').length
-      : null;
+  const unreadCount = notifications.data?.total ?? null;
+  const reviewQueueCount = isPlatformAdmin ? (applications.data?.total ?? null) : (edtrList.data?.total ?? null);
   const reviewQueueLabel = isPlatformAdmin ? 'Applications' : 'Review queue';
+  const reviewQueueLink = isPlatformAdmin
+    ? ({ to: '/admin/applications' } as const)
+    : ({ to: '/app/ocr', search: { status: 'review' } } as const);
+
+  const bar = useHeaderColor();
+  const tenant = useTenant();
+  const mark = tenant?.iconUrl ?? tenant?.logoUrl;
+  const barColour = bar ? '' : 'bg-nav text-text-inverse';
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   return (
-    <header className="sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-2 sm:gap-4 sm:px-4">
+    <header
+      style={bar ?? undefined}
+      className={`sticky top-0 z-40 flex min-h-14 items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-4 ${barColour}`}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && menuOpen) {
+          onMenuClose?.();
+          menuButton.current?.focus();
+        }
+      }}
+    >
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {onMenuClick && (
           <button
+            ref={menuButton}
             type="button"
             onClick={onMenuClick}
             aria-label="Toggle navigation"
-            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-sm text-text lg:hidden"
+            aria-expanded={menuOpen}
+            aria-controls="app-mobile-nav"
+            className={`flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-sm lg:hidden ${TILE}`}
           >
-            <svg
-              viewBox="0 0 20 20"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              className="h-5 w-5"
-            >
-              <path d="M3 6h14M3 10h14M3 14h14" strokeLinecap="round" />
-            </svg>
+            {menuOpen ? <X aria-hidden className="h-5 w-5" /> : <Menu aria-hidden className="h-5 w-5" />}
           </button>
         )}
-        <Link to={homeHref()} className="truncate font-display text-base font-semibold text-text" aria-label={`${tenantLabel} home`}>
-          {tenantLabel}
+        <Link
+          to={homeHref()}
+          className="flex min-w-0 items-center gap-2 text-base font-medium"
+          aria-label={`${tenantLabel} home`}
+        >
+          {mark ? (
+            <img src={mark} alt="" className="h-8 w-auto max-w-[120px] shrink-0 object-contain" />
+          ) : (
+            <span
+              aria-hidden
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-on-primary"
+            >
+              {tenantLabel.trim().charAt(0).toUpperCase() || 'A'}
+            </span>
+          )}
+          {/* Phones show the mark alone; the link's aria-label still names the tenant. */}
+          <span className="hidden truncate sm:inline">{tenantLabel}</span>
         </Link>
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5 sm:gap-2">
         {reviewQueueCount !== null && reviewQueueCount > 0 && (
-          <>
-            {/* Same fact, two densities: the full pill once there is room
-                for its label, and an icon + count that still reads as a
-                warning below it. */}
-            {/* Amber as a FILL with dark text, not amber text on white.
-                --recon-review is PAGASA yellow (#c9a100), which measures
-                2.45:1 against the white bar -- under both the 4.5:1 DESIGN.md
-                §6 demands of text and the 3:1 a non-text indicator needs. The
-                pill's own tone pairing already solves this, so the compact
-                form borrows it and keeps icon + number + name so it is never
-                colour-only. */}
-            <span
-              aria-label={`${reviewQueueLabel}: ${reviewQueueCount}`}
-              className="flex min-h-11 items-center sm:hidden"
-            >
-              <span className="flex items-center gap-1 rounded-sm bg-recon-review px-1.5 py-1 text-text">
-                <AlertIcon aria-hidden="true" className="h-4 w-4" />
-                <span className="font-mono text-sm font-semibold tabular-nums">
-                  {reviewQueueCount}
-                </span>
-              </span>
-            </span>
-            {/* Hidden via a WRAPPER, not a `hidden` class on the pill
-                itself. StatusPill sets `inline-flex` in its own base
-                classes, and between two single-class display utilities the
-                winner is CSS source order, not the order they appear in the
-                class attribute -- so `hidden` lost and the phone rendered
-                the icon AND the 153px pill side by side, which is what put
-                this group over the viewport in the first place. */}
-            <span className="hidden sm:block">
-              <StatusPill
-                tone="recon-review"
-                label={reviewQueueLabel}
-                icon={<AlertIcon />}
-                value={String(reviewQueueCount)}
-                className="whitespace-nowrap"
-              />
-            </span>
-          </>
+          <Link
+            {...reviewQueueLink}
+            aria-label={`${reviewQueueLabel}: ${reviewQueueCount}. Open it`}
+            className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-sm px-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${TILE}`}
+          >
+            <TriangleAlert aria-hidden="true" className="h-4 w-4 shrink-0" />
+            <span className="hidden sm:inline">{reviewQueueLabel}</span>
+            <span className="font-mono tabular-nums">{reviewQueueCount}</span>
+          </Link>
         )}
 
         {isCustomer && (
           <Link
             to="/account/cart"
-            // The count belongs in the accessible name, not only the pill:
-            // "Cart, 3 items" read aloud beats a bare "3", and the empty cart
-            // still needs a name to be reachable at all.
             aria-label={cartCount > 0 ? `Cart, ${cartCount} items` : 'Cart, empty'}
-            className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-sm px-2 text-sm font-medium text-text-muted hover:text-text sm:gap-2 sm:px-3"
+            className={`flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-sm px-2 text-sm font-medium sm:gap-2 sm:px-3 ${TILE}`}
           >
             <ShoppingCart aria-hidden="true" className="h-5 w-5" />
             <span className="hidden sm:inline">Cart</span>
             {cartCount > 0 && (
-              <span className="rounded-full bg-primary px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-text">
+              <span className="rounded-full bg-primary px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-on-primary">
                 {cartCount}
               </span>
             )}
@@ -258,10 +258,6 @@ export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
 
         <NotificationBell unreadCount={unreadCount} seeMorePath={notificationsPath} />
 
-        {/* Icon-only on a phone. Under real mobile emulation the layout
-            viewport is 320px, not the 360px a desktop-sized window reports,
-            and the word "Sign out" was the single widest thing keeping this
-            group at 361px -- over the viewport, on every authed screen. */}
         <button
           type="button"
           onClick={() => {
@@ -269,12 +265,25 @@ export function AppBar({ tenantLabel, onMenuClick }: AppBarProps) {
             window.location.assign('/login');
           }}
           aria-label="Sign out"
-          className="flex min-h-11 min-w-11 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-2 text-sm font-medium text-text-muted hover:text-text sm:px-3"
+          className={`flex min-h-11 min-w-11 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-2 text-sm font-medium sm:px-3 ${TILE}`}
         >
-          <LogOutIcon aria-hidden="true" className="h-5 w-5 sm:hidden" />
+          <LogOut aria-hidden="true" className="h-5 w-5 sm:hidden" />
           <span className="hidden sm:inline">Sign out</span>
         </button>
       </div>
+
+      {menuOpen && menu && (
+        <>
+          <div aria-hidden="true" onClick={onMenuClose} className="fixed inset-x-0 bottom-0 top-14 bg-black/40 lg:hidden" />
+          <div
+            id="app-mobile-nav"
+            style={bar ?? undefined}
+            className={`absolute inset-x-0 top-full max-h-[calc(100dvh-3.5rem)] overflow-y-auto border-t border-current/15 px-4 pb-6 shadow-lg motion-safe:animate-rise lg:hidden ${barColour}`}
+          >
+            {menu}
+          </div>
+        </>
+      )}
     </header>
   );
 }

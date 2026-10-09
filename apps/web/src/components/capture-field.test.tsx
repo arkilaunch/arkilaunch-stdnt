@@ -5,10 +5,16 @@ import { CaptureField } from './capture-field.js';
 import { UploadPrepareError } from '../lib/image-compression.js';
 
 const prepareUpload = vi.hoisted(() => vi.fn());
+const scanner = vi.hoisted(() => ({ load: vi.fn(), analyze: vi.fn(), picked: vi.fn(), straighten: vi.fn() }));
 
 vi.mock('../lib/image-compression.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/image-compression.js')>();
   return { ...actual, prepareUpload };
+});
+
+vi.mock('../lib/document-scanner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/document-scanner.js')>();
+  return { ...actual, loadDocumentScanner: scanner.load, analyzeDocument: scanner.analyze, analyzePickedDocument: scanner.picked, straightenDocument: scanner.straighten };
 });
 
 function photo(name = 'photo.jpg', type = 'image/jpeg'): File {
@@ -31,6 +37,8 @@ function renderField(overrides: Partial<React.ComponentProps<typeof CaptureField
 
 beforeEach(() => {
   prepareUpload.mockReset();
+  scanner.load.mockReset(); scanner.analyze.mockReset(); scanner.picked.mockReset(); scanner.straighten.mockReset();
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: undefined });
   // jsdom defines neither of these, so they are added to the real URL object
   // rather than swapped in as a whole new global, which would lose the rest of
   // URL during React's unmount cleanup.
@@ -40,13 +48,11 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('CaptureField', () => {
-  // jsdom has no navigator.mediaDevices, which is the same shape as an
-  // insecure origin or a device with no camera: the viewfinder must not be
-  // the only way in. Every test below therefore exercises the fallback,
-  // which is exactly the path that must never regress.
+  // jsdom has no navigator.mediaDevices, like an insecure origin: every test below exercises the fallback.
   it('falls back to the two file inputs when the viewfinder cannot open', () => {
     renderField();
     expect(screen.queryByTestId('scanFile-viewfinder')).not.toBeInTheDocument();
@@ -54,8 +60,7 @@ describe('CaptureField', () => {
     expect(screen.getByRole('button', { name: 'Choose a file' })).toBeInTheDocument();
   });
 
-  // The whole point of the change: one input forces the camera on mobile, so
-  // the file-picker input must NOT carry the capture attribute.
+  // The file-picker input must NOT carry the capture attribute.
   it('puts the camera attribute on the photo input only, so the other still opens the picker', () => {
     renderField();
     expect(screen.getByTestId('scanFile-camera')).toHaveAttribute('capture', 'environment');
@@ -140,8 +145,106 @@ describe('CaptureField', () => {
     await userEvent.click(shutter);
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(prepared));
-    expect(prepareUpload).toHaveBeenCalledWith(expect.any(File));
+    expect(prepareUpload).toHaveBeenCalledWith(expect.any(File), undefined);
     // The stream is released on capture, not left holding the camera open.
     expect(track.stop).toHaveBeenCalled();
+  });
+
+  it('gives KYC a compact automatic camera with a manual shutter', async () => {
+    scanner.load.mockReturnValue(new Promise(() => undefined));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const track = { stop: vi.fn(), getCapabilities: () => ({}) };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track], getVideoTracks: () => [track] }) },
+    });
+    renderField({ scanner: true });
+
+    const camera = await screen.findByTestId('scanFile-viewfinder');
+    expect(camera).toHaveClass('aspect-[4/3]');
+    expect(screen.getByRole('dialog', { name: 'Scan Photo of the sheet' })).toBeInTheDocument();
+    expect(screen.getByTestId('scanFile-shutter')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose a file' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toHaveFocus());
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(track.stop).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Try camera again' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Take photo' })).not.toBeInTheDocument();
+  });
+
+  it('reads a selected KYC PDF automatically', async () => {
+    const prepared = new File(['pdf'], 'accepted.pdf', { type: 'application/pdf' });
+    prepareUpload.mockResolvedValue(prepared);
+    const onAccepted = vi.fn();
+    const { onChange } = renderField({ scanner: true, onAccepted, accept: 'image/*,application/pdf' });
+    await userEvent.upload(screen.getByTestId('scanFile-file'), new File(['pdf'], 'registration.pdf', { type: 'application/pdf' }));
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledTimes(1));
+    expect(onAccepted).toHaveBeenCalledWith(prepared);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(prepared);
+  });
+
+  // A flatbed scan is already the page: the edge finder would lock onto the printed table and crop off the header.
+  it('keeps a picked scan that is exactly the sheet shape whole, instead of cropping to an inner border', async () => {
+    const prepared = photo('prepared.jpg');
+    prepareUpload.mockResolvedValue(prepared);
+    scanner.load.mockResolvedValue({});
+    scanner.picked.mockReturnValue({ quality: 'ready', corners: [{ x: 40, y: 450 }, { x: 2120, y: 450 }, { x: 2120, y: 1150 }, { x: 40, y: 1150 }] });
+    scanner.straighten.mockResolvedValue(photo('page.jpg'));
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 2200, height: 1700, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    const onAccepted = vi.fn();
+    renderField({ scanner: true, onAccepted, snapAspect: [279.4 / 215.9, 355.6 / 215.9] });
+
+    await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(prepared));
+    expect(scanner.straighten.mock.calls[0]![1]).toEqual([{ x: 0, y: 0 }, { x: 2200, y: 0 }, { x: 2200, y: 1700 }, { x: 0, y: 1700 }]);
+  });
+
+  it('straightens and reads a clear selected KYC photo without a Use scan click', async () => {
+    const corrected = photo('straightened.jpg');
+    const prepared = photo('prepared.jpg');
+    prepareUpload.mockResolvedValue(prepared);
+    scanner.load.mockResolvedValue({});
+    scanner.picked.mockReturnValue({ quality: 'ready', corners: [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 90 }, { x: 10, y: 90 }] });
+    scanner.straighten.mockResolvedValue(corrected);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 100, height: 100, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    const onAccepted = vi.fn();
+    const { onChange } = renderField({ scanner: true, onAccepted });
+
+    await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(prepared));
+    expect(scanner.straighten).toHaveBeenCalled();
+    expect(prepareUpload).toHaveBeenCalledWith(corrected, undefined);
+    expect(onChange).toHaveBeenCalledWith(prepared);
+    expect(scanner.analyze).not.toHaveBeenCalled();
+  });
+
+  // A photo with no sheet found is never sent silently: the timekeeper is told, then may still use it.
+  it('keeps a blank picked image in manual review, warns, and offers it only as "Use anyway"', async () => {
+    scanner.load.mockResolvedValue({}); scanner.picked.mockReturnValue(null);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    const onAccepted = vi.fn();
+    renderField({ scanner: true, onAccepted });
+    await userEvent.upload(screen.getByTestId('scanFile-file'), photo());
+    await screen.findByText(/No clear document edges/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/edges of the sheet were not found/);
+    expect(screen.getByRole('button', { name: 'Use anyway' })).toBeEnabled();
+    expect(onAccepted).not.toHaveBeenCalled();
+  });
+
+  it('keeps the native camera input on the original scanner path', async () => {
+    scanner.load.mockResolvedValue({}); scanner.analyze.mockReturnValue(null);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 640, height: 404, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn(), getImageData: vi.fn().mockReturnValue({}) } as unknown as CanvasRenderingContext2D);
+    renderField({ scanner: true });
+    await userEvent.upload(screen.getByTestId('scanFile-camera'), photo());
+    await screen.findByText(/No clear document edges/);
+    expect(scanner.analyze).toHaveBeenCalled();
+    expect(scanner.picked).not.toHaveBeenCalled();
   });
 });

@@ -16,13 +16,9 @@ import { useToast } from '../components/toast.js';
 import { apiErrorText, apiGet, apiPatch } from '../lib/api-client.js';
 import { formatDate, formatPeso } from '../lib/format.js';
 import { tenantOrigin } from '../lib/host.js';
+import { SearchField } from '../components/search-field.js';
 
-// Every rental company on the platform, seeded or approved (GET
-// /tenants/companies, migration 0049), with its headline numbers, a link to
-// its own site and an active/inactive switch. The site link is built from
-// the current host, so it is `{slug}.localhost:5173` in dev and
-// `{slug}.arkilaunch.tech` in production.
-export const companiesQuery = () => ({
+const companiesQuery = () => ({
   queryKey: ['tenants', 'companies'] as const,
   queryFn: () => apiGet<PlatformCompanyListResponse>('/tenants/companies'),
 });
@@ -32,7 +28,7 @@ function StatusBadge({ status }: { status: CompanyStatus }) {
   return (
     <span
       className={[
-        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold',
+'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold',
         active ? 'bg-success/15 text-text' : 'bg-surface-sunk text-text-muted',
       ].join(' ')}
     >
@@ -42,8 +38,6 @@ function StatusBadge({ status }: { status: CompanyStatus }) {
   );
 }
 
-// A platform admin edits any company's storefront branding (the name stays
-// locked, same form the company's own owner/admin uses).
 function BrandingAction({ company }: { company: PlatformCompany }) {
   const [open, setOpen] = useState(false);
   return (
@@ -58,10 +52,7 @@ function BrandingAction({ company }: { company: PlatformCompany }) {
   );
 }
 
-// Online payments go to the company's own PayMongo account, a child of
-// ArkiLaunch's. The company signs up through ArkiLaunch's PayMongo invite
-// (Settings > Invitations) and does PayMongo's own verification; its org_
-// id is pasted here. Until then its customers can only pay cash.
+// Until its PayMongo org_ id is set, online payments land on ArkiLaunch's own (parent) account.
 function PaymongoForm({ company, onDone }: { company: PlatformCompany; onDone: () => void }) {
   const toast = useToast();
   const path = `/tenants/${company.tenantId}/paymongo-account`;
@@ -175,7 +166,7 @@ function StatusAction({ company }: { company: PlatformCompany }) {
 
 const COLUMNS: TableColumn<PlatformCompany>[] = [
   {
-    header: 'Company',
+    header: 'Company', kind: 'text',
     cell: (row) => {
       const origin = tenantOrigin(row.slug);
       return (
@@ -193,15 +184,15 @@ const COLUMNS: TableColumn<PlatformCompany>[] = [
       );
     },
   },
-  { header: 'Status', cell: (row) => <StatusBadge status={row.status} /> },
-  { header: 'People', cell: (row) => row.usersCount },
-  { header: 'Customers', cell: (row) => row.customersCount },
-  { header: 'Equipment', cell: (row) => row.equipmentCount },
-  { header: 'Rentals', cell: (row) => row.rentalsCount },
-  { header: 'Collected', cell: (row) => formatPeso(row.revenuePaid) },
-  { header: 'Joined', cell: (row) => formatDate(row.createdAt) },
+  { header: 'Status', kind: 'status', cell: (row) => <StatusBadge status={row.status} /> },
+  { header: 'People', kind: 'number', cell: (row) => row.usersCount },
+  { header: 'Customers', kind: 'number', cell: (row) => row.customersCount },
+  { header: 'Equipment', kind: 'number', cell: (row) => row.equipmentCount },
+  { header: 'Rentals', kind: 'number', cell: (row) => row.rentalsCount },
+  { header: 'Collected', kind: 'money', cell: (row) => formatPeso(row.revenuePaid) },
+  { header: 'Joined', kind: 'date', cell: (row) => formatDate(row.createdAt) },
   {
-    header: 'Actions',
+    header: 'Actions', kind: 'action',
     cell: (row) => (
       <span className="flex flex-wrap gap-2">
         <a
@@ -224,7 +215,7 @@ function Stat({ label, value, detail }: { label: string; value: string; detail?:
   return (
     <Surface className="flex flex-col gap-1 p-4">
       <span className="text-sm text-text-muted">{label}</span>
-      <span className="font-display text-2xl font-semibold text-text">{value}</span>
+      <span className="text-display-md text-text">{value}</span>
       {detail && <span className="text-xs text-text-muted">{detail}</span>}
     </Surface>
   );
@@ -249,9 +240,7 @@ function CompaniesTable({ items }: { items: PlatformCompany[] }) {
   const rows = q ? items.filter((c) => c.legalName.toLowerCase().includes(q) || c.slug.includes(q)) : items;
   return (
     <div className="flex flex-col gap-3">
-      <div className="max-w-sm">
-        <Input label="Search companies" type="search" value={query} onChange={(e) => setQuery(e.target.value)} />
-      </div>
+      <SearchField className="max-w-sm" label="Search companies" value={query} onChange={setQuery} />
       {rows.length === 0 ? (
         <p className="text-sm text-text-muted">No companies match &ldquo;{query}&rdquo;.</p>
       ) : (
@@ -265,7 +254,6 @@ function CompaniesPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Companies"
         title="Companies"
         description="Every rental company on ArkiLaunch. Open a company's site, or deactivate it to take it offline."
       />

@@ -18,8 +18,11 @@ import { registerRoute } from './routes/register.js';
 import { registerCompanyRoute } from './routes/register.company.js';
 import { registerPendingRoute } from './routes/register.pending.js';
 import { activateRoute } from './routes/activate.js';
+import { resetPasswordRoute } from './routes/reset-password.js';
 
 import { accountLayoutRoute } from './routes/_account.js';
+import { accountHelpRoute } from './routes/account.help.js';
+import { appTicketsRoute } from './routes/app.tickets.js';
 import { accountIndexRoute } from './routes/account.index.js';
 import { accountBookingsRoute } from './routes/account.bookings.js';
 import { accountCartRoute } from './routes/account.cart.js';
@@ -46,16 +49,20 @@ import { adminLayoutRoute } from './routes/_admin.js';
 import { appIndexRoute } from './routes/app.index.js';
 import { appInventoryRoute } from './routes/app.inventory.js';
 import { appDeploymentRoute } from './routes/app.deployment.js';
+import { appSiteHubRoute } from './routes/app.site-hub.js';
 import { appInsightsRoute } from './routes/app.insights.js';
 import { appIncidentsRoute } from './routes/app.incidents.js';
 import { appPaymentsRoute } from './routes/app.payments.js';
+import { appCouponsRoute } from './routes/app.coupons.js';
 import { appBillingWeeklyRoute } from './routes/app.billing.weekly.js';
 import { appUsersRoute } from './routes/app.users.js';
 import { appSettingsRoute } from './routes/app.settings.js';
 import { appBrandingRoute } from './routes/app.branding.js';
+import { appTiersRoute } from './routes/app.tiers.js';
 import { appTrucksRoute } from './routes/app.trucks.js';
 import { quotesRoute } from './routes/quotes.js';
 import { quotePrintRoute } from './routes/quote-print.js';
+import { accountStatementRoute, appStatementRoute } from './routes/statement.js';
 import { edtrRoute } from './routes/edtr.js';
 import { appOcrDeploymentsRoute, fieldScanRoute } from './routes/app.ocr.deployments.js';
 import { adminUsersRoute } from './routes/app.users.js';
@@ -80,7 +87,6 @@ import {
 } from './routes/notifications.js';
 import { appProfileRoute, adminProfileRoute, fieldProfileRoute } from './routes/profile.js';
 import {
-  appTicketsRoute,
   appSecurityLogsRoute,
   adminSecurityLogsRoute,
   fieldSettingsRoute,
@@ -91,10 +97,7 @@ import {
   accountCompanyDocumentsRoute,
 } from './routes/account.companies.js';
 
-// /account/companies was a second, differently-styled list of the same rows
-// the Figma company list (251:1945) now draws at /account/applications.
-// Redirected rather than deleted: it is linked from older emails and the
-// customer journey docs.
+// Redirected, not deleted: /account/companies is linked from older emails.
 const accountCompaniesRedirectRoute = createRoute({
   getParentRoute: () => accountLayoutRoute,
   path: '/account/companies',
@@ -107,11 +110,11 @@ export const routeTree = rootRoute.addChildren([
   // `/` renders per host: ArkiLaunch landing or the tenant storefront home.
   indexRoute,
   publicLayoutRoute.addChildren([contactRoute, helpRoute, termsRoute, privacyRoute]),
-  // Same paths as before -- only the chrome changes, and only by auth state.
   storefrontLayoutRoute.addChildren([equipmentRoute, equipmentDetailRoute]),
-  authLayoutRoute.addChildren([loginRoute, signupRoute, registerRoute, registerCompanyRoute, registerPendingRoute, activateRoute]),
+  authLayoutRoute.addChildren([loginRoute, signupRoute, registerRoute, registerCompanyRoute, registerPendingRoute, activateRoute, resetPasswordRoute]),
   accountLayoutRoute.addChildren([
     accountIndexRoute,
+    accountHelpRoute,
     accountBookingsRoute,
     accountCartRoute,
     accountSettingsRoute,
@@ -123,6 +126,7 @@ export const routeTree = rootRoute.addChildren([
     accountCheckoutFailedRoute,
     accountNotificationsRoute,
     accountBookingRoute,
+    accountStatementRoute,
     accountBookingExtendRoute,
     accountCompaniesRedirectRoute,
     accountCompanyDetailRoute,
@@ -137,15 +141,19 @@ export const routeTree = rootRoute.addChildren([
     appIndexRoute,
     appBookingsRoute,
     appBookingRoute,
+    appStatementRoute,
     appInventoryRoute,
     appDeploymentRoute,
+    appSiteHubRoute,
     appInsightsRoute,
     appIncidentsRoute,
     appPaymentsRoute,
+    appCouponsRoute,
     appBillingWeeklyRoute,
     appUsersRoute,
     appSettingsRoute,
     appBrandingRoute,
+    appTiersRoute,
     appTrucksRoute,
     quotesRoute,
     quotePrintRoute,

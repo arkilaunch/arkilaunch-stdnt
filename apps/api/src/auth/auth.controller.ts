@@ -1,31 +1,34 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Headers, HttpCode, HttpStatus, Ip, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../common/decorators/public.decorator.js';
 import { LoginTenantSlug, StorefrontSlug } from '../common/decorators/tenant-slug.decorator.js';
+import { TURNSTILE_HEADER, TurnstileGuard } from '../common/turnstile.js';
 import { AuthService } from './auth.service.js';
-import { ForgotPasswordDto, LoginDto, RefreshDto, UserActivateDto, Verify2faDto } from './dto.js';
+import { ForgotPasswordDto, LoginDto, RefreshDto, ResetPasswordDto, UserActivateDto, Verify2faDto } from './dto.js';
 import { CustomerSignupDto } from '../customers/dto.js';
 
-// Public: no tenant context yet (RFC-1 §3). 2fa/verify stays here (also
-// public) because at that point the caller holds only a single-purpose
-// challenge token, not a normal Bearer access token -- enroll/enroll/confirm
-// live in TwoFaController instead, since those DO need an authenticated ctx.
-// activate (S19) is the same shape: the caller holds only a single-purpose
-// activation token, not a Bearer access token.
+// Public: no tenant context yet. 2fa/verify and activate live here because the caller holds only a
+// single-purpose token, not a Bearer access token.
 @Controller('auth')
 @Public()
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  // Turnstile only after repeated failures, so a normal sign-in never sees the widget.
   @Post('login')
-  login(@Body() body: LoginDto, @LoginTenantSlug() tenantSlug: string) {
-    return this.auth.login(body, tenantSlug);
+  login(
+    @Body() body: LoginDto,
+    @LoginTenantSlug() tenantSlug: string,
+    @Ip() ip: string,
+    @Headers(TURNSTILE_HEADER) turnstileToken?: string,
+  ) {
+    return this.auth.login(body, tenantSlug, ip, turnstileToken);
   }
 
-  // Customer self-signup (customer prerequisites CR). Throttled hard: it
-  // is an unauthenticated write that spends an argon2 hash.
+  // Throttled hard: an unauthenticated write that spends an argon2 hash.
   @Post('register-customer')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(TurnstileGuard)
   registerCustomer(@Body() body: CustomerSignupDto, @StorefrontSlug() tenantSlug: string) {
     return this.auth.registerCustomer(body, tenantSlug);
   }
@@ -35,8 +38,17 @@ export class AuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseGuards(TurnstileGuard)
   forgotPassword(@Body() body: ForgotPasswordDto, @LoginTenantSlug() tenantSlug: string) {
     return this.auth.forgotPassword(body, tenantSlug);
+  }
+
+  // The emailed Supabase recovery token is the credential here; throttled since it spends an argon2 hash.
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  resetPassword(@Body() body: ResetPasswordDto, @LoginTenantSlug() tenantSlug: string) {
+    return this.auth.resetPassword(body, tenantSlug);
   }
 
   @Post('refresh')
@@ -45,11 +57,11 @@ export class AuthController {
   }
 
   @Post('2fa/verify')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   verifyTwoFa(@Body() body: Verify2faDto) {
     return this.auth.verifyTwoFa(body);
   }
 
-  // POST /auth/activate (S19): completes an invite from UsersService.invite().
   @Post('activate')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })

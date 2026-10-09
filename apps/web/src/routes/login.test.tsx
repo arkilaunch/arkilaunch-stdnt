@@ -1,18 +1,12 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, renderHook, screen, waitFor } from '@testing-library/react';
+import { useCart } from '../lib/cart-client.js';
 import userEvent from '@testing-library/user-event';
 import { renderRoute } from '../test/render-route.js';
 import { makeToken, makeValidClaims } from '../test/make-token.js';
-import { setAccessToken, getAccessToken } from '../lib/auth-client.js';
+import { setAccessToken, getAccessToken, login } from '../lib/auth-client.js';
 
-// The route-level pattern to copy for future screens: drive the real route
-// tree through createMemoryHistory and mock only the network boundary
-// (global fetch), not auth-client itself -- login()'s storeTokens() side
-// effect must actually run, or the route guards downstream (which read
-// sessionStorage) bounce the navigation right back to /login.
-// Only /auth/login gets the crafted response; every other endpoint (the
-// destination page's own data fetch, e.g. GET /equipment) gets an empty
-// array so navigating there doesn't also need its own fixture.
+// Mock only fetch, not auth-client: login()'s storeTokens() must run or the guards bounce to /login.
 function stubFetch(loginResponse: unknown, status = 200, verify2faResponse?: unknown) {
   vi.stubGlobal(
     'fetch',
@@ -23,12 +17,7 @@ function stubFetch(loginResponse: unknown, status = 200, verify2faResponse?: unk
       if (String(url).includes('/auth/2fa/verify')) {
         return Promise.resolve(new Response(JSON.stringify(verify2faResponse ?? {}), { status: 200 }));
       }
-      // The destination page's own data fetch. It used to answer `[]` for
-      // every endpoint, which is not the shape a paginated list returns:
-      // /app/inventory's isEmpty() reads data.items and threw on undefined,
-      // crashing the route into its error boundary mid-assertion. That was
-      // stderr noise for a long time and an intermittent failure once the
-      // shell grew another subscriber and the timing shifted.
+      // Paginated endpoints must answer the list shape: isEmpty() reads data.items.
       const listShape = /\/(equipment|bookings|quotes|invoices|payments|users|incidents)/.test(
         String(url),
       );
@@ -42,14 +31,29 @@ function stubFetch(loginResponse: unknown, status = 200, verify2faResponse?: unk
 describe('LoginPage: redirect preservation', () => {
   beforeEach(() => {
     sessionStorage.clear();
-    // Access token now lives in a module-level variable (RFC-1 §3), not
-    // sessionStorage, so clearing storage alone no longer resets it between
-    // tests in this file.
+    // The access token is module state; clearing storage does not reset it.
     setAccessToken(null);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('keeps a visitor cart on first sign-in but clears it when switching accounts', async () => {
+    const first = makeToken(makeValidClaims({ sub: 'customer-1' }));
+    sessionStorage.setItem('arkilaunch.cart', '[{"equipmentId":"machine-1"}]');
+    stubFetch({ accessToken: first, refreshToken: 'refresh-1', expiresIn: 600 });
+
+    await login({ email: 'first@example.com', password: 'password123' });
+    expect(sessionStorage.getItem('arkilaunch.cart')).toContain('machine-1');
+
+    const second = makeToken(makeValidClaims({ sub: 'customer-2' }));
+    stubFetch({ accessToken: second, refreshToken: 'refresh-2', expiresIn: 600 });
+    const { result } = renderHook(() => useCart());
+    expect(result.current).toHaveLength(1);
+    await act(() => login({ email: 'second@example.com', password: 'password123' }));
+    expect(sessionStorage.getItem('arkilaunch.cart')).toBeNull();
+    expect(result.current).toHaveLength(0);
   });
 
   it('after a successful login, navigates back to the ?redirect= destination rather than the role home', async () => {
@@ -62,7 +66,7 @@ describe('LoginPage: redirect preservation', () => {
 
     await userEvent.type(screen.getByLabelText(/email address/i), 'admin@test-tenant-a.test');
     await userEvent.type(screen.getByLabelText(/password/i), 'password123');
-    await userEvent.click(screen.getByRole('button', { name: /sign in to system/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/app/inventory'));
   });
@@ -79,7 +83,7 @@ describe('LoginPage: redirect preservation', () => {
 
     await userEvent.type(screen.getByLabelText(/email address/i), 'timekeeper@test-tenant-a.test');
     await userEvent.type(screen.getByLabelText(/password/i), 'password123');
-    await userEvent.click(screen.getByRole('button', { name: /sign in to system/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
 
     await waitFor(() => expect(screen.getByLabelText(/verification code/i)).toBeInTheDocument());
     expect(getAccessToken()).toBeNull();

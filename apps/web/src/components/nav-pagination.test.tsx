@@ -3,13 +3,36 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { activeNavTarget } from './nav-group.js';
 import { Pagination } from './pagination.js';
+import { APP_NAV, navForRole } from '../lib/nav-config.js';
+
+describe('navForRole', () => {
+  const labels = (role: Parameters<typeof navForRole>[1]) =>
+    navForRole(APP_NAV, role).flatMap((group) => group.items.map((item) => item.label));
+  const adminOnly = ['Price book', 'Registrations', 'Business settings', 'People'];
+
+  it('hides from an owner the pages its route guard would bounce it from', () => {
+    const owner = labels('owner');
+    for (const label of adminOnly) expect(owner).not.toContain(label);
+    expect(owner).toContain('Reports');
+    expect(owner).toContain('Storefront branding');
+  });
+
+  it('shows an admin everything', () => {
+    const admin = labels('admin');
+    for (const label of adminOnly) expect(admin).toContain(label);
+  });
+
+  it('drops a group left empty', () => {
+    expect(navForRole([{ title: 'Empty', items: [] }], 'owner')).toEqual([]);
+    expect(labels('owner')).toContain('Tickets');
+  });
+});
 
 describe('activeNavTarget', () => {
   const targets = ['/app', '/app/deployment', '/app/ocr', '/app/users'];
 
   it('marks only the most specific destination, not every ancestor', () => {
-    // The bug this replaces: `/app` also matched `/app/ocr` by prefix, so the
-    // section root and the page both showed as active.
+    // `/app` also matches `/app/ocr` by prefix; only the page may show active.
     expect(activeNavTarget(targets, '/app/ocr')).toBe('/app/ocr');
   });
 
@@ -29,8 +52,7 @@ describe('activeNavTarget', () => {
     expect(activeNavTarget(targets, '/account')).toBeNull();
   });
 
-  // The bug: `/account` is a prefix of every page in the section, so the cart,
-  // the checkout, the invoice and the company form all lit "Home".
+  // `/account` prefixes every page in its section; Home must not light on them.
   describe('a section root marked exact', () => {
     const accountNav = [
       { to: '/account', exact: true },
@@ -84,7 +106,7 @@ describe('Pagination', () => {
       />,
     );
     expect(screen.getByText(/showing 21-40 of 63 field logs/i)).toBeInTheDocument();
-    expect(screen.getByText(/page 2 of 4/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Page 2 of 4' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('cannot go back from the first page, or forward from the last', async () => {

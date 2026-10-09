@@ -1,93 +1,134 @@
-import { Fragment, useState } from 'react';
-import type { CompanyDocumentReadResponse, CompanyReviewResponse, RegistryDocumentType } from '@arkilaunch/shared';
+import { Fragment, useState, type ReactNode } from 'react';
+import type { CompanyReviewResponse, KycRejectionReason, RegistryDocumentType } from '@arkilaunch/shared';
 import {
-  DTI_REGEX,
+  cureDocumentsFor,
+  hasRequiredCompanyDocuments,
   isPrimaryRegistration,
+  KYC_REJECTION_REASON_CODES,
+  KYC_REJECTION_REASONS,
   normalizeTin,
+  PHILSYS_CHECK_URL,
+  PH_ID_TYPES,
+  idTypeOf,
   REGISTRY_LINKS,
-  SEC_REGEX,
   TIN_REGEX,
-  UNLOCKABLE_COMPANY_FIELDS,
+  sameValue,
 } from '@arkilaunch/shared';
-import { createRoute } from '@tanstack/react-router';
+import { createRoute, useNavigate, useSearch } from '@tanstack/react-router';
+import { CircleCheck, CircleX, TriangleAlert } from 'lucide-react';
 import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
 import { PageHeader } from '../components/page-header.js';
-import { EmptyState } from '../components/empty-state.js';
+import { Table, type TableColumn } from '../components/table.js';
+import { PAGE_SIZE, Pagination } from '../components/pagination.js';
+import { StatusBadge } from '../components/status-badge.js';
 import { Button } from '../components/button.js';
-import { Surface } from '../components/surface.js';
 import { Modal } from '../components/modal.js';
+import { ConfirmDialog } from '../components/confirm-dialog.js';
+import { Tabs } from '../components/tabs.js';
+import { Alert } from '../components/alert.js';
+import { Skeleton } from '../components/skeleton.js';
+import { ExpandableSection } from '../components/expandable-section.js';
 import { useToast } from '../components/toast.js';
-import { Input } from '../components/input.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { apiErrorText, apiGet, apiPatch } from '../lib/api-client.js';
 import { companiesQueries } from '../lib/queries.js';
-import { formatDate, formatStatus } from '../lib/format.js';
-import { DOC_LABELS, FIELD_LABELS } from '../components/company-card.js';
-
-// What a reviewer typed (or confirmed) for one company, keyed by company id
-// so several cards in the queue keep their own edits.
-interface ReviewFields {
-  companyName: string;
-  tin: string;
-  secNumber: string;
-  dtiNumber: string;
-  firstName: string;
-  middleName: string;
-  lastName: string;
-}
+import { formatDate, formatStatus, isUuid } from '../lib/format.js';
+import { DOC_LABELS } from '../components/company-card.js';
 
 type ReviewDocument = CompanyReviewResponse['documents'][number];
 
 const ID_DETAILS: { key: string; label: string }[] = [
-  { key: 'id_number', label: 'PCN' },
+  { key: 'first_name', label: 'First name' },
+  { key: 'middle_name', label: 'Middle name' },
+  { key: 'last_name', label: 'Last name' },
+  { key: 'id_number', label: 'ID number' },
   { key: 'birth_date', label: 'Date of birth' },
   { key: 'sex', label: 'Sex' },
   { key: 'address', label: 'Address' },
 ];
 
-const sameText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-// Looser, for "did the customer change it": a scan and a typed value differ
-// in case, spaces and dashes without saying anything different.
-const sameValue = (a: string, b: string) =>
-  a.replace(/[^a-z0-9]/gi, '').toLowerCase() === b.replace(/[^a-z0-9]/gi, '').toLowerCase();
-
-// The port keys on this paper where what the customer entered (confirmed at
-// upload, or the TIN / SEC number on the company) differs from the scan.
-// For those the scan's read % says nothing about the value in front of the
-// reviewer, so it is replaced by an "Edited by customer" tag.
-function editedKeys(company: CompanyReviewResponse, doc: ReviewDocument): string[] {
-  const entered: Record<string, string> = {
-    ...(company.tin ? { tin: company.tin } : {}),
-    ...(company.secNumber ? { sec_number: company.secNumber } : {}),
-    ...doc.customer,
-  };
-  return Object.keys(entered).filter((key) => doc.ocr[key] && !sameValue(entered[key]!, doc.ocr[key]!));
-}
-
-function EditedTag({ scanned }: { scanned?: string | undefined }) {
+function Submitted({ label, value, scanned }: { label: string; value: string | null | undefined; scanned?: string | undefined }) {
+  const differs = Boolean(value && scanned && !sameValue(value, scanned));
   return (
-    <span className="inline-flex flex-wrap items-center gap-1 text-xs">
-      <span className="rounded-sm border border-warning px-1.5 text-text">Edited by customer</span>
-      {scanned !== undefined && <span className="text-text-muted">scan read "{scanned}"</span>}
-    </span>
+    <>
+      <dt className="text-text-muted">{label}</dt>
+      <dd className="flex flex-wrap items-baseline gap-2 break-words text-text">
+        {value || 'Not given'}
+        {differs && <span className="text-xs text-text-muted">scan: {scanned}</span>}
+      </dd>
+    </>
   );
 }
 
-// Under each field: what the upload-time scan read, so a reviewer sees at a
-// glance whether the customer's value matches the paper.
-function scanHint(scanned: string | undefined, current: string): string | undefined {
-  if (!scanned) return undefined;
-  return sameText(scanned, current) ? 'Matches the scan.' : `Scan read "${scanned}".`;
+const BAND_META = {
+  high: { label: 'High', icon: CircleCheck, className: 'text-success' },
+  medium: { label: 'Medium', icon: TriangleAlert, className: 'text-warning' },
+  low: { label: 'Low', icon: CircleX, className: 'text-error' },
+} as const;
+
+const CHECK_META = {
+  pass: { icon: CircleCheck, className: 'text-success' },
+  warn: { icon: TriangleAlert, className: 'text-warning' },
+  fail: { icon: CircleX, className: 'text-error' },
+} as const;
+
+function ScorePill({ score }: { score: NonNullable<CompanyReviewResponse['score']> }) {
+  const [open, setOpen] = useState(false);
+  const meta = BAND_META[score.band];
+  const Icon = meta.icon;
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="inline-flex min-h-11 w-fit items-center gap-1.5 rounded-sm text-sm text-text hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        <Icon aria-hidden className={`h-4 w-4 ${meta.className}`} />
+        <span className="font-mono tabular-nums">{score.score}%</span> {meta.label} confidence
+        <span className="text-accent underline">{open ? 'Hide checks' : 'Show checks'}</span>
+      </button>
+      {open && (
+        <ul className="flex w-full max-w-md flex-col gap-1 rounded-sm border border-border p-3 text-left text-sm">
+          {score.checks.map((c) => {
+            const check = CHECK_META[c.status as keyof typeof CHECK_META] ?? CHECK_META.fail;
+            const CheckIcon = check.icon;
+            return (
+              <li key={c.id} className="flex gap-2">
+                <CheckIcon aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${check.className}`} />
+                <span>
+                  <span className="font-medium text-text">{c.label}</span>
+                  <span className="sr-only"> ({c.status})</span>
+                  <span className="block text-xs text-text-muted">{c.reason}</span>
+                </span>
+              </li>
+            );
+          })}
+          <li className="pt-1 text-xs text-text-muted">Advisory only: you decide.</li>
+        </ul>
+      )}
+    </div>
+  );
 }
 
-function formatError(value: string, re: RegExp, message: string): string | undefined {
-  return value.trim() && !re.test(value.trim()) ? message : undefined;
+const groupHeading = 'font-medium text-text';
+const dlClass = 'grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]';
+
+function Check({ checked, onChange, children }: { checked: boolean; onChange: (on: boolean) => void; children: ReactNode }) {
+  return (
+    <label className="flex min-h-11 items-start gap-2 py-1 text-sm text-text">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--color-primary)]"
+      />
+      <span>{children}</span>
+    </label>
+  );
 }
 
-// The public-registry check for one paper: the link copies whatever that
-// registry takes as a paste (REGISTRY_LINKS) and opens its search in a new
-// tab; the tick records that the reviewer actually looked.
 function RegistryCheck({
   document,
   number,
@@ -123,7 +164,7 @@ function RegistryCheck({
           );
         }}
       >
-        Check on {link.registry} <span aria-hidden="true">↗</span>
+        Check {DOC_LABELS[document.documentType] ?? link.registry} on {link.registry} <span aria-hidden="true">↗</span>
         <span className="sr-only"> (opens in a new tab and copies {copy})</span>
       </a>
       <p className="text-xs text-text-muted">
@@ -135,68 +176,62 @@ function RegistryCheck({
           </>
         )}
       </p>
-      <label className="flex min-h-11 items-center gap-2 text-text">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onCheckedChange(e.target.checked)}
-          className="h-5 w-5 shrink-0 accent-[var(--color-primary)]"
-        />
-        I checked this on the {link.registry} registry
-      </label>
+      <Check checked={checked} onChange={onCheckedChange}>
+        It is active on the {link.registry} registry
+      </Check>
     </div>
   );
 }
 
-// The admin-side counterpart to the customer's scan. The card opens with
-// what the customer confirmed and what the upload-time scan read, side by
-// side, with no click; "Re-read" runs a fresh pass. The extraction decides
-// nothing on its own -- it is a typing aid for the person looking at the
-// document, and Verify waits on their registry checks (RFC-2's human gate).
+function DocButton({ doc, onOpen }: { doc: ReviewDocument; onOpen: () => void }) {
+  return (
+    <Button variant="secondary" onClick={onOpen}>
+      {DOC_LABELS[doc.documentType] ?? formatStatus(doc.documentType)}
+      {doc.confidence !== null && (
+        <span className={doc.confidence < 0.7 ?'text-error' : 'text-text-muted'}>
+          &nbsp;&middot; {Math.round(doc.confidence * 100)}%
+        </span>
+      )}
+    </Button>
+  );
+}
+
+type IdentityChecks = { philsysVerified: boolean; holderAuthorized: boolean };
+const NO_CHECKS: IdentityChecks = { philsysVerified: false, holderAuthorized: false };
+
+// The extraction decides nothing: the reviewer approves (RFC-2 human gate).
 function CompanyReviewCard({
   company,
   decidable,
-  onDecide,
+  onApprove,
+  onReject,
   deciding,
   onPreviewDocument,
 }: {
   company: CompanyReviewResponse;
   decidable: boolean;
-  onDecide: (fields: ReviewFields, decision: 'approved' | 'rejected', registryChecked: string[]) => void;
+  onApprove: (registryChecked: string[], identity: IdentityChecks) => void;
+  onReject: () => void;
   deciding: boolean;
   onPreviewDocument: (companyId: string, documentId: string) => void;
 }) {
-  const toast = useToast();
-  const queryClient = useQueryClient();
   const byType = (type: string) => company.documents.find((doc) => doc.documentType === type);
   const registration = company.documents.find((doc) => isPrimaryRegistration(doc.documentType));
   const nationalId = byType('government_id');
+  const selfie = byType('selfie_with_id');
   const sec = byType('sec_certificate');
   const bir = byType('bir_cor');
   const dti = byType('dti_certificate');
-  const legacy = byType('company_registration');
-  const idValue = (key: string) => nationalId?.customer[key] ?? nationalId?.ocr[key] ?? '';
-  const fieldHint = (doc: ReviewDocument | undefined, key: string, current: string) =>
-    doc && editedKeys(company, doc).includes(key) ? (
-      <EditedTag scanned={doc.ocr[key]} />
-    ) : (
-      scanHint(doc?.ocr[key], current)
-    );
+  const dtiNumber = dti?.customer.dti_number ?? dti?.ocr.dti_number ?? '';
 
-  const [fields, setFields] = useState<ReviewFields>({
-    companyName: company.companyName,
-    tin: company.tin ?? bir?.ocr.tin ?? '',
-    secNumber: company.secNumber ?? sec?.ocr.sec_number ?? '',
-    dtiNumber: dti?.customer.dti_number ?? dti?.ocr.dti_number ?? '',
-    firstName: company.firstName ?? idValue('first_name'),
-    middleName: company.middleName ?? idValue('middle_name'),
-    lastName: company.lastName ?? idValue('last_name'),
-  });
   const [checked, setChecked] = useState<Set<string>>(
     () => new Set(company.documents.filter((d) => d.registryChecked).map((d) => d.id)),
   );
+  const [identity, setIdentity] = useState<IdentityChecks>(NO_CHECKS);
   const registryDocs = [sec, bir, dti].filter((d): d is ReviewDocument => Boolean(d));
+  const complete = hasRequiredCompanyDocuments(company.documents);
   const allChecked = registryDocs.every((d) => checked.has(d.id));
+  const identityDone = identity.philsysVerified && identity.holderAuthorized;
   const setCheck = (id: string, on: boolean) =>
     setChecked((current) => {
       const next = new Set(current);
@@ -205,340 +240,295 @@ function CompanyReviewCard({
       return next;
     });
 
-  const readDocument = useMutation({
-    mutationFn: (documentId: string) =>
-      apiPost<CompanyDocumentReadResponse>(
-        `/customers/${company.id}/documents/${documentId}/read`,
-        {},
-      ),
-    onSuccess: async (result) => {
-      if (!result.extractionAvailable) {
-        toast.error(
-          'Could not read the document',
-          'Document extraction is not switched on in this environment. Key the details in from the document instead.',
-        );
-        return;
-      }
-      setFields((current) => ({
-        companyName: result.suggestions.companyName ?? current.companyName,
-        tin: result.suggestions.tin ?? current.tin,
-        secNumber: result.suggestions.secNumber ?? current.secNumber,
-        dtiNumber: result.suggestions.dtiNumber ?? current.dtiNumber,
-        firstName: result.suggestions.firstName ?? current.firstName,
-        middleName: result.suggestions.middleName ?? current.middleName,
-        lastName: result.suggestions.lastName ?? current.lastName,
-      }));
-      await queryClient.invalidateQueries({ queryKey: ['customers', 'review'] });
-    },
-    onError: (err) => toast.error('Could not read the document', apiErrorText(err)),
-  });
-
-  const nameField = (key: 'firstName' | 'middleName' | 'lastName', label: string, ocrKey: string) => (
-    <Input
-      label={label}
-      maxLength={200}
-      hint={fieldHint(nationalId, ocrKey, fields[key])}
-      value={fields[key]}
-      onChange={(e) => setFields({ ...fields, [key]: e.target.value })}
-    />
-  );
+  const previous = company.rejection;
 
   return (
-    <Surface
-      radius="md"
-      elevation="sm"
-      role="group"
-      aria-label={company.companyName}
-      className="flex flex-col gap-4 p-5"
-    >
-      <div>
-        <h2 className="font-display text-lg font-semibold text-text">{company.companyName}</h2>
-        <p className="text-sm text-text-muted">
-          {company.billingAddress ?? '--'} &middot; added {formatDate(company.createdAt)}
-        </p>
-      </div>
+    <div role="group" aria-label={company.companyName} className="flex flex-col gap-4">
+      {company.score && (
+        <div className="flex justify-start">
+          <ScorePill score={company.score} />
+        </div>
+      )}
 
-      <div className="flex flex-wrap gap-2">
-        {company.documents.length === 0 && (
-          <p className="text-sm text-text-muted">No documents uploaded yet.</p>
-        )}
-        {company.documents.map((doc) => (
-          <Button
-            key={doc.id}
-            variant="secondary"
-            onClick={() => onPreviewDocument(company.id, doc.id)}
-          >
-            {DOC_LABELS[doc.documentType] ?? formatStatus(doc.documentType)}
-            {editedKeys(company, doc).length > 0 ? (
-              <>
-                &nbsp;&middot;&nbsp;
-                <EditedTag />
-              </>
-            ) : (
-              doc.confidence !== null && (
-                <span className={doc.confidence < 0.85 ? 'text-error' : 'text-text-muted'}>
-                  &nbsp;&middot; {Math.round(doc.confidence * 100)}%
-                </span>
-              )
-            )}
-          </Button>
-        ))}
-      </div>
+      {previous && company.kycStatus === 'pending' && (
+        <Alert
+          type="warning"
+          header={`Reapplied after a rejection on ${formatDate(previous.rejectedAt)}: ${KYC_REJECTION_REASONS[previous.reason].label}`}
+        >
+          {previous.note && <p className="text-text-muted">Your note: {previous.note}</p>}
+          {previous.cureDocuments.length > 0 && (
+            <p className="text-text-muted">
+              Asked for: {previous.cureDocuments.map((t) => DOC_LABELS[t] ?? formatStatus(t)).join(', ')}. Check these first.
+            </p>
+          )}
+        </Alert>
+      )}
+
+      {registration?.ocr.layout === 'unrecognized' && (
+        <Alert type="warning" header={`The ${DOC_LABELS[registration.documentType] ?? 'registration'} did not read as one.`}>
+          It may be the wrong paper, or the page is cut off. Open it before relying on what was read.
+        </Alert>
+      )}
+
+      <ExpandableSection header="Company" defaultOpen>
+        <dl className={dlClass}>
+          <Submitted label="Registered name" value={company.companyName} scanned={registration?.ocr.company_name} />
+          {(bir || company.tin) && <Submitted label="TIN" value={company.tin} scanned={(bir ?? registration)?.ocr.tin} />}
+          {(sec || company.secNumber) && <Submitted label="SEC registration number" value={company.secNumber} scanned={sec?.ocr.sec_number} />}
+          {registration?.ocr.registered_address && <Submitted label="Registered address" value={registration.ocr.registered_address} />}
+          {registration?.ocr.registration_date && <Submitted label="Registration date" value={registration.ocr.registration_date} />}
+          <Submitted label="Billing address" value={company.billingAddress} />
+        </dl>
+      </ExpandableSection>
+
+      <ExpandableSection header="Contact person">
+        <dl className={dlClass}>
+          <Submitted
+            label="Name"
+            value={
+              [company.firstName, company.lastName].filter(Boolean).join(' ') ||
+              [nationalId?.customer.first_name ?? nationalId?.ocr.first_name, nationalId?.customer.last_name ?? nationalId?.ocr.last_name]
+                .filter(Boolean)
+                .join(' ')
+            }
+          />
+          <Submitted label="Mobile" value={company.contactPhone ?? null} />
+        </dl>
+      </ExpandableSection>
 
       {decidable && (
         <>
+          <section aria-labelledby={`reg-${company.id}`} className="flex flex-col gap-3">
+            <h3 id={`reg-${company.id}`} className={groupHeading}>
+              Business documents
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {company.documents.length === 0 && <p className="text-sm text-text-muted">No documents uploaded yet.</p>}
+              {company.documents
+                .filter((doc) => doc.documentType !== 'government_id' && doc.documentType !== 'selfie_with_id')
+                .map((doc) => (
+                  <DocButton key={doc.id} doc={doc} onOpen={() => onPreviewDocument(company.id, doc.id)} />
+                ))}
+            </div>
+            {dti && (
+              <dl className={dlClass}>
+                <Submitted label="DTI business name number" value={dtiNumber} scanned={dti.ocr.dti_number} />
+              </dl>
+            )}
+            <div className="grid gap-3 sm:grid-cols-3">
+              {registryDocs.map((doc) => (
+                <RegistryCheck
+                  key={doc.id}
+                  document={doc}
+                  number={doc === bir ? (company.tin ?? '') : doc === sec ? (company.secNumber ?? '') : dtiNumber}
+                  companyName={company.companyName}
+                  checked={checked.has(doc.id)}
+                  onCheckedChange={(on) => setCheck(doc.id, on)}
+                />
+              ))}
+            </div>
+            {registryDocs.length > 0 && (
+              <p className="text-xs text-text-muted">
+                Expired, suspended or not found? Reject with that reason: the customer is told exactly what to bring.
+              </p>
+            )}
+          </section>
+
           <section aria-labelledby={`id-${company.id}`} className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 id={`id-${company.id}`} className="font-medium text-text">
-                National ID
+              <h3 id={`id-${company.id}`} className={groupHeading}>
+                ID document
               </h3>
-              {nationalId && (
-                <Button
-                  variant="ghost"
-                  loading={readDocument.isPending && readDocument.variables === nationalId.id}
-                  onClick={() => readDocument.mutate(nationalId.id)}
-                >
-                  Re-read National ID
-                </Button>
-              )}
             </div>
-            {!nationalId && <p className="text-sm text-text-muted">No National ID uploaded.</p>}
-            <div className="grid gap-3 sm:grid-cols-3">
-              {nameField('firstName', 'First name', 'first_name')}
-              {nameField('middleName', 'Middle name', 'middle_name')}
-              {nameField('lastName', 'Last name', 'last_name')}
+            <div className="flex flex-wrap gap-2">
+              {[nationalId, selfie]
+                .filter((doc): doc is ReviewDocument => Boolean(doc))
+                .map((doc) => (
+                  <DocButton key={doc.id} doc={doc} onOpen={() => onPreviewDocument(company.id, doc.id)} />
+                ))}
             </div>
+            {!nationalId && <p className="text-sm text-text-muted">No ID uploaded.</p>}
             {nationalId && (
-              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
-                {ID_DETAILS.map(({ key, label }) => {
-                  const customer = nationalId.customer[key];
-                  const scanned = nationalId.ocr[key];
-                  const edited = editedKeys(company, nationalId).includes(key);
-                  return (
+              <p className="text-sm text-text">
+                <span className="text-text-muted">ID type: </span>
+                {PH_ID_TYPES[idTypeOf(nationalId.customer.id_type)].label}
+              </p>
+            )}
+            {nationalId && (
+              <ExpandableSection header={<span className="text-sm font-medium">ID details</span>}>
+                <dl className={dlClass}>
+                  {ID_DETAILS.map(({ key, label }) => (
                     <Fragment key={key}>
-                      <dt className="text-text-muted">{label}</dt>
-                      <dd className="flex flex-wrap items-center gap-2 break-words text-text">
-                        {customer ?? scanned ?? 'Not read'}
-                        {edited && <EditedTag scanned={scanned} />}
-                      </dd>
+                      <Submitted label={label} value={nationalId.customer[key] ?? nationalId.ocr[key]} scanned={nationalId.customer[key] ? nationalId.ocr[key] : undefined} />
                     </Fragment>
-                  );
-                })}
-              </dl>
+                  ))}
+                </dl>
+              </ExpandableSection>
             )}
+            <div className="flex flex-col rounded-md border border-border px-3 py-2">
+              {/* philsysVerified stores "the ID checked out with its issuer", whatever the card. */}
+              <Check checked={identity.philsysVerified} onChange={(on) => setIdentity({ ...identity, philsysVerified: on })}>
+                {idTypeOf(nationalId?.customer.id_type) === 'philsys' ? (
+                  <>
+                    The ID&apos;s QR code verified on{' '}
+                    <a href={PHILSYS_CHECK_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline">
+                      PhilSys Check <span aria-hidden="true">↗</span>
+                    </a>
+                    , and what it returned matches the card.
+                  </>
+                ) : (
+                  <>The ID is genuine, unexpired and checked with its issuer, and its details match the card.</>
+                )}
+              </Check>
+              <Check checked={identity.holderAuthorized} onChange={(on) => setIdentity({ ...identity, holderAuthorized: on })}>
+                The ID holder may act for the company.
+              </Check>
+              <ExpandableSection header={<span className="text-sm font-medium">How to check these</span>}>
+                <ul className="list-disc pl-5 text-sm text-text-muted">
+                  <li>{PH_ID_TYPES[idTypeOf(nationalId?.customer.id_type)].verifyHint}</li>
+                  <li>
+                    The holder may act for the company when listed as an officer on the GIS, named in a Secretary&apos;s
+                    Certificate or Board Resolution, or the DTI registrant.
+                  </li>
+                </ul>
+              </ExpandableSection>
+            </div>
+          </section>
+
+          <div className="sticky -bottom-4 -mx-4 flex flex-col gap-2 border-t border-border bg-surface px-4 py-3 sm:-bottom-5 sm:-mx-5 sm:px-5">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="approve"
+                loading={deciding}
+                disabled={!complete || !allChecked || !identityDone}
+                onClick={() => onApprove([...checked], identity)}
+              >
+                Verify
+              </Button>
+              <Button variant="destructive" loading={deciding} onClick={onReject}>
+                Reject
+              </Button>
+            </div>
             <p className="text-xs text-text-muted">
-              The name is written onto the customer's account only when you verify.
+              {!complete
+                ? 'Waiting on the ID and a BIR 2303 or SEC certificate.'
+                : allChecked && identityDone
+                  ? 'Verifying approves exactly what the customer submitted.'
+                  : 'Check each paper on its registry and tick the two identity checks before verifying.'}
             </p>
-          </section>
-
-          <section aria-labelledby={`reg-${company.id}`} className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 id={`reg-${company.id}`} className="font-medium text-text">
-                Registration
-              </h3>
-              {registration && (
-                <Button
-                  variant="ghost"
-                  loading={readDocument.isPending && readDocument.variables === registration.id}
-                  onClick={() => readDocument.mutate(registration.id)}
-                >
-                  Re-read registration
-                </Button>
-              )}
-            </div>
-            <Input
-              label="Registered name"
-              maxLength={200}
-              hint={scanHint(registration?.ocr.company_name, fields.companyName)}
-              value={fields.companyName}
-              onChange={(e) => setFields({ ...fields, companyName: e.target.value })}
-            />
-            <div className="grid gap-3 sm:grid-cols-3">
-              {(bir || legacy || company.tin) && (
-                <div className="flex flex-col gap-1">
-                  <Input
-                    label="TIN"
-                    inputMode="numeric"
-                    placeholder="000-000-000-000"
-                    hint={fieldHint(bir ?? legacy, 'tin', fields.tin)}
-                    error={formatError(normalizeTin(fields.tin), TIN_REGEX, 'Not a 9 or 12 digit TIN.')}
-                    value={fields.tin}
-                    onChange={(e) => setFields({ ...fields, tin: e.target.value })}
-                  />
-                  {bir && (
-                    <RegistryCheck
-                      document={bir}
-                      number={fields.tin}
-                      companyName={fields.companyName}
-                      checked={checked.has(bir.id)}
-                      onCheckedChange={(on) => setCheck(bir.id, on)}
-                    />
-                  )}
-                </div>
-              )}
-              {(sec || legacy || company.secNumber) && (
-                <div className="flex flex-col gap-1">
-                  <Input
-                    label="SEC registration number"
-                    maxLength={50}
-                    hint={fieldHint(sec ?? legacy, 'sec_number', fields.secNumber)}
-                    error={formatError(fields.secNumber, SEC_REGEX, 'Not an SEC registration number format.')}
-                    value={fields.secNumber}
-                    onChange={(e) => setFields({ ...fields, secNumber: e.target.value })}
-                  />
-                  {sec && (
-                    <RegistryCheck
-                      document={sec}
-                      number={fields.secNumber}
-                      companyName={fields.companyName}
-                      checked={checked.has(sec.id)}
-                      onCheckedChange={(on) => setCheck(sec.id, on)}
-                    />
-                  )}
-                </div>
-              )}
-              {dti && (
-                <div className="flex flex-col gap-1">
-                  <Input
-                    label="DTI business name number"
-                    maxLength={50}
-                    hint={fieldHint(dti, 'dti_number', fields.dtiNumber)}
-                    error={formatError(fields.dtiNumber, DTI_REGEX, 'Not a DTI business name number format.')}
-                    value={fields.dtiNumber}
-                    onChange={(e) => setFields({ ...fields, dtiNumber: e.target.value })}
-                  />
-                  <RegistryCheck
-                    document={dti}
-                    number={fields.dtiNumber}
-                    companyName={fields.companyName}
-                    checked={checked.has(dti.id)}
-                    onCheckedChange={(on) => setCheck(dti.id, on)}
-                  />
-                </div>
-              )}
-            </div>
-            {(registration?.ocr.registered_address || registration?.ocr.registration_date) && (
-              <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
-                <dt className="text-text-muted">Registered address</dt>
-                <dd className="break-words text-text">{registration.ocr.registered_address ?? 'Not read'}</dd>
-                <dt className="text-text-muted">Registration date</dt>
-                <dd className="text-text">{registration.ocr.registration_date ?? 'Not read'}</dd>
-              </dl>
-            )}
-          </section>
-
-          <ReviewComment company={company} />
-
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="approve"
-              loading={deciding}
-              disabled={company.documents.length === 0 || !allChecked}
-              onClick={() => onDecide(fields, 'approved', [...checked])}
-            >
-              Verify
-            </Button>
-            <Button
-              variant="destructive"
-              loading={deciding}
-              onClick={() => onDecide(fields, 'rejected', [])}
-            >
-              Reject
-            </Button>
           </div>
-          <p className="text-xs text-text-muted">
-            {allChecked
-              ? 'Verifying saves these fields onto the company. They are your confirmation against the document, not the scan\'s.'
-              : 'Check each number on its registry and tick it before verifying.'}
-          </p>
         </>
       )}
-    </Surface>
+    </div>
   );
 }
 
-// The reviewer's way back to the customer short of rejecting: a note, and
-// the fields and documents it unlocks for them. The company stays pending
-// and the customer can change only what is ticked here.
-function ReviewComment({ company }: { company: CompanyReviewResponse }) {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const [comment, setComment] = useState(company.reviewComment ?? '');
-  const [unlock, setUnlock] = useState<Set<string>>(() => new Set(company.unlockedFields));
-  const options = [
-    ...UNLOCKABLE_COMPANY_FIELDS.map((f) => ({ value: f as string, label: FIELD_LABELS[f]! })),
-    ...[...new Set(company.documents.map((d) => d.documentType))].map((t) => ({
-      value: t,
-      label: DOC_LABELS[t] ?? formatStatus(t),
-    })),
-  ];
-  const send = useMutation({
-    mutationFn: () =>
-      apiPatch(`/customers/${company.id}/review`, { comment: comment.trim(), unlock: [...unlock] }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['customers', 'review'] });
-      toast.success('Comment sent', 'The customer has been notified.');
-    },
-    onError: (err) => toast.error('Could not send the comment', apiErrorText(err)),
-  });
-  const id = `comment-${company.id}`;
+function RejectDialog({
+  company,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  company: CompanyReviewResponse;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: (reason: KycRejectionReason, note: string, extra: string[]) => void;
+}) {
+  const [reason, setReason] = useState<KycRejectionReason | null>(null);
+  const [note, setNote] = useState('');
+  const [extra, setExtra] = useState<Set<string>>(new Set());
+  const cure = reason ? cureDocumentsFor(reason, [...extra]) : [];
+  const onFile = [...new Set(company.documents.map((d) => d.documentType))];
+  const needsPick = reason === 'document_unreadable' && cure.length === 0;
   return (
-    <section aria-labelledby={`${id}-heading`} className="flex flex-col gap-3">
-      <h3 id={`${id}-heading`} className="font-medium text-text">
-        Ask the customer to fix something
-      </h3>
-      <div className="flex flex-col gap-1">
-        <label htmlFor={id} className="text-sm font-medium text-text">
-          Comment to the customer
-        </label>
-        <textarea
-          id={id}
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-          maxLength={1000}
-          rows={2}
-          className="rounded-md border border-border bg-surface px-3 py-2 text-text"
-        />
-      </div>
+    <Modal
+      open
+      onClose={onClose}
+      title={`Reject ${company.companyName}?`}
+      description="The customer sees the reason and the documents that fix it, then reapplies. Nothing they submitted is changed."
+      size="lg"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            loading={pending}
+            disabled={!reason || needsPick}
+            onClick={() => reason && onConfirm(reason, note.trim(), [...extra])}
+          >
+            Reject
+          </Button>
+        </>
+      }
+    >
       <fieldset className="flex flex-col gap-1">
-        <legend className="text-sm font-medium text-text">Unlock for the customer to change</legend>
-        <div className="flex flex-wrap gap-x-4">
-          {options.map((option) => (
-            <label key={option.value} className="flex min-h-11 items-center gap-2 text-sm text-text">
+        <legend className="mb-1 text-sm font-medium text-text">Reason</legend>
+        {KYC_REJECTION_REASON_CODES.map((code) => (
+          <label key={code} className="flex min-h-11 items-start gap-2 py-1 text-sm">
+            <input
+              type="radio"
+              name={`reason-${company.id}`}
+              checked={reason === code}
+              onChange={() => setReason(code)}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--color-primary)]"
+            />
+            <span>
+              <span className="font-medium text-text">{KYC_REJECTION_REASONS[code].label}</span>
+              <span className="block text-text-muted">{KYC_REJECTION_REASONS[code].detail}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {reason === 'document_unreadable' && (
+        <fieldset className="mt-3 flex flex-col gap-1">
+          <legend className="text-sm font-medium text-text">Which documents to upload again</legend>
+          {onFile.map((type) => (
+            <label key={type} className="flex min-h-11 items-center gap-2 text-sm text-text">
               <input
                 type="checkbox"
-                checked={unlock.has(option.value)}
+                checked={extra.has(type)}
                 onChange={(e) =>
-                  setUnlock((current) => {
+                  setExtra((current) => {
                     const next = new Set(current);
-                    if (e.target.checked) next.add(option.value);
-                    else next.delete(option.value);
+                    if (e.target.checked) next.add(type);
+                    else next.delete(type);
                     return next;
                   })
                 }
                 className="h-5 w-5 shrink-0 accent-[var(--color-primary)]"
               />
-              {option.label}
+              {DOC_LABELS[type] ?? formatStatus(type)}
             </label>
           ))}
+        </fieldset>
+      )}
+      {reason && (
+        <div className="mt-3 rounded-md border border-border px-3 py-2 text-sm">
+          <p className="font-medium text-text">{KYC_REJECTION_REASONS[reason].final ? 'Final: the customer cannot reapply.' : 'The customer is asked for:'}</p>
+          {cure.length > 0 && <p className="text-text">{cure.map((t) => DOC_LABELS[t] ?? formatStatus(t)).join(', ')}</p>}
+          <p className="text-text-muted">{KYC_REJECTION_REASONS[reason].customer}</p>
         </div>
-      </fieldset>
-      <Button
-        variant="secondary"
-        className="self-start"
-        loading={send.isPending}
-        disabled={!comment.trim()}
-        onClick={() => send.mutate()}
-      >
-        Send to customer
-      </Button>
-    </section>
+      )}
+      <div className="mt-3 flex flex-col gap-1">
+        <label htmlFor={`note-${company.id}`} className="text-sm font-medium text-text">
+          Note to the customer (optional)
+        </label>
+        <textarea
+          id={`note-${company.id}`}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={1000}
+          rows={2}
+          placeholder="What you saw, e.g. Check with SEC lists the company as suspended."
+          className="rounded-input border border-border bg-surface px-3 py-2 text-text"
+        />
+      </div>
+    </Modal>
   );
 }
 
-// Customer prerequisites CR: companies customers registered, with the ID
-// and registration they uploaded. Staff open each document (a 300s signed
-// URL) and decide; the customer is notified, and payment opens on approval.
 function DocumentPreviewModal({
   companyId,
   documentId,
@@ -548,19 +538,16 @@ function DocumentPreviewModal({
   documentId: string;
   onClose: () => void;
 }) {
-  const toast = useToast();
   const [asImage, setAsImage] = useState(true);
   const query = useQuery({
     queryKey: ['customers', companyId, 'documents', documentId, 'url'],
     queryFn: () => apiGet<{ url: string }>(`/customers/${companyId}/documents/${documentId}/url`),
   });
 
-  if (query.isError) toast.error('Could not open the document', apiErrorText(query.error));
-
   return (
     <Modal open onClose={onClose} title="Document" size="lg">
-      {query.isPending && <p className="text-sm text-text-muted">Loading...</p>}
-      {query.isError && <p className="text-sm text-error">{apiErrorText(query.error)}</p>}
+      {query.isPending && <Skeleton label="Loading the document" rows={1} className="[&>div]:h-64" />}
+      {query.isError && <Alert type="error">{apiErrorText(query.error)}</Alert>}
       {query.data &&
         (asImage ? (
           <img
@@ -590,115 +577,189 @@ function DocumentPreviewModal({
   );
 }
 
+function scoreText(company: CompanyReviewResponse) {
+  return company.score ? `${company.score.score}% · ${BAND_META[company.score.band].label}` : '--';
+}
+
+const COLUMNS: TableColumn<CompanyReviewResponse>[] = [
+  {
+    header: 'Company', kind: 'text',
+    cell: (c) => (
+      <div className="flex flex-col">
+        <span className="font-medium text-text">{c.companyName}</span>
+        {c.rejection && c.kycStatus === 'pending' && <span className="text-xs text-text-muted">Reapplied after a rejection</span>}
+      </div>
+    ),
+  },
+  { header: 'Applied', kind: 'date', cell: (c) => formatDate(c.createdAt) },
+  { header: 'Documents', kind: 'number', cell: (c) => c.documents.length },
+  { header: 'Score', kind: 'number', cell: scoreText },
+  { header: 'Status', kind: 'status', cell: (c) => <StatusBadge status={c.kycStatus} /> },
+];
+
 function CompanyQueue({ kycStatus }: { kycStatus: 'pending' | 'approved' }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const query = useQuery(companiesQueries.review(kycStatus));
+  const [offset, setOffset] = useState(0);
+  const query = useQuery(companiesQueries.review(kycStatus, PAGE_SIZE, offset));
+  const openId = useSearch({ strict: false }).open ?? null;
+  const navigateQueue = useNavigate();
+  const setOpenId = (id: string | null) =>
+    void navigateQueue({
+      to: '.',
+      // The router drops an undefined key, which closes the drawer.
+      search: ((prev: { open?: string }) => ({ ...prev, open: id ?? undefined })) as never,
+    });
   const [preview, setPreview] = useState<{ companyId: string; documentId: string } | null>(null);
+  const [rejecting, setRejecting] = useState<CompanyReviewResponse | null>(null);
+  const [approving, setApproving] = useState<{ company: CompanyReviewResponse; body: Record<string, unknown> } | null>(null);
+  const onPage = query.data?.items.find((c) => c.id === openId) ?? null;
+  // ponytail: a deep link past page 1 looks in the first 100 (the API max); GET /customers/review/:id if queues grow.
+  const fallback = useQuery({
+    ...companiesQueries.review(kycStatus, 100, 0),
+    enabled: Boolean(openId) && query.isSuccess && !onPage,
+  });
+  const open = onPage ?? fallback.data?.items.find((c) => c.id === openId) ?? null;
+  const missing = Boolean(openId) && fallback.isSuccess && !open;
 
   const decide = useMutation({
-    mutationFn: ({
-      id,
-      decision,
-      fields,
-      registryChecked,
-    }: {
-      id: string;
-      decision: 'approved' | 'rejected';
-      fields: ReviewFields;
-      registryChecked: string[];
-    }) =>
-      apiPatch(`/customers/${id}/kyc`, {
-        decision,
-        // Only what the reviewer actually filled in; the API keeps whatever
-        // the customer entered for anything left blank.
-        ...(fields.companyName.trim() ? { companyName: fields.companyName.trim() } : {}),
-        ...(fields.tin.trim() ? { tin: normalizeTin(fields.tin) } : {}),
-        ...(fields.secNumber.trim() ? { secNumber: fields.secNumber.trim() } : {}),
-        ...(fields.dtiNumber.trim() ? { dtiNumber: fields.dtiNumber.trim() } : {}),
-        ...(registryChecked.length > 0 ? { registryChecked } : {}),
-        ...(fields.firstName.trim() ? { firstName: fields.firstName.trim() } : {}),
-        ...(fields.middleName.trim() ? { middleName: fields.middleName.trim() } : {}),
-        ...(fields.lastName.trim() ? { lastName: fields.lastName.trim() } : {}),
-      }),
-    onSuccess: async (_d, { decision }) => {
+    mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) => apiPatch(`/customers/${id}/kyc`, body),
+    onSuccess: async (_d, { body }) => {
+      setRejecting(null);
+      setApproving(null);
+      setOpenId(null);
       await queryClient.invalidateQueries({ queryKey: ['customers', 'review'] });
-      toast.success(
-        decision === 'approved' ? 'Company verified' : 'Company rejected',
-        'The customer has been notified.',
-      );
+      toast.success(body.decision === 'approved' ? 'Company verified' : 'Company rejected', 'The customer has been notified.');
     },
     onError: (err) => toast.error('Could not record the decision', apiErrorText(err)),
   });
 
-  if (query.isPending) return <p className="text-sm text-text-muted">Loading...</p>;
-  if (query.isError) return <p className="text-sm text-error">{apiErrorText(query.error)}</p>;
-  if (query.data.length === 0) {
-    return (
-      <EmptyState
-        title={kycStatus === 'pending' ? 'Nothing waiting' : 'No verified companies yet'}
-        description={
-          kycStatus === 'pending'
-            ? 'Companies customers add appear here for review.'
-            : 'Companies you approve appear here.'
-        }
-      />
-    );
-  }
-
   return (
     <div className="flex flex-col gap-3">
-      {query.data.map((company) => (
-        <CompanyReviewCard
-          key={company.id}
-          company={company}
-          decidable={kycStatus === 'pending'}
-          deciding={decide.isPending}
-          onDecide={(fields, decision, registryChecked) =>
-            decide.mutate({ id: company.id, decision, fields, registryChecked })
+      {query.isError && <Alert type="error">{apiErrorText(query.error)}</Alert>}
+      {missing && <Alert type="info">That registration is no longer waiting here: it may already be decided.</Alert>}
+      <Table
+        columns={COLUMNS}
+        rows={query.data?.items ?? []}
+        rowKey={(c) => c.id}
+        onRowClick={(c) => setOpenId(c.id)}
+        rowLabel={(c) => `Review ${c.companyName}`}
+        loading={query.isPending}
+        empty={
+          kycStatus === 'pending'
+              ? 'Nothing waiting. Companies customers add appear here for review.'
+              : 'No verified companies yet. Companies you approve appear here.'
+        }
+        header={{ title: 'Companies', count: query.data?.total ?? 0, pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={query.data?.total ?? 0} onOffsetChange={setOffset} noun="companies" busy={query.isFetching} /> }}
+      />
+      <Modal
+        open={open !== null}
+        onClose={() => setOpenId(null)}
+        placement="right"
+        size="lg"
+        title={open?.companyName ?? 'Company'}
+        {...(open ? { description: `Applied ${formatDate(open.createdAt)}` } : {})}
+      >
+        {open && (
+          <CompanyReviewCard
+            key={open.id}
+            company={open}
+            decidable={kycStatus === 'pending'}
+            deciding={decide.isPending}
+            onApprove={(registryChecked, identity) =>
+              setApproving({ company: open, body: { decision: 'approved', registryChecked, identity } })
+            }
+            onReject={() => setRejecting(open)}
+            onPreviewDocument={(companyId, documentId) => setPreview({ companyId, documentId })}
+          />
+        )}
+      </Modal>
+      <ConfirmDialog
+        open={approving !== null}
+        tone="approve"
+        title="Verify this company?"
+        body={
+          <p>
+            <strong>{approving?.company.companyName}</strong> is cleared to book and pay, exactly as submitted. The customer is
+            notified.
+          </p>
+        }
+        confirmLabel="Verify company"
+        pending={decide.isPending}
+        onConfirm={() => {
+          if (approving) decide.mutate({ id: approving.company.id, body: approving.body });
+        }}
+        onCancel={() => setApproving(null)}
+      />
+      {rejecting && (
+        <RejectDialog
+          company={rejecting}
+          pending={decide.isPending}
+          onClose={() => setRejecting(null)}
+          onConfirm={(reason, note, extra) =>
+            decide.mutate({
+              id: rejecting.id,
+              body: { decision: 'rejected', reason, ...(note ? { note } : {}), cureDocuments: extra },
+            })
           }
-          onPreviewDocument={(companyId, documentId) => setPreview({ companyId, documentId })}
         />
-      ))}
+      )}
       {preview && (
-        <DocumentPreviewModal
-          companyId={preview.companyId}
-          documentId={preview.documentId}
-          onClose={() => setPreview(null)}
-        />
+        <DocumentPreviewModal companyId={preview.companyId} documentId={preview.documentId} onClose={() => setPreview(null)} />
       )}
     </div>
   );
+}
+
+type Queue = 'pending' | 'approved';
+const QUEUE_PATH: Record<Queue, '/app/registration/pending' | '/app/registration/verified'> = {
+  pending: '/app/registration/pending',
+  approved: '/app/registration/verified',
+};
+
+function RegistrationsPage({ kycStatus }: { kycStatus: Queue }) {
+  const navigate = useNavigate();
+  const waiting = useQuery(companiesQueries.review('pending', 1, 0));
+  return (
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Registrations"
+        description={
+          kycStatus === 'pending'
+            ? 'Check what each customer submitted, then verify or reject it.'
+            : 'Customer companies cleared to book and pay.'
+        }
+      />
+      <Tabs
+        label="Registration status"
+        items={[
+          { id: 'pending', label: 'Pending', badge: waiting.data?.total ?? null },
+          { id: 'approved', label: 'Verified' },
+        ]}
+        value={kycStatus}
+        onChange={(next) => void navigate({ to: QUEUE_PATH[next] })}
+      />
+      <CompanyQueue key={kycStatus} kycStatus={kycStatus} />
+    </div>
+  );
+}
+
+function queueSearch(search: Record<string, unknown>): { open?: string } {
+  return isUuid(search.open) ? { open: search.open } : {};
 }
 
 export const appRegistrationPendingRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/app/registration/pending',
   beforeLoad: requireRole('admin'),
-  component: () => (
-    <div className="flex flex-col gap-5">
-      <PageHeader
-        eyebrow="Registration"
-        title="Registration pending"
-        description="Customer companies waiting on a verification decision."
-      />
-      <CompanyQueue kycStatus="pending" />
-    </div>
-  ),
+  validateSearch: queueSearch,
+  component: () => <RegistrationsPage kycStatus="pending" />,
 });
 
 export const appRegistrationVerifiedRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/app/registration/verified',
   beforeLoad: requireRole('admin'),
-  component: () => (
-    <div className="flex flex-col gap-5">
-      <PageHeader
-        eyebrow="Registration"
-        title="Registration verified"
-        description="Customer companies cleared to pay."
-      />
-      <CompanyQueue kycStatus="approved" />
-    </div>
-  ),
+  validateSearch: queueSearch,
+  component: () => <RegistrationsPage kycStatus="approved" />,
 });

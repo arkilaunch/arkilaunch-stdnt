@@ -3,6 +3,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
 import { and, eq } from 'drizzle-orm';
 import {
+  customers,
   equipmentAssignments,
   invoiceLineItems,
   invoices,
@@ -19,18 +20,14 @@ import { QuotesService } from '../src/quotes/quotes.service.js';
 import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { checkoutPaidWebhook } from './paymongo-webhook.js';
+import { fixtureCompanyId } from './fixture-company.js';
 
-// Customer journey CR: cart -> booking -> quote -> counter-offer ->
-// revised quote -> accept -> rent + deposit checkout -> webhook, and the
-// change requests after it. The money assertions are the point: what is
-// charged is the accepted quote plus the contract deposit, once.
+// What is charged upfront is the contract deposit plus mob/demob, once; hours bill weekly.
 describe('Customer journey', () => {
   const events = new EventsService();
   const quotes = new QuotesService(new PricingEngineService(), events);
-  const bookings = new BookingsService(events, quotes);
-  // Real PayMongo issues a new session id per call; the shared stub's id
-  // is deterministic, which would make a checkout retry collide on the
-  // unique provider_ref.
+  const bookings = new BookingsService(events, quotes, new PaymentsService(new StubPaymentsAdapter(), new EventsService()));
+  // The stub's session id is deterministic, so a checkout retry would collide on the unique provider_ref.
   let sessions = 0;
   const adapter = new StubPaymentsAdapter();
   adapter.createCheckoutSession = async (amountPhp: number, invoiceId: string) => ({
@@ -48,6 +45,8 @@ describe('Customer journey', () => {
   let rateCardId: string;
   let equipmentTypeId: string;
 
+  let fixtureCustomerId: string;
+
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
     if (!url) throw new Error('DATABASE_URL_DIRECT is required');
@@ -59,11 +58,13 @@ describe('Customer journey', () => {
     const [customerUser] = await sql`select id from users where tenant_id = ${tenantId} and email = 'customer@test-tenant-a.test'`;
     const [adminUser] = await sql`select id from users where tenant_id = ${tenantId} and id <> ${(customerUser as { id: string }).id} limit 1`;
     const [userB] = await sql`select id from users where tenant_id = ${(tenantB as { id: string }).id} limit 1`;
-    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} limit 1`;
+    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} and customer_id is null order by created_at limit 1`;
     const [unit] = await sql`select id from equipment where tenant_id = ${tenantId} and serial_no = 'test-tenant-a-serial-booking-001'`;
     const [rateCard] = await sql`select id, equipment_type_id from rate_cards where tenant_id = ${tenantId} and equipment_id is null and rate_type = 'hourly' and (effective_to is null or effective_to > now()) order by effective_from limit 1`;
 
     customerCtx = { tenantId, userId: (customerUser as { id: string }).id, role: 'customer' };
+
+    fixtureCustomerId = await fixtureCompanyId(sql, tenantId);
     adminCtx = { tenantId, userId: (adminUser as { id: string }).id, role: 'admin' };
     otherTenantCtx = { tenantId: (tenantB as { id: string }).id, userId: (userB as { id: string }).id, role: 'admin' };
     siteId = (site as { id: string }).id;
@@ -100,6 +101,7 @@ describe('Customer journey', () => {
 
   async function book(offset: number, days = 1) {
     const created = await bookings.create(customerCtx, {
+      customerId: fixtureCustomerId,
       projectSiteId: siteId,
       siteContact: 'Marcus Thorne 0917 000 0000',
       items: [{ equipmentId, start: day(offset, 8), end: day(offset + days - 1, 17) }],
@@ -134,15 +136,33 @@ describe('Customer journey', () => {
     expect(detail.quotation?.status).toBe('approved');
     expect(detail.quotation?.totalPhp).toBeGreaterThan(0);
     expect(await notificationTypes(booking.id)).toContain('quote_ready');
+    const sql = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
+    const audit = await sql`select reason from audit_logs where entity = 'quotations' and action = 'APPROVE' and entity_id = ${detail.quotation!.id}`;
+    await sql.end();
+    expect(audit.map((row) => (row as { reason: string | null }).reason)).toEqual(['auto-quoted from rate cards']);
   });
 
-  it('negotiates, accepts, and charges the accepted quote plus the deposit exactly once', async () => {
+
+  // A booking is quoted from the price book the moment it is made; staff
+  // quote by hand only when that could not price it (no rate card).
+  async function priceBookQuote(bookingId: string, customerId: string) {
+    const detail = await bookings.get(adminCtx, bookingId);
+    if (detail.quotation?.status === 'approved') return quotes.get(adminCtx, detail.quotation.id);
+    const quote = await quotes.create(adminCtx, quoteBody(bookingId, customerId));
+    await quotes.approve(adminCtx, quote.id);
+    return quote;
+  }
+
+  it('negotiates, accepts, and charges the deposit plus mob/demob exactly once', async () => {
     const booking = await book(0);
 
-    // Staff quote it; approving tells the customer.
-    const first = await quotes.create(adminCtx, quoteBody(booking.id, booking.customerId));
-    await quotes.approve(adminCtx, first.id);
+    // The price book quotes it at once; the customer is told.
+    const first = await priceBookQuote(booking.id, booking.customerId);
     expect(await notificationTypes(booking.id)).toContain('quote_ready');
+    // Staff may not re-quote until the customer negotiates.
+    await expect(quotes.create(adminCtx, quoteBody(booking.id, booking.customerId, 50))).rejects.toMatchObject({
+      response: { error: 'quote_not_in_negotiation' },
+    });
 
     // Paying before agreeing the price is refused.
     await expect(payments.checkout(customerCtx, booking.id)).rejects.toMatchObject({
@@ -159,12 +179,19 @@ describe('Customer journey', () => {
     ]);
     expect(await notificationTypes(booking.id)).toContain('negotiation_reply');
 
-    // The revised quote supersedes the first, which can no longer be taken.
+    // In negotiation now: the revised quote supersedes the first, which can
+    // no longer be taken.
+    const undiscounted = await quotes.preview(adminCtx, quoteBody(booking.id, booking.customerId));
+    // Pin the tier: earlier payments in this file can promote the fixture customer.
+    await withTenantTx(adminCtx, (tx) => tx.update(customers).set({ tier: 'bronze' }).where(eq(customers.id, booking.customerId)));
     const second = await quotes.create(adminCtx, quoteBody(booking.id, booking.customerId, 50));
     expect(second.revision).toBe(first.revision + 1);
-    expect(second.total).toBeCloseTo(first.total - 50, 2);
+    expect(second.total).toBeCloseTo(undiscounted.total - 50, 2);
     await expect(quotes.accept(customerCtx, first.id)).rejects.toMatchObject({ response: { error: 'quote_not_open' } });
-    await quotes.approve(adminCtx, second.id);
+    // A new customer is bronze (0% cap): the discount waits for the Owner.
+    expect(second.capStatus).toBe('pending_owner');
+    await expect(quotes.approve(adminCtx, second.id)).rejects.toMatchObject({ response: { error: 'quote_cap_needs_owner' } });
+    await quotes.approveCap({ ...adminCtx, role: 'owner' }, second.id, true);
     await quotes.accept(customerCtx, second.id);
 
     const [contract] = await withTenantTx(adminCtx, (tx) =>
@@ -173,19 +200,20 @@ describe('Customer journey', () => {
     const deposit = Number(contract?.depositRequired);
     expect(deposit).toBeGreaterThan(0);
 
-    // One booking invoice: rent + deposit, itemised; a retry reuses it.
-    const checkout = await payments.checkout(customerCtx, booking.id, { method: 'gcash' });
-    const retry = await payments.checkout(customerCtx, booking.id, { method: 'gcash' });
+    // One booking invoice: consumable deposit + mob/demob upfront, itemised; the
+    // hours bill weekly against the deposit. A retry reuses it.
+    const [stored] = await withTenantTx(adminCtx, (tx) => tx.select().from(quotations).where(eq(quotations.id, second.id)));
+    const upfrontLines = [deposit, Number(stored?.mobilizationPhp ?? 0), Number(stored?.demobilizationPhp ?? 0)].filter((n) => n > 0);
+    const checkout = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
+    const retry = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
     expect(retry.invoiceId).toBe(checkout.invoiceId);
     const [invoice] = await withTenantTx(adminCtx, (tx) => tx.select().from(invoices).where(eq(invoices.id, checkout.invoiceId)));
     expect(invoice?.invoiceType).toBe('booking');
-    expect(Number(invoice?.amount)).toBeCloseTo(second.total + deposit, 2);
+    expect(Number(invoice?.amount)).toBeCloseTo(upfrontLines.reduce((a, b) => a + b, 0), 2);
     const lines = await withTenantTx(adminCtx, (tx) =>
       tx.select().from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, checkout.invoiceId)),
     );
-    expect(lines.map((line) => Number(line.amount)).sort((a, b) => a - b)).toEqual(
-      [second.total, deposit].sort((a, b) => a - b),
-    );
+    expect(lines.map((line) => Number(line.amount)).sort((a, b) => a - b)).toEqual(upfrontLines.sort((a, b) => a - b));
 
     // The webhook confirms it, tells the customer, and it cannot be paid twice.
     const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
@@ -227,6 +255,53 @@ describe('Customer journey', () => {
 
     await bookings.cancel(customerCtx, blocker.id);
     await bookings.cancel(customerCtx, booking.id);
+  });
+
+  // Each unit on a booking keeps its own dates: one unit cannot overlap
+  // itself in a single request, and extending one leaves the others alone.
+  it('keeps every unit on its own dates', async () => {
+    await expect(
+      bookings.create(customerCtx, {
+        customerId: fixtureCustomerId,
+        projectSiteId: siteId,
+        items: [
+          { equipmentId, start: day(16, 8), end: day(17, 17) },
+          { equipmentId, start: day(17, 8), end: day(18, 17) },
+        ],
+      }),
+    ).rejects.toMatchObject({ response: { error: 'equipment_unavailable', reason: 'overlaps_in_cart' } });
+
+    const created = await bookings.create(customerCtx, {
+      customerId: fixtureCustomerId,
+      projectSiteId: siteId,
+      siteContact: 'Marcus Thorne',
+      siteContactMobile: '+639170000000',
+      items: [
+        { equipmentId, start: day(16, 8), end: day(16, 17) },
+        { equipmentId, start: day(19, 8), end: day(19, 17) },
+      ],
+    });
+    const detail = await bookings.get(customerCtx, created.id);
+    expect(detail.siteContactMobile).toBe('+639170000000');
+    expect(detail.items.map((item) => item.end?.toISOString())).toEqual([day(16, 17), day(19, 17)]);
+    const listed = (await bookings.list(customerCtx, { limit: 50, offset: 0 })).items.find((row) => row.id === created.id);
+    expect(listed?.items?.map((item) => item.start.toISOString())).toEqual([day(16, 8), day(19, 8)]);
+
+    const [first, second] = detail.items;
+    const request = await bookings.requestChange(customerCtx, created.id, {
+      kind: 'extend',
+      assignmentId: first!.id,
+      requestedEnd: day(17, 17),
+    });
+    await bookings.resolveChange(adminCtx, created.id, request.id, { decision: 'approved' });
+    const after = await bookings.get(customerCtx, created.id);
+    expect(after.items.find((item) => item.id === first!.id)?.end?.toISOString()).toBe(day(17, 17));
+    expect(after.items.find((item) => item.id === second!.id)?.end?.toISOString()).toBe(day(19, 17));
+    expect(after.changeRequests[0]?.assignmentId).toBe(first!.id);
+    const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, created.id)));
+    expect(rental?.endDate?.toISOString()).toBe(day(19, 17));
+
+    await bookings.cancel(customerCtx, created.id);
   });
 
   it('a quote on someone else’s booking, and the thread, stay invisible across tenants', async () => {

@@ -1,29 +1,37 @@
 import type { QuotesService } from '../src/quotes/quotes.service.js';
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { ForbiddenException, HttpException } from '@nestjs/common';
 import postgres from 'postgres';
 import { invoices, payments, rentals, setTenantPaymongoAccount, withTenantTx } from '@arkilaunch/db';
 import { StubPaymentsAdapter, type PaymentsPort, type RequestContext } from '@arkilaunch/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { PaymentsService } from '../src/payments/payments.service.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
 import { EventsService } from '../src/events/events.service.js';
+import { fixtureCompanyId } from './fixture-company.js';
 
-// PRD-F2 (PayMongo Payment Interface). QAD-T10 (deposit stores only
-// provider_ref + status), QAD-T20 (abandoned/failed checkout never flips
-// status except via the webhook), QAD-T28 (webhook forgery/replay), QAD-T31
-// (checkout burst throttled).
 describe('PaymentsService (PRD-F2)', () => {
   const events = new EventsService();
   const payments_ = new PaymentsService(new StubPaymentsAdapter(), events);
-  const bookings = new BookingsService(events, { autoQuoteBooking: async () => null } as unknown as QuotesService);
+  const bookings = new BookingsService(events, { autoQuoteBooking: async () => null } as unknown as QuotesService, new PaymentsService(new StubPaymentsAdapter(), new EventsService()));
   const webhookSecret = 'whsec_test_secret';
 
   let customerCtxA: RequestContext;
   let siteIdA: string;
   let equipmentIdA: string;
   let customerIdA: string;
+
+  let fixtureCustomerId: string;
+
+  // The checkout throttle is tenant-wide: age recent checkouts out of the window, before (earlier specs in a
+  // full run check out on tenant A too) and after, so neither this spec nor the next hits rate_limited.
+  async function ageRecentCheckouts() {
+    const sql = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
+    await sql`update payments set created_at = created_at - interval '10 minutes' where tenant_id = ${customerCtxA.tenantId} and created_at > now() - interval '5 minutes'`;
+    await sql.end();
+  }
+  afterAll(ageRecentCheckouts);
 
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
@@ -33,11 +41,13 @@ describe('PaymentsService (PRD-F2)', () => {
     const [tenantA] = await sql`select id from tenants where slug = 'test-tenant-a'`;
     const tenantIdA = (tenantA as { id: string }).id;
     const [customerUser] = await sql`select id from users where tenant_id = ${tenantIdA} and email = 'customer@test-tenant-a.test'`;
-    const [site] = await sql`select id from project_sites where tenant_id = ${tenantIdA} limit 1`;
+    const [site] = await sql`select id from project_sites where tenant_id = ${tenantIdA} and customer_id is null order by created_at limit 1`;
     const [equipmentRow] = await sql`select id from equipment where tenant_id = ${tenantIdA} and serial_no = 'test-tenant-a-serial-booking-001'`;
-    const [customerRow] = await sql`select id from customers where tenant_id = ${tenantIdA} limit 1`;
+    const [customerRow] = await sql`select id from customers where tenant_id = ${tenantIdA} and company_name like 'test-tenant-% Customer Co.' order by created_at limit 1`;
 
     customerCtxA = { tenantId: tenantIdA, userId: (customerUser as { id: string }).id, role: 'customer' };
+
+    fixtureCustomerId = await fixtureCompanyId(sql, tenantIdA);
     siteIdA = (site as { id: string }).id;
     equipmentIdA = (equipmentRow as { id: string }).id;
     customerIdA = (customerRow as { id: string }).id;
@@ -59,6 +69,7 @@ describe('PaymentsService (PRD-F2)', () => {
     }
 
     await sql.end();
+    await ageRecentCheckouts();
   });
 
   function window(dayOffset: number) {
@@ -70,6 +81,7 @@ describe('PaymentsService (PRD-F2)', () => {
   async function createBooking(dayOffset: number): Promise<string> {
     const { start, end } = window(dayOffset);
     const created = await bookings.create(customerCtxA, {
+      customerId: fixtureCustomerId,
       projectSiteId: siteIdA,
       items: [{ equipmentId: equipmentIdA, start, end }],
     });
@@ -146,6 +158,39 @@ describe('PaymentsService (PRD-F2)', () => {
     const [invoice] = await withTenantTx(customerCtxA, (tx) => tx.select().from(invoices).where(eq(invoices.id, result.invoiceId)));
     expect(rental?.status).toBe('pending');
     expect(invoice?.status).toBe('issued');
+  });
+
+  it('two concurrent checkouts of one booking leave one issued invoice and one pending payment', async () => {
+    const bookingId = await createBooking(13);
+    // Real PayMongo gives each session its own id; the stub derives it from the invoice.
+    let session = 0;
+    const service = new PaymentsService(
+      Object.assign(new StubPaymentsAdapter(), {
+        createCheckoutSession: async (amount: number, invoiceId: string) => ({
+          id: `stub_${invoiceId}_${++session}`,
+          checkoutUrl: `about:blank?amount=${amount}`,
+        }),
+      }),
+      events,
+    );
+    await Promise.all([service.checkout(customerCtxA, bookingId), service.checkout(customerCtxA, bookingId)]);
+
+    const issued = await withTenantTx(customerCtxA, (tx) =>
+      tx.select().from(invoices).where(and(eq(invoices.rentalId, bookingId), eq(invoices.status, 'issued'))),
+    );
+    expect(issued).toHaveLength(1);
+    const pending = await withTenantTx(customerCtxA, (tx) =>
+      tx.select().from(payments).where(and(eq(payments.invoiceId, issued[0]!.id), eq(payments.status, 'pending'))),
+    );
+    expect(pending).toHaveLength(1);
+  });
+
+  it('checkout of a cancelled booking is refused and issues nothing', async () => {
+    const bookingId = await createBooking(14);
+    await withTenantTx(customerCtxA, (tx) => tx.update(rentals).set({ status: 'cancelled' }).where(eq(rentals.id, bookingId)));
+    await expect(payments_.checkout(customerCtxA, bookingId)).rejects.toMatchObject({ response: { error: 'booking_cancelled' } });
+    const issued = await withTenantTx(customerCtxA, (tx) => tx.select().from(invoices).where(eq(invoices.rentalId, bookingId)));
+    expect(issued).toHaveLength(0);
   });
 
   it('QAD-T28: a valid signed webhook confirms payment and moves invoice/rental status', async () => {
@@ -295,6 +340,7 @@ describe('PaymentsService (PRD-F2)', () => {
         return stub.createCheckoutSession(amount, invoiceId);
       },
       getCheckoutSession: (id) => stub.getCheckoutSession(id),
+      expireCheckoutSession: (id) => stub.expireCheckoutSession(id),
       refund: (id) => stub.refund(id),
     };
     const service = new PaymentsService(adapter, events);
@@ -340,7 +386,8 @@ describe('PaymentsService (PRD-F2)', () => {
       `;
       await sql.end();
     },
-    60_000,
+    // 22 sequential bookings over a remote database.
+    180_000,
   );
 
   it('sanity: seeded booking customer id resolves (fixture guard)', () => {

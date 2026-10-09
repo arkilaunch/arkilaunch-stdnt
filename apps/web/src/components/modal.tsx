@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react';
-import { CloseIcon } from './icons.js';
+import { X } from 'lucide-react';
 
-// The only overlay in the app was the sidebar drawer, which had no focus
-// trap, no Escape handler and no dialog role. Long forms and every
-// consequential action now open through this instead, so the accessibility
-// work is done once.
-
-export type ModalSize = 'sm' | 'md' | 'lg';
+export type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full';
 
 export interface ModalProps {
   open: boolean;
@@ -16,19 +11,31 @@ export interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: ModalSize;
-  // A destructive confirmation should not be dismissible by a stray click on
-  // the scrim; an informational form should be.
   dismissOnScrim?: boolean;
+  closeDisabled?: boolean;
+  placement?: 'center' | 'right';
+  role?: 'dialog' | 'alertdialog';
+  autoFocusFirst?: boolean;
 }
 
 const SIZE_CLASSES: Record<ModalSize, string> = {
   sm: 'max-w-md',
   md: 'max-w-xl',
   lg: 'max-w-3xl',
+  xl: 'max-w-5xl',
+  full: 'max-w-none',
 };
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Skip what Tab never reaches: hidden native <select>s and closed <details>/[hidden].
+function focusables(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (el) => el.tabIndex >= 0 && !el.closest('[hidden], details:not([open]) > :not(summary)'),
+  );
+}
 
 export function Modal({
   open,
@@ -39,27 +46,42 @@ export function Modal({
   footer,
   size = 'md',
   dismissOnScrim = true,
+  closeDisabled = false,
+  placement = 'center',
+  role = 'dialog',
+  autoFocusFirst = true,
 }: ModalProps) {
+  const fullScreen = size === 'full' && placement === 'center';
   const panel = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const foot = useRef<HTMLDivElement>(null);
   const restoreFocusTo = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descriptionId = useId();
+  // Read through a ref: re-running the open effect re-focused the first control on every keystroke.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const closeDisabledRef = useRef(closeDisabled);
+  closeDisabledRef.current = closeDisabled;
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      // Only the dialog holding focus answers, so a confirm inside a drawer owns Escape and Tab.
+      const active = document.activeElement;
+      if (!panel.current || !(active instanceof Element) || active.closest('[role="dialog"], [role="alertdialog"]') !== panel.current) return;
+      // An open dropdown owns its own Escape.
+      if (event.key === 'Escape' && active.getAttribute('role') === 'combobox' && active.getAttribute('aria-expanded') === 'true') return;
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onClose();
+        if (!closeDisabledRef.current) onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab' || !panel.current) return;
-      // Keep Tab inside the dialog, so focus cannot wander onto the page
-      // behind it while it is open.
-      const focusable = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const focusable = focusables(panel.current);
       if (focusable.length === 0) return;
       const first = focusable[0]!;
       const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -67,7 +89,7 @@ export function Modal({
         first.focus();
       }
     },
-    [onClose],
+    [],
   );
 
   useEffect(() => {
@@ -77,40 +99,56 @@ export function Modal({
     document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', handleKeyDown, true);
 
-    const focusable = panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
-    (focusable && focusable.length > 0 ? focusable[0] : panel.current)?.focus();
+    // A nested dialog (its effect runs first) may already hold focus. Never open on the dismiss X.
+    if (!panel.current?.contains(document.activeElement)) {
+      (autoFocusFirst ? (focusables(body.current)[0] ?? focusables(foot.current)[0] ?? panel.current) : panel.current)?.focus();
+    }
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
       document.body.style.overflow = overflow;
       restoreFocusTo.current?.focus();
     };
-  }, [open, handleKeyDown]);
+  }, [open, handleKeyDown, autoFocusFirst]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center p-0 sm:items-center sm:p-4">
+    <div
+      className={
+ placement ==='right'
+          ? 'fixed inset-0 z-40 flex justify-end'
+          : fullScreen
+            ? 'fixed inset-0 z-40 flex p-0'
+          : 'fixed inset-0 z-40 flex items-end justify-center p-0 sm:items-center sm:p-4'
+      }
+    >
       <div
         className="absolute inset-0 bg-[var(--yb-modal-scrim)]"
-        onClick={dismissOnScrim ? onClose : undefined}
+        onClick={dismissOnScrim && !closeDisabled ? onClose : undefined}
         aria-hidden
       />
       <div
         ref={panel}
-        role="dialog"
+        role={role}
         aria-modal="true"
         aria-labelledby={titleId}
         {...(description ? { 'aria-describedby': descriptionId } : {})}
         tabIndex={-1}
         className={[
-          'relative flex max-h-[90dvh] w-full flex-col rounded-t-lg border border-border bg-surface shadow-lg sm:rounded-lg',
+ placement ==='right'
+            ? 'relative flex h-dvh w-full flex-col border-l border-border bg-surface shadow-lg'
+            : fullScreen
+              ? 'relative flex h-dvh w-full flex-col bg-surface shadow-lg'
+            : 'relative flex max-h-[90dvh] w-full flex-col rounded-t-md border border-border bg-surface shadow-lg sm:rounded-md',
           SIZE_CLASSES[size],
+          // A dialog opened from a nowrap table cell must still wrap its text.
+          'whitespace-normal break-words',
         ].join(' ')}
       >
         <div className="flex items-start justify-between gap-4 border-b border-border p-4 sm:p-5">
           <div className="min-w-0">
-            <h2 id={titleId} className="font-display text-xl font-semibold text-text">
+            <h2 id={titleId} className="text-heading-lg text-text">
               {title}
             </h2>
             {description && (
@@ -122,17 +160,20 @@ export function Modal({
           <button
             type="button"
             onClick={onClose}
+            disabled={closeDisabled}
             aria-label="Close"
-            className="-m-1 shrink-0 rounded-sm p-1 text-text-muted hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="-m-2.5 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-sm text-text-muted hover:bg-surface-sunk hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <CloseIcon className="h-5 w-5" aria-hidden />
+            <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">{children}</div>
+        <div ref={body} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {children}
+        </div>
 
         {footer && (
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border p-4 sm:p-5">
+          <div ref={foot} className="flex flex-wrap items-center justify-end gap-2 border-t border-border p-4 sm:p-5">
             {footer}
           </div>
         )}

@@ -1,45 +1,41 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { signInAsCustomer as signIn } from './sign-in.js';
 
-// The Figma company list (251:1945) at /account/applications, in a browser.
 // Needs the seeded anchor tenant (`pnpm db:seed`) and the API running.
-//
-// Sign-in comes from the shared helper, which fails rather than skips: a
-// skipped sign-in reports green while asserting nothing.
+
+// Company cards are named groups; the status filter is a group too, so it is left out.
+const companyCards = (page: Page) => page.getByRole('group').and(page.locator(':not([aria-label="Show applications"])'));
 
 test.describe('company applications', () => {
   test('lists the companies, counts them, and filters by status', async ({ page }) => {
     await signIn(page);
     await page.goto('/account/applications');
 
-    await expect(page.getByRole('heading', { name: 'Company Applications' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
 
     // The seeded customer owns at least one company, so Total is non-zero and
     // the cards are on the page.
-    const total = page.getByText('Total Applications').locator('xpath=preceding-sibling::dd[1]');
+    const total = page.getByText('Total applications').locator('xpath=following-sibling::dd[1]');
     await expect(total).not.toHaveText('0');
-    const cards = page.getByRole('group');
+    const cards = companyCards(page);
     await expect(cards.first()).toBeVisible();
     const all = await cards.count();
 
-    // Each tab is a subset of All, and the two together account for every
-    // card -- a company is pending or approved, never both and never neither
-    // once rejected ones are excluded.
-    await page.getByRole('button', { name: 'Pending Approval' }).click();
-    const pending = await page.getByRole('group').count();
+    await page.getByRole('button', { name: 'Pending approval' }).click();
+    const pending = await companyCards(page).count();
     await page.getByRole('button', { name: 'Approved' }).click();
-    const approved = await page.getByRole('group').count();
+    const approved = await companyCards(page).count();
     expect(pending + approved).toBeLessThanOrEqual(all);
 
-    await page.getByRole('button', { name: 'All Applications' }).click();
-    await expect(page.getByRole('group')).toHaveCount(all);
+    await page.getByRole('button', { name: 'All applications' }).click();
+    await expect(companyCards(page)).toHaveCount(all);
   });
 
   test('search narrows to one company, and says so when nothing matches', async ({ page }) => {
     await signIn(page);
     await page.goto('/account/applications');
 
-    const first = page.getByRole('group').first();
+    const first = companyCards(page).first();
     await expect(first).toBeVisible();
     const name = await first.getAttribute('aria-label');
     expect(name).toBeTruthy();
@@ -50,15 +46,15 @@ test.describe('company applications', () => {
     await page
       .getByRole('searchbox', { name: /search companies/i })
       .fill('no-such-company-zzzzzzzz');
-    await expect(page.getByRole('group')).toHaveCount(0);
+    await expect(companyCards(page)).toHaveCount(0);
     await expect(page.getByText(/No companies match/i)).toBeVisible();
   });
 
-  test('Manage opens that company, and Add New Company opens the form', async ({ page }) => {
+  test('Manage opens that company, and Add company opens the form', async ({ page }) => {
     await signIn(page);
     await page.goto('/account/applications');
 
-    const card = page.getByRole('group').first();
+    const card = companyCards(page).first();
     const name = await card.getAttribute('aria-label');
     await card.getByRole('link', { name: 'Manage' }).click();
 
@@ -70,16 +66,14 @@ test.describe('company applications', () => {
     await page.getByRole('link', { name: 'Back to applications' }).click();
     await expect(page).toHaveURL(/\/account\/applications$/);
 
-    await page.getByRole('link', { name: 'Add New Company' }).click();
+    await page.getByRole('link', { name: 'Add company' }).click();
     await expect(page).toHaveURL(/\/account\/companies\/new$/);
   });
 
-  // /account/companies was a second list of the same rows. It redirects
-  // rather than 404s: it is linked from older material.
   test('the old companies list redirects here', async ({ page }) => {
     await signIn(page);
     await page.goto('/account/companies');
     await expect(page).toHaveURL(/\/account\/applications$/);
-    await expect(page.getByRole('heading', { name: 'Company Applications' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
   });
 });

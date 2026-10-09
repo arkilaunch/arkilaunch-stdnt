@@ -5,12 +5,10 @@ import { quotesQueries, usersQueries } from '../lib/queries.js';
 import { apiErrorText } from '../lib/api-client.js';
 import { formatDate, shortCode } from '../lib/format.js';
 import { quoteExpiresAt } from '@arkilaunch/shared';
-import { Button } from '../components/button.js';
+import { Button, buttonClass } from '../components/button.js';
 import { QuoteLines } from '../components/quote-lines.js';
+import { PrintFrame } from '../components/print-frame.js';
 
-// The printable quote the API's printableUrl points at: letterhead, lines as
-// the customer sees them, validity. Browser print (or Save as PDF) keeps it
-// endpoint-free, like the invoice statement.
 function QuotePrintPage() {
   const { quoteId } = quotePrintRoute.useParams();
   const quote = useQuery(quotesQueries.detail(quoteId));
@@ -24,21 +22,35 @@ function QuotePrintPage() {
         <Button variant="primary" onClick={() => window.print()}>
           Print
         </Button>
-        <Link to="/app/quotes">
-          <Button variant="ghost">Back to quotes</Button>
-        </Link>
+        <Link to="/app/quotes" className={buttonClass('ghost')}>Back to quotes</Link>
       </div>
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
+      <PrintFrame
+        title="Quotation"
+        docRef={`${shortCode('quote', q.id)} rev ${q.revision}`}
+        issuedAt={q.createdAt}
+        details={[
+          ['Prepared for', q.customerName ?? '--'],
+          ['Booking', q.bookingCode ?? '--'],
+          ['Valid until', q.createdAt ? formatDate(quoteExpiresAt(q.createdAt)) : '--'],
+        ]}
+      />
+      {/* A div, not <header>: print CSS hides <header>; on paper PrintFrame replaces this. */}
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4 print:hidden">
         <div>
-          <p className="font-display text-2xl font-semibold text-text">{me.data?.tenantName ?? ''}</p>
+          <p className="text-display-md text-text">{me.data?.tenantName ?? ''}</p>
           <p className="text-sm text-text-muted">Equipment rental quotation</p>
         </div>
         <div className="text-right text-sm text-text">
           <p className="font-mono">{shortCode('quote', q.id)} &middot; revision {q.revision}</p>
+          {q.bookingCode && (
+            <p>
+              For booking <span className="font-mono font-semibold">{q.bookingCode}</span>
+            </p>
+          )}
           {q.createdAt && <p>Issued {formatDate(q.createdAt)}</p>}
           {q.createdAt && <p>Valid until {formatDate(quoteExpiresAt(q.createdAt))}</p>}
         </div>
-      </header>
+      </div>
       {q.customerName && (
         <p className="text-sm text-text">
           <span className="text-text-muted">Prepared for </span>

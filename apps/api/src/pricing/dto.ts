@@ -2,11 +2,13 @@ import { createZodDto } from 'nestjs-zod';
 import {
   BillingSettingsSchema,
   DieselPriceEntrySchema,
+  EquipmentTypeCostsInputSchema,
   PricingParametersInputSchema,
   PricingParametersQuerySchema,
   RateCardCreateRequestSchema,
   RateCardListQuerySchema,
   RateCardSupersedeRequestSchema,
+  TierPolicySchema,
 } from '@arkilaunch/shared';
 
 export class DieselPriceEntryDto extends createZodDto(DieselPriceEntrySchema) {}
@@ -16,3 +18,6 @@ export class RateCardCreateDto extends createZodDto(RateCardCreateRequestSchema)
 export class RateCardSupersedeDto extends createZodDto(RateCardSupersedeRequestSchema) {}
 export class RateCardListQueryDto extends createZodDto(RateCardListQuerySchema) {}
 export class BillingSettingsDto extends createZodDto(BillingSettingsSchema) {}
+export class EquipmentTypeCostsInputDto extends createZodDto(EquipmentTypeCostsInputSchema) {}
+
+export class TierPolicyDto extends createZodDto(TierPolicySchema) {}

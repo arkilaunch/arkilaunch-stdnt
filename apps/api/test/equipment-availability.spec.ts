@@ -9,10 +9,7 @@ import {
   nearestFreeWindow,
 } from '../src/common/equipment-availability.js';
 
-// Feedback phase 3: the one availability check. Each blocker on its own.
-// Calendar blockers are pure (a real tenant_calendar row would change every
-// other booking spec running beside this one); the rest hit the DB on a
-// 2035 window nobody else uses.
+// Calendar blockers are pure (a real tenant_calendar row would affect other specs); the rest use a 2035 window.
 const CAL: TenantCalendar = {
   openTime: '07:00',
   closeTime: '17:00',
@@ -61,8 +58,8 @@ describe('availabilityBlockers (DB)', () => {
     equipmentId = (unit as { id: string }).id;
     const [other] = await sql`select id from equipment where tenant_id = ${tenantId} and id <> ${equipmentId} limit 1`;
     otherEquipmentId = (other as { id: string }).id;
-    const [customer] = await sql`select id from customers where tenant_id = ${tenantId} limit 1`;
-    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} limit 1`;
+    const [customer] = await sql`select id from customers where tenant_id = ${tenantId} and company_name like 'test-tenant-% Customer Co.' order by created_at limit 1`;
+    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} and customer_id is null order by created_at limit 1`;
 
     await cleanup();
     const [rental] = await sql`

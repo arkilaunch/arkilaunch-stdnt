@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { ExtractionUnavailableError } from '@arkilaunch/shared';
 import { AzureDocumentIntelligenceAdapter, DocumentAnalysisError } from './azure-adapter.js';
 import { EDTR_MODEL_ID, resolveModelRequest } from './model-registry.js';
+import { createDocumentIntelligenceAdapter } from './index.js';
 
 const ENDPOINT = 'https://di-arkilaunch-dev.cognitiveservices.azure.com';
 const OPERATION_LOCATION = `${ENDPOINT}/documentintelligence/documentModels/prebuilt-layout/analyzeResults/abc123`;
@@ -129,12 +130,8 @@ describe('AzureDocumentIntelligenceAdapter', () => {
     expect(result.fields.tin).toEqual({ value: '123-456-789-000', confidence: 0.92 });
   });
 
-  // Pins the REQUEST, not just the response. The mapping above was written
-  // against a hand-made payload; this shape was verified on 2026-09-16
-  // against the live di-arkilaunch-dev resource, which accepted exactly this
-  // URL and body (202 -> succeeded, SecNumber at 0.995). Azure rejects
-  // queryFields unless `features=queryFields` accompanies it, and a custom
-  // model id must NOT carry either, so both halves are asserted here.
+  // Pins the REQUEST (verified against the live resource): queryFields needs
+  // `features=queryFields`, and a custom model id must carry neither.
   it('sends the queryFields request shape Azure actually accepts, and a bare model id without it', async () => {
     const fetchMock = fetch as ReturnType<typeof vi.fn>;
     const succeeded = () =>
@@ -188,9 +185,7 @@ describe('AzureDocumentIntelligenceAdapter', () => {
       DocumentAnalysisError,
     );
   });
-  // The EDTR path reads the timesheet GRID, not document-level fields. This
-  // is the shape the live di-arkilaunch-dev resource returned for a replica
-  // of the real Almara form (docs/cr-arkilaunch-edtr-real-form.md).
+  // The EDTR path reads the timesheet GRID, as the live resource returned it for the real form.
   it('maps the layout table through, with per-cell confidence from word spans', async () => {
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(
@@ -232,9 +227,42 @@ describe('AzureDocumentIntelligenceAdapter', () => {
     ]);
   });
 
+  it("takes a tick cell's confidence from its selection marks, which carry no words", async () => {
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(
+        new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: 'succeeded',
+          analyzeResult: {
+            pages: [
+              {
+                words: [],
+                selectionMarks: [
+                  { state: 'selected', confidence: 0.98, span: { offset: 0, length: 10 } },
+                  { state: 'unselected', confidence: 0.94, span: { offset: 11, length: 12 } },
+                ],
+              },
+            ],
+            tables: [
+              {
+                rowCount: 1,
+                columnCount: 1,
+                cells: [{ rowIndex: 0, columnIndex: 0, content: ':selected: :unselected:', spans: [{ offset: 0, length: 23 }] }],
+              },
+            ],
+          },
+        }),
+      );
+
+    const adapter = new AzureDocumentIntelligenceAdapter({ endpoint: ENDPOINT, apiKey: 'k' });
+    const result = await adapter.analyze(EDTR_MODEL_ID, Buffer.from('x'));
+    expect(result.tables![0]!.cells[0]!.confidence).toBe(0.94);
+  });
+
   it('floors a cell to zero confidence when its words cannot be located', async () => {
-    // Below the 0.90 gate, so the day routes to a human. Defaulting to 1
-    // would sail a cell nobody measured straight through.
+    // Below the 0.90 gate, so the day routes to a human.
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(
         new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
@@ -261,11 +289,7 @@ describe('AzureDocumentIntelligenceAdapter', () => {
   });
 
   it('expands a merged header cell across every column it covers', async () => {
-    // The real Almara header merges "AM" across its IN/OUT pair. Dropping
-    // such a cell deleted the header outright and the whole sheet parsed as
-    // no timesheet at all -- which is how this was caught, against the live
-    // resource. Azure reports explicit indices, so expanding cannot shift a
-    // neighbouring column.
+    // The real header merges "AM" across IN/OUT; dropping merged cells lost the whole header.
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(
         new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
@@ -297,10 +321,7 @@ describe('AzureDocumentIntelligenceAdapter', () => {
   });
 
   it('normalises a cell polygon against its page, so inches and pixels draw alike', async () => {
-    // Azure reports polygons in the page's own unit -- inches for a PDF,
-    // pixels for an image. A review overlay drawing raw coordinates would
-    // be right for one and badly wrong for the other, and would point at a
-    // cell the model never read. Scaled to 0..1 here, once.
+    // Polygons come in the page's own unit (inches/pixels); scaled to 0..1 here, once.
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(
         new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
@@ -347,8 +368,7 @@ describe('AzureDocumentIntelligenceAdapter', () => {
   });
 
   it('omits the bounding region when the page reports no size to scale against', async () => {
-    // No box at all beats a box in the wrong place: a misplaced highlight
-    // tells a reviewer the model read a cell it did not.
+    // No box beats a box in the wrong place.
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(
         new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }),
@@ -382,10 +402,34 @@ describe('AzureDocumentIntelligenceAdapter', () => {
     expect(result.tables![0]!.cells[0]!.boundingRegion).toBeUndefined();
   });
 
-  it('sends the EDTR model to prebuilt-layout without queryFields', async () => {
-    // queryFields answers per-document scalars; this sheet's payload is a
-    // table of dated rows. Asked for the same sheet's Operator against the
-    // live resource, queryFields returned the letterhead at 0.883.
-    expect(resolveModelRequest(EDTR_MODEL_ID)).toEqual({ kind: 'model', modelId: 'prebuilt-layout' });
+  it('sends the EDTR model to prebuilt-layout without queryFields, with the barcodes add-on', async () => {
+    // queryFields returned the letterhead as Operator at 0.883 against the live resource.
+    expect(resolveModelRequest(EDTR_MODEL_ID)).toEqual({ kind: 'model', modelId: 'prebuilt-layout', features: ['barcodes'] });
+  });
+
+  it("asks for barcodes on an EDTR read and returns the sheet's QR", async () => {
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Response(null, { status: 202, headers: { 'Operation-Location': OPERATION_LOCATION } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          status: 'succeeded',
+          analyzeResult: { pages: [{ barcodes: [{ kind: 'QRCode', value: 'ARKI-EDTR3:a:b:2026-10-05', confidence: 0.99 }, { kind: 'QRCode' }] }] },
+        }),
+      );
+    const adapter = new AzureDocumentIntelligenceAdapter({ endpoint: ENDPOINT, apiKey: 'k' });
+    const result = await adapter.analyze(EDTR_MODEL_ID, Buffer.from('x'));
+    expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toContain('features=barcodes');
+    expect(result.barcodes).toEqual([{ kind: 'QRCode', value: 'ARKI-EDTR3:a:b:2026-10-05', confidence: 0.99 }]);
+  });
+});
+
+describe('createDocumentIntelligenceAdapter', () => {
+  it('fails closed without both credentials', async () => {
+    const adapter = createDocumentIntelligenceAdapter({ AZURE_DI_ENDPOINT: ENDPOINT });
+    await expect(adapter.analyze(EDTR_MODEL_ID, Buffer.from('x'))).rejects.toMatchObject({ reason: 'no_credentials' });
+  });
+
+  it('builds the Azure adapter when credentials are set', () => {
+    expect(createDocumentIntelligenceAdapter({ AZURE_DI_ENDPOINT: ENDPOINT, AZURE_DI_KEY: 'k' })).toBeInstanceOf(AzureDocumentIntelligenceAdapter);
   });
 });

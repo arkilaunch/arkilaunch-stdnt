@@ -1,251 +1,271 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BookingDetailResponse, BookingSummaryResponse, RescheduleSuggestion } from '@arkilaunch/shared';
+import { useQuery } from '@tanstack/react-query';
+import type { BookingService as Service, BookingStatus, BookingSummaryResponse, TruckRequestResponse } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
-import { bookingsQueries } from '../lib/queries.js';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
-import { DataPanel } from '../components/data-panel.js';
+import { bookingsQueries, trucksQueries } from '../lib/queries.js';
+import { apiErrorText } from '../lib/api-client.js';
 import { PageHeader } from '../components/page-header.js';
-import { Surface } from '../components/surface.js';
-import { Button } from '../components/button.js';
+import { buttonClass } from '../components/button.js';
+import { SearchField } from '../components/search-field.js';
+import { SegmentedControl } from '../components/segmented-control.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
-import { NegotiationThread } from '../components/negotiation-thread.js';
-import { EdtrSheetCard } from '../components/edtr-sheet-card.js';
-import { useToast } from '../components/toast.js';
-import { formatDate, formatPeso, formatStatus, shortCode, siteName } from '../lib/format.js';
+import { WeeklyBillingCard } from './statement.js';
+import { NegotiationThread, inAppNegotiation } from '../components/negotiation-thread.js';
+import { BookingCode } from '../components/booking-code.js';
+import { BookingDrawer, type BookingDrawerTarget } from '../components/booking-drawer.js';
+import { BookingSide } from '../components/booking-actions.js';
+import { StatusBadge } from '../components/status-badge.js';
+import { Tabs } from '../components/tabs.js';
+import { Alert } from '../components/alert.js';
+import { BOOKING_STATUSES, bookingCodeSearchPrefix, parseBookingCode } from '@arkilaunch/shared';
+import { formatDate, formatDateTime, formatPeso, formatStatus, siteName } from '../lib/format.js';
+import { Input } from '../components/input.js';
+import { Select } from '../components/select.js';
 
-// The staff side of the customer journey: the same negotiation thread the
-// customer sees, the change requests only staff can resolve, and a way
-// into the quote builder with the booking already attached. The API
-// scopes all of it by role; this screen only arranges it.
-
-const heading = 'font-display text-sm font-semibold uppercase tracking-[0.04em] text-text-muted';
-
-const COLUMNS: TableColumn<BookingSummaryResponse>[] = [
+const RENTAL_COLUMNS: TableColumn<BookingSummaryResponse>[] = [
+  { header: 'Booking', kind: 'text', cell: (b) => <BookingCode code={b.code} /> },
+  { header: 'Customer', kind: 'text', cell: (b) => b.customerName ?? '--' },
   {
-    header: 'Booking',
-    cell: (row) => (
-      <div className="flex flex-col">
-        <span className="font-mono text-text">{shortCode('booking', row.id)}</span>
-        <span className="text-xs text-text-muted">
-          {row.siteCity ?? row.siteProvince ?? siteName({ id: row.projectSiteId })}
-        </span>
-      </div>
-    ),
+    header: 'Dates', kind: 'text',
+    cell: (b) => (b.startDate ? `${formatDate(b.startDate)} – ${b.endDate ? formatDate(b.endDate) : 'open'}` : '--'),
   },
-  { header: 'Status', cell: (row) => formatStatus(row.status) },
+  { header: 'Site', kind: 'text', cell: (b) => b.siteCity ?? b.siteProvince ?? siteName({ id: b.projectSiteId }) },
   {
-    header: 'Details',
-    cell: (row) => (
-      <Link to="/app/bookings/$bookingId" params={{ bookingId: row.id }} className="font-semibold text-accent underline">
-        Open
-      </Link>
+    header: 'Status', kind: 'status',
+    cell: (b) => (
+      <div className="flex flex-col">
+        <StatusBadge status={b.status} />
+        {b.holdExpiresAt && (
+          <span className="text-xs text-text-muted">
+            {new Date(b.holdExpiresAt) > new Date() ? `Held until ${formatDateTime(b.holdExpiresAt)}` : 'Hold lapsed'}
+          </span>
+        )}
+      </div>
     ),
   },
 ];
 
+const STATUS_CHIPS: { id: BookingStatus | undefined; label: string }[] = [
+  { id: undefined, label: 'All' },
+  { id: 'pending', label: 'New requests' },
+  { id: 'confirmed', label: 'Paid' },
+  { id: 'active', label: 'On site' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'cancelled', label: 'Cancelled' },
+];
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+const TRUCK_COLUMNS: TableColumn<TruckRequestResponse>[] = [
+  {
+    header: 'Booking', kind: 'text',
+    cell: (t) => (
+      <div className="flex flex-col">
+        <BookingCode code={t.code} />
+        <span className="text-xs text-text-muted">{formatDate(t.scheduledFor)}</span>
+      </div>
+    ),
+  },
+  {
+    header: 'Route', kind: 'text',
+    cell: (t) => (
+      <span className="max-w-md md:line-clamp-2">
+        {t.pickup} → {t.dropoff}
+      </span>
+    ),
+  },
+  { header: 'Km', kind: 'number', cell: (t) => t.confirmedKm ?? `~${t.estimatedKm}` },
+  { header: 'Price', kind: 'money', cell: (t) => formatPeso(t.agreedPricePhp ?? t.price.totalPhp) },
+  { header: 'Status', kind: 'status', cell: (t) => <StatusBadge status={t.status} /> },
+];
+
+export interface BookingsSearch {
+  service?: Service;
+  open?: string;
+  tab?: 'actions' | 'negotiation';
+  status?: BookingStatus;
+  from?: string;
+  to?: string;
+  sort?: 'start';
+}
+function validateBookingsSearch(search: Record<string, unknown>): BookingsSearch {
+  const out: BookingsSearch = {};
+  if (search.tab === 'actions' || search.tab === 'negotiation') out.tab = search.tab;
+  if (search.service === 'truck' || search.service === 'rental') out.service = search.service;
+  if (typeof search.open === 'string' && parseBookingCode(search.open)) out.open = search.open.trim().toUpperCase();
+  if (typeof search.status === 'string' && (BOOKING_STATUSES as readonly string[]).includes(search.status)) {
+    out.status = search.status as BookingStatus;
+  }
+  if (typeof search.from === 'string' && ISO_DAY.test(search.from)) out.from = search.from;
+  if (typeof search.to === 'string' && ISO_DAY.test(search.to)) out.to = search.to;
+  if (search.sort === 'start') out.sort = 'start';
+  return out;
+}
+
 function BookingsPage() {
+  const { service: fromUrl, open, tab, status, from, to, sort } = appBookingsRoute.useSearch();
+  const navigate = appBookingsRoute.useNavigate();
   const [offset, setOffset] = useState(0);
-  return (
-    <div className="flex flex-col gap-5">
-      <PageHeader eyebrow="Billing" title="Bookings" description="Customer bookings, their negotiation and their requests." />
-      <DataPanel
-        title="Bookings"
-        options={bookingsQueries.list(PAGE_SIZE, offset)}
-        emptyTitle="No bookings yet"
-        emptyDescription="Bookings customers request from the storefront appear here."
-        isEmpty={(data) => data.total === 0}
-        render={(data) => (
-          <div>
-            <Table columns={COLUMNS} rows={data.items} rowKey={(row) => row.id} />
-            <Pagination offset={offset} limit={PAGE_SIZE} total={data.total} onOffsetChange={setOffset} noun="bookings" />
-          </div>
+  const [search, setSearch] = useState('');
+  const codePrefix = bookingCodeSearchPrefix(search) ?? '';
+  const service: Service = codePrefix.startsWith('TRK') ? 'truck' : codePrefix.startsWith('EQR') ? 'rental' : (fromUrl ?? 'rental');
+  const setService = (next: Service) => {
+    setOffset(0);
+    setSearch('');
+    void navigate({ search: (prev) => ({ ...prev, service: next }), replace: true });
+  };
+
+  const rentalQuery = codePrefix || search.trim();
+  const filters = { ...(status ? { status: [status] } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sort ? { sort } : {}) };
+  const setFilters = (patch: { [K in 'status' | 'from' | 'to' | 'sort']?: BookingsSearch[K] | undefined }) => {
+    setOffset(0);
+    void navigate({
+      search: (prev) => {
+        const next = { ...prev, ...patch };
+        for (const key of ['status', 'from', 'to', 'sort'] as const) if (!next[key]) delete next[key];
+        return next as BookingsSearch;
+      },
+      replace: true,
+    });
+  };
+  const rentals = useQuery({ ...bookingsQueries.list(PAGE_SIZE, offset, rentalQuery, filters), enabled: service === 'rental' });
+  const trucks = useQuery({ ...trucksQueries.list(PAGE_SIZE, offset, codePrefix), enabled: service === 'truck' });
+  const openTrucks = useQuery(trucksQueries.list(1, 0, '', 'open'));
+
+  const openCode = open ? parseBookingCode(open) : null;
+  const openRental = useQuery({ ...bookingsQueries.list(1, 0, open ?? ''), enabled: openCode?.service === 'rental' });
+  const openTruck = useQuery({ ...trucksQueries.list(1, 0, open ?? ''), enabled: openCode?.service === 'truck' });
+  const rentalHit = openRental.data?.items[0];
+  const truckHit = openTruck.data?.items[0];
+  const target: BookingDrawerTarget | null = !openCode
+    ? null
+    : openCode.service === 'truck'
+      ? truckHit && truckHit.code === open
+        ? { service: 'truck', id: truckHit.id }
+        : null
+      : rentalHit && rentalHit.code === open
+        ? { service: 'rental', id: rentalHit.id }
+        : null;
+  const openDrawer = (code: string) => void navigate({ search: (prev) => ({ ...prev, open: code }) });
+  const closeDrawer = () => void navigate({ search: ({ open: _open, tab: _tab, ...rest }) => rest });
+  const notFound =
+    openCode !== null &&
+    (openCode.service === 'truck' ? openTruck.isSuccess && !target : openRental.isSuccess && !target);
+
+  const list = service === 'rental' ? rentals : trucks;
+  // Cloudscape table-header filter bar: one wrapping row of compact controls.
+  const finder = (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <SearchField
+          className="w-full max-w-md flex-1 sm:min-w-60"
+          value={search}
+          onChange={(next) => {
+            setSearch(next);
+            setOffset(0);
+          }}
+          label={service === 'truck' ? 'Find a truck request by code' : 'Find a booking by code or company'}
+          placeholder={service === 'truck' ? 'Find a truck code (TRK-2026-0001)' : 'Find a booking code or company'}
+        />
+        {service === 'rental' && (
+          <>
+            <div className="w-40">
+              <Input size="compact" labelHidden label="Rental from" type="date" value={from ?? ''} onChange={(e) => setFilters({ from: e.target.value || undefined })} />
+            </div>
+            <div className="w-40">
+              <Input size="compact" labelHidden label="Rental to" type="date" value={to ?? ''} min={from} onChange={(e) => setFilters({ to: e.target.value || undefined })} />
+            </div>
+            <div className="w-52">
+              <Select size="compact" labelHidden label="Sort" value={sort ?? 'newest'} onChange={(e) => setFilters({ sort: e.target.value === 'start' ? 'start' : undefined })}>
+                <option value="newest">Newest request first</option>
+                <option value="start">Soonest start first</option>
+              </Select>
+            </div>
+            {(status || from || to || sort) && (
+              <button
+                type="button"
+                onClick={() => setFilters({ status: undefined, from: undefined, to: undefined, sort: undefined })}
+                className="min-h-9 px-1 text-sm font-medium text-accent hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+              >
+                Clear filters
+              </button>
+            )}
+          </>
         )}
-      />
+      </div>
+      {service === 'truck' && search.trim() !== '' && !codePrefix && (
+        <p className="text-xs text-text-muted">Truck codes start with TRK-.</p>
+      )}
+      {service === 'rental' && (
+        <SegmentedControl
+          label="Show bookings"
+          value={status ?? ''}
+          onChange={(next) => setFilters({ status: (next || undefined) as BookingStatus | undefined })}
+          items={STATUS_CHIPS.map((c) => {
+            const counts = rentals.data?.statusCounts;
+            return {
+              id: c.id ?? '',
+              label: c.label,
+              count: counts ? (c.id ? (counts[c.id] ?? 0) : Object.values(counts).reduce((a, b) => a + b, 0)) : null,
+            };
+          })}
+        />
+      )}
+      {notFound && (
+        <p role="alert" className="text-sm text-error">
+          No booking {open} was found.
+        </p>
+      )}
     </div>
   );
-}
-
-function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const resolve = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
-      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, { decision }),
-    onSuccess: async (_data, { decision }) => {
-      await queryClient.invalidateQueries({ queryKey: ['booking', booking.id] });
-      toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
-    },
-    onError: (err) => toast.error('Could not resolve the request', apiErrorText(err)),
-  });
 
   return (
-    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
-      <h2 className={heading}>Change requests</h2>
-      {booking.changeRequests.length === 0 && <p className="text-sm text-text-muted">None.</p>}
-      {booking.changeRequests.map((request) => (
-        <div key={request.id} className="flex flex-col gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
-          <p className="text-sm text-text">
-            {request.kind === 'extend' ? `Extend to ${formatDate(request.requestedEnd)}` : 'Cancel booking'}
-            <span className="text-text-muted"> &middot; {formatStatus(request.status)}</span>
-          </p>
-          {request.reason && <p className="text-sm text-text-muted">{request.reason}</p>}
-          {request.status === 'pending' && (
-            <div className="flex flex-wrap gap-2">
-              <Button variant="approve" loading={resolve.isPending} onClick={() => resolve.mutate({ id: request.id, decision: 'approved' })}>
-                Approve
-              </Button>
-              <Button variant="secondary" loading={resolve.isPending} onClick={() => resolve.mutate({ id: request.id, decision: 'rejected' })}>
-                Decline
-              </Button>
-            </div>
-          )}
-          {request.kind === 'cancel' && request.status === 'pending' && booking.status === 'confirmed' && (
-            <p className="text-xs text-text-muted">This booking is paid: issue any refund in the PayMongo dashboard.</p>
-          )}
-        </div>
-      ))}
-    </Surface>
-  );
-}
-
-// When a confirmed booking must move: the nearest free same-length window on
-// each unit, then other free units of the same type. Advice only; staff
-// agree the move with the customer in the thread.
-function RescheduleCard({ bookingId }: { bookingId: string }) {
-  const suggest = useMutation({
-    mutationFn: () => apiGet<RescheduleSuggestion>(`/bookings/${bookingId}/reschedule-suggestion`),
-  });
-  return (
-    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5 text-sm">
-      <h2 className={heading}>Reschedule</h2>
-      <div>
-        <Button variant="secondary" loading={suggest.isPending} onClick={() => suggest.mutate()}>
-          Suggest a new slot
-        </Button>
-      </div>
-      {suggest.isError && <p className="text-error">{apiErrorText(suggest.error)}</p>}
-      {suggest.data?.items.map((item) => (
-        <div key={item.equipmentId} className="flex flex-col gap-1">
-          <p className="text-text">
-            {shortCode('equipment', item.equipmentId)}:{' '}
-            {item.sameUnit
-              ? `${new Date(item.sameUnit.start).toLocaleString()} - ${new Date(item.sameUnit.end).toLocaleString()}`
-              : 'no free window within 60 days'}
-          </p>
-          <p className="text-text-muted">
-            Other free units:{' '}
-            {item.alternatives.length ? item.alternatives.map((id) => shortCode('equipment', id)).join(', ') : 'none'}
-          </p>
-        </div>
-      ))}
-    </Surface>
-  );
-}
-
-// Checkout stays closed until staff have phoned the customer.
-function CallCard({ booking }: { booking: BookingDetailResponse }) {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const confirm = useMutation({
-    mutationFn: () => apiPost(`/bookings/${booking.id}/call-confirmed`, {}),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: bookingsQueries.detail(booking.id).queryKey });
-      toast.success('Confirmed by phone', 'The customer can now pay.');
-    },
-    onError: (e) => toast.error('Not saved', apiErrorText(e)),
-  });
-  return (
-    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
-      <h2 className={heading}>Phone confirmation</h2>
-      <p className="text-sm text-text-muted">
-        {booking.callConfirmedAt
-          ? `Confirmed ${formatDate(booking.callConfirmedAt)}.`
-          : booking.callRequestedAt
-            ? 'The customer asked for a call.'
-            : 'Call the customer before they pay.'}
-      </p>
-      {!booking.callConfirmedAt && booking.status !== 'cancelled' && (
-        <Button variant="secondary" loading={confirm.isPending} onClick={() => confirm.mutate()}>
-          Confirmed by phone
-        </Button>
-      )}
-    </Surface>
-  );
-}
-
-// Staff mark a paid booking delivered (machines on site, field sheet
-// unlocked) and later returned. Both endpoints already guard the status.
-function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
-  const toast = useToast();
-  const queryClient = useQueryClient();
-  const move = useMutation({
-    mutationFn: (step: 'deliver' | 'return') => apiPost(`/bookings/${booking.id}/${step}`, {}),
-    onSuccess: (_data, step) => {
-      void queryClient.invalidateQueries({ queryKey: bookingsQueries.detail(booking.id).queryKey });
-      toast.success(step === 'deliver' ? 'Marked delivered' : 'Marked returned');
-    },
-    onError: (e) => toast.error('Not saved', apiErrorText(e)),
-  });
-  if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
-  const deliver = booking.status === 'confirmed';
-  return (
-    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
-      <h2 className={heading}>Delivery</h2>
-      <p className="text-sm text-text-muted">
-        {deliver ? 'Paid. Mark delivered once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
-      </p>
-      <Button variant="primary" loading={move.isPending} onClick={() => move.mutate(deliver ? 'deliver' : 'return')}>
-        {deliver ? 'Mark delivered' : 'Mark returned'}
-      </Button>
-    </Surface>
-  );
-}
-
-function BookingSide({ booking }: { booking: BookingDetailResponse }) {
-  const quote = booking.quotation;
-  return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <CallCard booking={booking} />
-      <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5">
-        <h2 className={heading}>Quote</h2>
-        {quote ? (
-          <p className="text-sm text-text">
-            Revision {quote.revision} &middot; {formatStatus(quote.status)} &middot;{' '}
-            <span className="font-mono">{formatPeso(quote.totalPhp)}</span>
-          </p>
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Bookings"
+        description="Equipment rentals and truck service requests. Open one to negotiate, confirm and move it along."
+        actions={
+          <Link to="/app/quotes" className={buttonClass('secondary')}>Price book</Link>
+        }
+      />
+      <Tabs
+        label="Service"
+        value={service}
+        onChange={setService}
+        items={[
+          { id: 'rental', label: 'Equipment rental' },
+          { id: 'truck', label: 'Truck service', badge: openTrucks.data?.total ?? null },
+        ]}
+      />
+      <div role="tabpanel" aria-label={service === 'truck' ? 'Truck service' : 'Equipment rental'}>
+        {list.isError && <Alert type="error">{apiErrorText(list.error)}</Alert>}
+        {service === 'rental' ? (
+          <Table
+            columns={RENTAL_COLUMNS}
+            rows={rentals.data?.items ?? []}
+            rowKey={(b) => b.id}
+            onRowClick={(b) => openDrawer(b.code)}
+            rowLabel={(b) => `Open booking ${b.code}`}
+            loading={rentals.isPending}
+            empty={rentalQuery ? `No rental matches ${rentalQuery}.` : status || from || to ? 'No bookings match these filters.' : 'Bookings customers request from the storefront appear here.'}
+            header={{ title: 'Bookings', filter: finder, count: rentals.data?.total ?? 0, pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={rentals.data?.total ?? 0} onOffsetChange={setOffset} noun="bookings" busy={rentals.isFetching} /> }}
+          />
         ) : (
-          <p className="text-sm text-text-muted">Not quoted yet.</p>
+          <Table
+            columns={TRUCK_COLUMNS}
+            rows={trucks.data?.items ?? []}
+            rowKey={(t) => t.id}
+            onRowClick={(t) => openDrawer(t.code)}
+            rowLabel={(t) => `Open truck request ${t.code}`}
+            loading={trucks.isPending}
+            empty={codePrefix ? `No truck request matches ${codePrefix}.` : 'No truck service requests yet.'}
+            header={{ title: 'Truck requests', filter: finder, count: trucks.data?.total ?? 0, pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={trucks.data?.total ?? 0} onOffsetChange={setOffset} noun="truck requests" busy={trucks.isFetching} /> }}
+          />
         )}
-        {booking.status !== 'cancelled' && quote?.status !== 'accepted' && (
-          <Link to="/app/quotes" search={{ bookingId: booking.id, customerId: booking.customerId }}>
-            <Button variant="primary">{quote ? 'Send a revised quote' : 'Quote this booking'}</Button>
-          </Link>
-        )}
-        {quote && (
-          <Link to="/app/quotes/$quoteId/print" params={{ quoteId: quote.id }}>
-            <Button variant="secondary">Print quote</Button>
-          </Link>
-        )}
-      </Surface>
-      <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-5 text-sm">
-        <h2 className={heading}>Site</h2>
-        <p className="text-text">{booking.siteCity ?? booking.siteProvince ?? '--'}</p>
-        {booking.siteContact && <p className="text-text-muted">Contact: {booking.siteContact}</p>}
-        {booking.siteNotes && <p className="text-text-muted">Access: {booking.siteNotes}</p>}
-        {booking.items.map((item) => (
-          <p key={`${item.equipmentId}-${String(item.start)}`} className="text-text-muted">
-            {shortCode('equipment', item.equipmentId)}: {formatDate(item.start)} - {formatDate(item.end)}
-          </p>
-        ))}
-      </Surface>
-      <DeliveryCard booking={booking} />
-      {/* The field sheet is for machines on site: hidden until delivered. */}
-      {['active', 'completed'].includes(booking.status) && <EdtrSheetCard bookingId={booking.id} printable />}
-      <PendingRequests booking={booking} />
-      {booking.status === 'confirmed' && <RescheduleCard bookingId={booking.id} />}
+      </div>
+      <BookingDrawer target={target} truck={truckHit} initialTab={tab ?? 'overview'} onClose={closeDrawer} />
     </div>
   );
 }
@@ -256,21 +276,21 @@ function BookingPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        eyebrow="Bookings"
-        title={`Booking ${shortCode('booking', bookingId)}`}
+        title={booking.data ? `Booking ${booking.data.code}` : 'Booking'}
         {...(booking.data ? { description: formatStatus(booking.data.status) } : {})}
         actions={
-          <Link to="/app/bookings">
-            <Button variant="ghost">All bookings</Button>
-          </Link>
+          <Link to="/app/bookings" className={buttonClass('ghost')}>All bookings</Link>
         }
       />
-      {booking.isError && <p className="text-sm text-error">{apiErrorText(booking.error)}</p>}
+      {booking.isError && <Alert type="error">{apiErrorText(booking.error)}</Alert>}
       {booking.data && (
-        <div className="grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]">
-          <NegotiationThread bookingId={bookingId} disabled={booking.data.status === 'cancelled'} />
+        <div className={inAppNegotiation() ? 'grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]' : 'max-w-xl'}>
+          {inAppNegotiation() && <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} />}
           <BookingSide booking={booking.data} />
         </div>
+      )}
+      {booking.data && booking.data.status !== 'pending' && booking.data.status !== 'cancelled' && (
+        <WeeklyBillingCard rentalId={bookingId} scope="staff" />
       )}
     </div>
   );
@@ -279,6 +299,7 @@ function BookingPage() {
 export const appBookingsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/app/bookings',
+  validateSearch: validateBookingsSearch,
   component: BookingsPage,
 });
 

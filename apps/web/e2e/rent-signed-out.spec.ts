@@ -1,11 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// Its own file because every other cart spec signs in first, and the whole
-// point here is the visitor path.
-//
-// /account/cart is behind requireAuth(), so "Book now" used to hand a
-// signed-out visitor a silent guard bounce with no destination -- from the
-// customer's side, indistinguishable from the button not working.
+// Its own file: every other cart spec signs in first.
 
 const EMAIL = process.env.SEED_CUSTOMER_EMAIL ?? 'customer@admin.com';
 const PASSWORD = process.env.SEED_PASSWORD ?? 'admin';
@@ -32,6 +27,11 @@ test.describe('renting while signed out', () => {
     // Signed in, on the cart, with the machine still in it: the cart lives in
     // sessionStorage and survives the redirect within the same tab.
     await expect(page).toHaveURL(/\/account\/cart$/, { timeout: 15_000 });
-    await expect(page.getByRole('group').first()).toBeVisible();
+    // A new account may still need a verified company, in which case the
+    // cart shows that gate instead of the rental form. The saved machine is
+    // the invariant this redirect test owns.
+    const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem('arkilaunch.cart') ?? '[]') as unknown[]);
+    expect(saved).toHaveLength(1);
+    await expect(page.getByRole('heading', { name: 'Shopping cart' })).toBeVisible();
   });
 });

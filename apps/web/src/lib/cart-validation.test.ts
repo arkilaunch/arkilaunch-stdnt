@@ -9,9 +9,6 @@ import {
 } from './cart-validation.js';
 import type { CartItem } from './cart-client.js';
 
-// The cart is the last screen before a booking request reaches the rental
-// team. Everything it refuses, it has to refuse for a reason it can show.
-
 function company(id: string, kycStatus: string): CompanyResponse {
   return {
     id,
@@ -23,8 +20,7 @@ function company(id: string, kycStatus: string): CompanyResponse {
     firstName: null,
     middleName: null,
     lastName: null,
-    reviewComment: null,
-    unlockedFields: [],
+    rejection: null,
     documents: [],
     createdAt: new Date('2026-09-01T00:00:00.000Z'),
   };
@@ -55,6 +51,7 @@ function input(over: Partial<ValidateCartInput> = {}): ValidateCartInput {
     companyId: APPROVED.id,
     projectSiteId: 'site-1',
     siteContact: '',
+    siteContactMobile: '',
     siteNotes: '',
     ...over,
   };
@@ -95,6 +92,7 @@ describe('validateCart', () => {
 
   it('needs somewhere to deliver to', () => {
     expect(validateCart(input({ projectSiteId: '' })).projectSiteId).toMatch(/where/i);
+    expect(validateCart(input({ siteNeedsProof: true })).projectSiteId).toMatch(/proof/i);
   });
 
   describe('rental dates', () => {
@@ -122,7 +120,10 @@ describe('validateCart', () => {
     });
 
     it('reports the offending line, not just that something is wrong', () => {
-      const errors = validateCart(input({ items: [item(1, 2), item(-1, 4), item(3, 4)] }));
+      const other = (n: number) => `22222222-2222-2222-2222-22222222222${n}`;
+      const errors = validateCart(
+        input({ items: [item(1, 2), { ...item(-1, 4), equipmentId: other(1) }, { ...item(3, 4), equipmentId: other(2) }] }),
+      );
       expect(Object.keys(errors.items)).toEqual(['1']);
     });
 
@@ -137,7 +138,19 @@ describe('validateCart', () => {
     });
 
     it('refuses a contact too short to act on', () => {
-      expect(validateCart(input({ siteContact: 'Jo' })).siteContact).toMatch(/name/i);
+      expect(validateCart(input({ siteContact: 'J' })).siteContact).toMatch(/name/i);
+    });
+
+    it('takes only a PH mobile for the contact number', () => {
+      expect(validateCart(input({ siteContactMobile: '+639171234567' })).siteContactMobile).toBeUndefined();
+      expect(validateCart(input({ siteContactMobile: '+6328123456' })).siteContactMobile).toMatch(/PH mobile/);
+    });
+
+    it('refuses the same unit twice over overlapping dates', () => {
+      const a = item(1, 3);
+      const errors = validateCart(input({ items: [a, { ...a, start: item(2, 4).start, end: item(2, 4).end }] }));
+      expect(errors.items[1]).toMatch(/overlapping/);
+      expect(errors.items[0]).toBeUndefined();
     });
 
     it('refuses notes past the column length', () => {

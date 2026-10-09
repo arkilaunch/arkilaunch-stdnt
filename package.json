@@ -10,7 +10,7 @@
   "scripts": {
     "build": "pnpm -r --filter=./packages/* --filter=./apps/* --filter=./jobs build",
     "build:packages": "pnpm -r --filter=./packages/* build",
-    "dev": "pnpm build:packages && concurrently -n api,web -c blue,magenta \"pnpm --filter @arkilaunch/api dev\" \"pnpm --filter @arkilaunch/web dev\"",
+    "dev": "pnpm build:packages && concurrently -n api,web,ocr -c blue,magenta,green \"pnpm --filter @arkilaunch/api dev\" \"pnpm --filter @arkilaunch/web dev\" \"pnpm --filter @arkilaunch/jobs exec tsx --env-file=../.env src/edtr-ocr-worker.ts\"",
     "dev:api": "pnpm build:packages && pnpm --filter @arkilaunch/api dev",
     "dev:web": "pnpm --filter @arkilaunch/web dev",
     "dev:cert": "node scripts/dev-cert.mjs",

@@ -1,9 +1,4 @@
-// Class 3 (large trucks and trailers, 3+ axles: every self-loader) toll
-// fees on the Luzon expressways, entry to exit, VAT-inclusive. From the
-// TRB-approved matrices effective February 2026, as published on
-// expressway.ph and read 2026-09-25. A tenant loads them as editable toll
-// rates; the admin corrects any fee when the TRB changes it. A fee applies
-// in either direction between the two points.
+// Class 3 Luzon expressway toll fees, VAT-inclusive, from the TRB matrices effective Feb 2026 (expressway.ph).
 // ponytail: mostly from each expressway's Manila-side entry; add pairs as
 // the yard's routes need them (the admin can add any toll by hand).
 export const PH_TOLLS_AS_OF = '2026-02-01';
@@ -63,3 +58,90 @@ export const PH_CLASS3_TOLLS: PhToll[] = [
   ...from('NAIAX', 'NAIA Terminal 1', { 'Entertainment City': 104, 'Macapagal Blvd.': 104, CAVITEX: 104 }),
   ...from('NAIAX', 'NAIA Terminal 2', { 'Entertainment City': 104, 'Macapagal Blvd.': 104, CAVITEX: 104 }),
 ];
+
+const EXPRESSWAYS: [RegExp, string][] = [
+  [/north luzon expressway|\bnlex\b/i, 'NLEX'],
+  [/subic.{0,3}clark.{0,3}tarlac|\bsctex\b/i, 'SCTEX'],
+  [/tarlac.{0,3}pangasinan.{0,3}la union|\btplex\b/i, 'TPLEX'],
+  [/skyway/i, 'Skyway Stage 3'],
+  [/south luzon expressway|\bslex\b/i, 'SLEX'],
+  [/southern tagalog arterial|\bstar tollway\b/i, 'STAR'],
+  [/cavite.{0,3}laguna expressway|\bcalax\b/i, 'CALAX'],
+  [/manila.{0,3}cavite expressway|\bcavitex\b|coastal road/i, 'CAVITEX'],
+  [/naia expressway|\bnaiax\b/i, 'NAIAX'],
+];
+export const expresswayOf = (road: string): string | null => EXPRESSWAYS.find(([re]) => re.test(road))?.[1] ?? null;
+
+interface RouteStep {
+  name?: string;
+  ref?: string;
+  destinations?: string;
+  exits?: string;
+}
+
+function signed(step: RouteStep): string | null {
+  const text = [step.destinations, step.exits]
+    .filter(Boolean)
+    .join(', ')
+    .split(/[,;]/)
+    .map((t) => t.trim())
+    .filter((t) => t && !/^[A-Z]{1,3}\d+[A-Z]?$/.test(t))
+    .join(', ');
+  return text || null;
+}
+
+// A ramp signed only with the same route ref (an NLEX interchange) does not end the stretch.
+export function tollHintsFromSteps(steps: RouteStep[]): { expressway: string; entry: string | null; exit: string | null }[] {
+  type Stretch = { expressway: string; entry: string | null; exit: string | null; ref: string };
+  const hints: Stretch[] = [];
+  let open = null as Stretch | null;
+  let lastSign: string | null = null;
+  for (const step of steps) {
+    const road = expresswayOf(`${step.name ?? ''} ${step.ref ?? ''}`);
+    if (road) {
+      if (open?.expressway !== road) {
+        open = { expressway: road, entry: lastSign, exit: null, ref: step.ref ?? '' };
+        hints.push(open);
+      }
+      continue;
+    }
+    if (open && open.ref && `${step.destinations ?? ''} ${step.ref ?? ''}`.includes(open.ref) && !signed(step)) continue;
+    if (open) {
+      open.exit = signed(step) ?? (step.name || null);
+      open = null;
+    }
+    lastSign = signed(step) ?? (step.name || lastSign);
+  }
+  return hints.map(({ expressway, entry, exit }) => ({ expressway, entry, exit }));
+}
+
+const letters = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+function signsAt(point: string, sign: string | null): boolean {
+  if (!sign) return false;
+  const on = letters(sign.replace(/\bsanta\b/gi, 'sta').replace(/\bsanto\b/gi, 'sto'));
+  return point.split('/').some((alt) => {
+    const p = letters(alt.replace(/\(.*\)/, ''));
+    return p.length >= 3 && on.includes(p);
+  });
+}
+
+interface TollRow {
+  id: string;
+  expressway: string | null;
+  entryPoint: string | null;
+  exitPoint: string | null;
+}
+
+// ponytail: matches sign text to plaza names; add plaza coordinates if the
+// suggestions miss often.
+export function suggestTolls(hints: { expressway: string; entry: string | null; exit: string | null }[], tolls: TollRow[]): string[] {
+  const ids: string[] = [];
+  for (const hint of hints) {
+    const rows = tolls.filter((t) => t.expressway === hint.expressway && t.entryPoint && t.exitPoint);
+    const ends = (t: TollRow, sign: string | null) => signsAt(t.entryPoint!, sign) || signsAt(t.exitPoint!, sign);
+    const byExit = rows.filter((t) => ends(t, hint.exit));
+    const pick = byExit.find((t) => ends(t, hint.entry)) ?? byExit.find((t) => t.entryPoint === rows[0]?.entryPoint);
+    if (pick && !ids.includes(pick.id)) ids.push(pick.id);
+  }
+  return ids;
+}

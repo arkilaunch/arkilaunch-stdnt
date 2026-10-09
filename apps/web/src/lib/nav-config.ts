@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
+import type { RoleCode } from '@arkilaunch/shared';
 import {
   Boxes,
   ClipboardList,
@@ -6,16 +7,20 @@ import {
   LayoutDashboard,
   MapPin,
   Receipt,
+  BadgePercent,
   CalendarRange,
   Settings,
   Bell,
   UserCircle,
   ShieldAlert,
   ShoppingCart,
+  ShieldCheck,
+  TriangleAlert,
   Store,
+  Award,
   ExternalLink,
   CalendarCheck,
-  TrendingUp,
+  TrendingDown,
   Users,
   Truck,
 } from 'lucide-react';
@@ -23,115 +28,130 @@ import {
 export interface NavItem {
   label: string;
   to: string;
-  // Rendered beside the label in the sidebar; a destination is quicker to
-  // find by its shape than by reading five words of Condensed caps.
   icon?: LucideIcon;
-  // A section root such as `/account` or `/app` is a prefix of every page in
-  // its section, so prefix-matching lit it on all of them: the cart, the
-  // checkout and the invoice all showed "Home" as the active destination.
-  // `exact` means the blade shows on that URL and nowhere else.
+  // For a section root, which prefixes every page in its section.
   exact?: boolean;
-  // Extra path prefixes this destination owns, for screens reached from it
-  // that have no sidebar entry of their own (a detail page, a wizard).
+  // Prefixes of screens with no sidebar entry of their own.
   owns?: string[];
+  // Must mirror the route's `beforeLoad` guard.
+  roles?: RoleCode[];
 }
 
 export interface NavGroup {
   title: string;
   items: NavItem[];
+  hideTitle?: boolean;
+  pinned?: boolean;
 }
 
-// One sidebar component, driven by which shell mounts it (Figma reuses the
-// same sidebar chrome across roles with different item lists).
+export function navForRole(groups: NavGroup[], role: RoleCode | null): NavGroup[] {
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => !item.roles || (role !== null && item.roles.includes(role))) }))
+    .filter((group) => group.items.length > 0);
+}
+
 export const ACCOUNT_NAV: NavGroup[] = [
   {
     title: 'My account',
+    hideTitle: true,
     items: [
       { label: 'Home', to: '/account', icon: LayoutDashboard, exact: true },
       { label: 'Browse equipment', to: '/equipment', icon: Boxes },
+      { label: 'Cart', to: '/account/cart', icon: ShoppingCart, roles: ['customer'] },
+      { label: 'Self-loading truck', to: '/account/trucks', icon: Truck },
+    ],
+  },
+  {
+    title: 'Your activity',
+    items: [
       {
         label: 'My bookings',
         to: '/account/bookings',
-        // Not ShoppingCart: a booking is a committed date, not a basket, and
-        // the cart now lives in the app bar (Figma 185:1599) rather than here.
         icon: CalendarCheck,
-        // The cart has no sidebar entry any more, so nothing would own its
-        // URL -- and an unowned /account/* lights nothing at all.
         owns: ['/account/cart', '/account/checkout', '/account/invoices', '/account/negotiation'],
       },
-      // One entry, not two: /account/companies redirected into the Figma
-      // company list at /account/applications (251:1945).
       {
         label: 'Applications',
         to: '/account/applications',
         icon: FileText,
-        // /account/companies redirects here, and its two surviving children --
-        // the add-company form and the per-company detail page -- have no
-        // entry of their own, so without this they would light nothing.
         owns: ['/account/companies'],
       },
-      { label: 'Self-loading truck', to: '/account/trucks', icon: Truck },
+    ],
+  },
+  {
+    title: 'Account tools',
+    pinned: true,
+    items: [
       { label: 'Notifications', to: '/account/notifications', icon: Bell },
       { label: 'Settings', to: '/account/settings', icon: Settings },
+      { label: 'Help Center', to: '/account/help', icon: FileText },
     ],
   },
 ];
 
-// Grouped by work area, not by which API resource backs the screen --
-// "Field logs" reads the way Rhea talks about her day,
-// not the way the system is built ("OCR Tool", "Registration").
 export const APP_NAV: NavGroup[] = [
   {
-    title: 'Dispatch',
+    title: 'Overview',
     items: [
       { label: 'Dashboard', to: '/app', icon: LayoutDashboard, exact: true },
-      { label: 'Bookings', to: '/app/bookings', icon: ShoppingCart },
-      { label: 'Quotes', to: '/app/quotes', icon: FileText },
-      { label: 'Truck service', to: '/app/trucks', icon: Truck },
-      { label: 'Field logs', to: '/app/ocr', icon: ClipboardList },
-      { label: 'Sites and deployment', to: '/app/deployment', icon: MapPin },
+      { label: 'Reports', to: '/app/insights', icon: TrendingDown },
     ],
+  },
+  {
+    title: 'Operations',
+    items: [
+      { label: 'Bookings', to: '/app/bookings', icon: ShoppingCart },
+      { label: 'Field logs', to: '/app/ocr', icon: ClipboardList },
+      { label: 'Sites', to: '/app/deployment', icon: MapPin },
+      { label: 'Incidents', to: '/app/incidents', icon: TriangleAlert },
+    ],
+  },
+  {
+    title: 'Fleet',
+    items: [{ label: 'Equipment', to: '/app/inventory', icon: Boxes }],
   },
   {
     title: 'Billing',
     items: [
       { label: 'Invoices', to: '/app/payments', icon: Receipt },
       { label: 'Weekly billing', to: '/app/billing/weekly', icon: CalendarRange },
-      { label: 'Reports', to: '/app/insights', icon: TrendingUp },
-    ],
-  },
-  {
-    title: 'Fleet',
-    items: [
-      { label: 'Equipment and maintenance', to: '/app/inventory', icon: Boxes },
-      { label: 'Incident log', to: '/app/incidents', icon: ShieldAlert },
+      { label: 'Coupons', to: '/app/coupons', icon: BadgePercent },
+      { label: 'Price book', to: '/app/quotes', icon: FileText, roles: ['admin'] },
     ],
   },
   {
     title: 'Customers',
     items: [
-      { label: 'Registration pending', to: '/app/registration/pending', icon: ClipboardList },
-      { label: 'Registration verified', to: '/app/registration/verified', icon: ShieldAlert },
+      {
+        label: 'Registrations',
+        to: '/app/registration/pending',
+        icon: ShieldCheck,
+        owns: ['/app/registration'],
+        roles: ['admin'],
+      },
+      { label: 'Tickets', to: '/app/tickets', icon: FileText, roles: ['admin', 'owner'] },
     ],
   },
   {
-    title: 'Administration',
+    title: 'Settings',
     items: [
-      { label: 'Rate cards', to: '/app/settings', icon: Settings },
+      { label: 'Business settings', to: '/app/settings', icon: Settings, roles: ['admin'] },
       { label: 'Storefront branding', to: '/app/branding', icon: Store },
-      { label: 'View storefront', to: '/', icon: ExternalLink, exact: true },
-      { label: 'People', to: '/app/users', icon: Users },
+      { label: 'Customer tiers', to: '/app/tiers', icon: Award },
+      { label: 'People', to: '/app/users', icon: Users, roles: ['admin'] },
+    ],
+  },
+  {
+    title: 'You',
+    pinned: true,
+    items: [
       { label: 'Notifications', to: '/app/notifications', icon: Bell },
       { label: 'My profile', to: '/app/profile', icon: UserCircle },
-      { label: 'Tickets', to: '/app/tickets', icon: ClipboardList },
-      { label: 'Security logs', to: '/app/security-logs', icon: ShieldAlert },
+      { label: 'View storefront', to: '/', icon: ExternalLink, exact: true },
     ],
   },
 ];
 
-// The /admin console's sidebar (routes/_admin.tsx, platform host only).
-// The role is cross-tenant: it onboards rental companies, it does not run
-// one, so none of the Dispatch/Fleet/Billing tenant work is listed here.
 export const PLATFORM_ADMIN_NAV: NavGroup[] = [
   {
     title: 'Companies',

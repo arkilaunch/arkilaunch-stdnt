@@ -1,99 +1,102 @@
 import { useMemo, useState } from 'react';
-import type { RentalRef } from '../lib/reference-client.js';
-import { formatStatus, shortCode } from '../lib/format.js';
+import type { ScanTarget } from '@arkilaunch/shared';
+import { pluralize } from '../lib/format.js';
 import { Button } from './button.js';
 import { EmptyState } from './empty-state.js';
-import { Input } from './input.js';
 import { Surface } from './surface.js';
-
-// "DTR scanning - select which deployment to manage": the list a scan is
-// started from, so the sheet is attached to a known rental before the
-// camera opens rather than picked out of a dropdown afterwards.
-//
-// A row is a rental, not the richer "deployment" the prototype draws. The
-// operator, driver, contract length and contract value in that mock have no
-// backing table -- rentals carry customer, site and dates, and nothing in
-// the schema assigns a machine or a driver to one. Those columns are left
-// out rather than filled with something that looks like data.
-// See docs/cr-arkilaunch-viewfinder-capture.md.
+import { PAGE_SIZE, Pagination } from './pagination.js';
+import { SearchField } from './search-field.js';
 
 export interface DeploymentScanListProps {
-  rentals: RentalRef[];
-  rentalLabel: (rental: RentalRef) => string;
-  onScan: (rental: RentalRef) => void;
-  onCheckBillings?: (rental: RentalRef) => void;
+  targets: ScanTarget[];
+  onScan: (target: ScanTarget) => void;
+  onCheckBillings?: (target: ScanTarget) => void;
 }
 
-export function DeploymentScanList({
-  rentals,
-  rentalLabel,
-  onScan,
-  onCheckBillings,
-}: DeploymentScanListProps) {
-  const [search, setSearch] = useState('');
+const haystack = (t: ScanTarget) =>
+  [t.siteName, t.customerName, t.bookingCode, ...t.units.flatMap((u) => [u.name, u.serialNo])].join(' ').toLowerCase();
 
-  // Filtering happens here rather than as a query parameter: the whole
-  // pick list is already in memory, and a round trip per keystroke would
-  // buy nothing.
+// QA 32: one row per site booking with the machines on site, so the sheet goes to the exact site and unit.
+export function DeploymentScanList({ targets, onScan, onCheckBillings }: DeploymentScanListProps) {
+  const [search, setSearch] = useState('');
+  const [offset, setOffset] = useState(0);
+
   const matches = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return rentals;
-    return rentals.filter((rental) =>
-      `${rentalLabel(rental)} ${shortCode('rental', rental.id)}`.toLowerCase().includes(needle),
-    );
-  }, [rentals, rentalLabel, search]);
+    if (!needle) return targets;
+    return targets.filter((t) => haystack(t).includes(needle));
+  }, [targets, search]);
 
-  if (rentals.length === 0) {
+  if (targets.length === 0) {
     return (
       <EmptyState
-        title="Nothing is out on rental"
-        description="A deployment appears here once a machine is out, and its daily sheets can be scanned against it."
+        title="No machine is on site"
+        description="A site appears here once a machine is delivered to it, and that machine's daily sheets can be scanned."
       />
     );
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <Input
+      <SearchField
         id="deployment-search"
+        className="max-w-md"
         label="Search deployments"
-        type="search"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Client or site"
+        onChange={(next) => {
+          setSearch(next);
+          setOffset(0);
+        }}
+        placeholder="Site, client, machine or serial"
       />
 
       {matches.length === 0 ? (
         <p className="text-sm text-text-muted">No deployment matches "{search}".</p>
       ) : (
-        <ul className="flex flex-col gap-3">
-          {matches.map((rental) => (
-            <li key={rental.id}>
-              <Surface
-                radius="md"
-                elevation="sm"
-                className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex flex-col">
-                  <span className="font-medium text-text">{rentalLabel(rental)}</span>
-                  <span className="text-sm text-text-muted">
-                    {formatStatus(rental.status)} - {shortCode('rental', rental.id)}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {onCheckBillings && (
-                    <Button variant="secondary" size="field" onClick={() => onCheckBillings(rental)}>
-                      Check billings
+        <>
+          <ul className="flex flex-col gap-3">
+            {matches.slice(offset, offset + PAGE_SIZE).map((target) => (
+              <li key={target.rentalId}>
+                <Surface
+                  radius="md"
+                  elevation="sm"
+                  className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="flex min-w-0 flex-col">
+                    <span className="font-medium text-text">{target.siteName}</span>
+                    <span className="text-sm text-text-muted">
+                      {target.customerName ?? 'Unnamed customer'} · <span className="font-mono">{target.bookingCode ?? '--'}</span>
+                    </span>
+                    <span className="text-sm text-text-muted">
+                      {pluralize(target.units.length, 'machine')}: {target.units.map((u) => `${u.name} (${u.serialNo})${u.onSite ? '' : ', returned'}`).join('; ')}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {onCheckBillings && (
+                      <Button
+                        variant="secondary"
+                        size="field"
+                        onClick={() => onCheckBillings(target)}
+                      >
+                        Check billings
+                      </Button>
+                    )}
+                    <Button variant="primary" size="field" onClick={() => onScan(target)}>
+                      Scan DTR
                     </Button>
-                  )}
-                  <Button variant="primary" size="field" onClick={() => onScan(rental)}>
-                    Scan DTR
-                  </Button>
-                </div>
-              </Surface>
-            </li>
-          ))}
-        </ul>
+                  </div>
+                </Surface>
+              </li>
+            ))}
+          </ul>
+          <Pagination
+            offset={offset}
+            limit={PAGE_SIZE}
+            total={matches.length}
+            onOffsetChange={setOffset}
+            noun="deployments"
+          />
+        </>
       )}
     </div>
   );

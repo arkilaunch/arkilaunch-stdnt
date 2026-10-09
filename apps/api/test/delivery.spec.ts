@@ -1,12 +1,13 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { ConflictException } from '@nestjs/common';
 import postgres from 'postgres';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   equipment,
   equipmentAssignments,
   notifications,
   rentals,
+  timekeeperSiteAssignments,
   withTenantTx,
 } from '@arkilaunch/db';
 import { StubPaymentsAdapter, type RequestContext } from '@arkilaunch/shared';
@@ -16,17 +17,13 @@ import { QuotesService } from '../src/quotes/quotes.service.js';
 import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { checkoutPaidWebhook } from './paymongo-webhook.js';
+import { fixtureCompanyId } from './fixture-company.js';
 
-// A paid booking is delivered and returned by staff on its own
-// reservation, the customer hears about each step, and staff hear about
-// what customers do.
 describe('Delivery, return and staff alerts', () => {
   const events = new EventsService();
   const quotes = new QuotesService(new PricingEngineService(), events);
-  const bookings = new BookingsService(events, quotes);
-  // Real PayMongo issues a new session id per call; the shared stub's id
-  // is deterministic, which would make a checkout retry collide on the
-  // unique provider_ref.
+  const bookings = new BookingsService(events, quotes, new PaymentsService(new StubPaymentsAdapter(), new EventsService()));
+  // The stub's session id is deterministic, so a checkout retry would collide on the unique provider_ref.
   let sessions = 0;
   const adapter = new StubPaymentsAdapter();
   adapter.createCheckoutSession = async (amountPhp: number, invoiceId: string) => ({
@@ -42,6 +39,9 @@ describe('Delivery, return and staff alerts', () => {
   let equipmentId: string;
   let rateCardId: string;
   let equipmentTypeId: string;
+  let timekeeperId: string;
+
+  let fixtureCustomerId: string;
 
   beforeAll(async () => {
     const url = process.env.DATABASE_URL_DIRECT;
@@ -52,11 +52,15 @@ describe('Delivery, return and staff alerts', () => {
     const tenantId = (tenantA as { id: string }).id;
     const [customerUser] = await sql`select id from users where tenant_id = ${tenantId} and email = 'customer@test-tenant-a.test'`;
     const [adminUser] = await sql`select id from users where tenant_id = ${tenantId} and id <> ${(customerUser as { id: string }).id} limit 1`;
-    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} limit 1`;
+    const [timekeeper] = await sql`select id from users where tenant_id = ${tenantId} and email = 'timekeeper@test-tenant-a.test'`;
+    timekeeperId = (timekeeper as { id: string }).id;
+    const [site] = await sql`select id from project_sites where tenant_id = ${tenantId} and customer_id is null order by created_at limit 1`;
     const [unit] = await sql`select id from equipment where tenant_id = ${tenantId} and serial_no = 'test-tenant-a-serial-booking-001'`;
     const [rateCard] = await sql`select id, equipment_type_id from rate_cards where tenant_id = ${tenantId} and equipment_id is null and rate_type = 'hourly' and (effective_to is null or effective_to > now()) order by effective_from limit 1`;
 
     customerCtx = { tenantId, userId: (customerUser as { id: string }).id, role: 'customer' };
+
+    fixtureCustomerId = await fixtureCompanyId(sql, tenantId);
     adminCtx = { tenantId, userId: (adminUser as { id: string }).id, role: 'admin' };
     siteId = (site as { id: string }).id;
     equipmentId = (unit as { id: string }).id;
@@ -92,6 +96,7 @@ describe('Delivery, return and staff alerts', () => {
 
   async function book(offset: number, days = 1) {
     const created = await bookings.create(customerCtx, {
+      customerId: fixtureCustomerId,
       projectSiteId: siteId,
       siteContact: 'Marcus Thorne 0917 000 0000',
       items: [{ equipmentId, start: day(offset, 8), end: day(offset + days - 1, 17) }],
@@ -128,6 +133,17 @@ describe('Delivery, return and staff alerts', () => {
     return (rows[0] as { n: number }).n;
   }
 
+
+  // A booking is quoted from the price book the moment it is made; staff
+  // quote by hand only when that could not price it (no rate card).
+  async function priceBookQuote(bookingId: string, customerId: string) {
+    const detail = await bookings.get(adminCtx, bookingId);
+    if (detail.quotation?.status === 'approved') return quotes.get(adminCtx, detail.quotation.id);
+    const quote = await quotes.create(adminCtx, quoteBody(bookingId, customerId));
+    await quotes.approve(adminCtx, quote.id);
+    return quote;
+  }
+
   it('delivers and returns a paid booking on its own reservation', async () => {
     const booking = await book(0, 2);
     expect(await staffAlerts('booking_requested', booking.id)).toBeGreaterThan(0);
@@ -135,8 +151,7 @@ describe('Delivery, return and staff alerts', () => {
     // Not paid yet: nothing to deliver.
     await expect(bookings.deliver(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'booking_not_ready' } });
 
-    const quote = await quotes.create(adminCtx, quoteBody(booking.id, booking.customerId));
-    await quotes.approve(adminCtx, quote.id);
+    const quote = await priceBookQuote(booking.id, booking.customerId);
     await quotes.accept(customerCtx, quote.id);
     expect(await staffAlerts('quote_accepted', booking.id)).toBeGreaterThan(0);
     const checkout = await payments.checkout(customerCtx, booking.id);
@@ -144,13 +159,25 @@ describe('Delivery, return and staff alerts', () => {
     await payments.handleWebhook(rawBody, header, webhookSecret);
 
     try {
-      await bookings.deliver(adminCtx, booking.id);
+      // Only a timekeeper can be put on the site; the refusal rolls the whole deploy back.
+      await expect(
+        bookings.deliver(adminCtx, booking.id, { timekeeperUserId: customerCtx.userId }),
+      ).rejects.toMatchObject({ response: { error: 'role_has_no_site_assignments' } });
+      await bookings.deliver(adminCtx, booking.id, { operatorName: 'Juan Dela Cruz', timekeeperUserId: timekeeperId });
       const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
       expect(unit?.availabilityStatus).toBe('deployed');
       const assignments = await withTenantTx(adminCtx, (tx) =>
         tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.rentalId, booking.id)),
       );
       expect(assignments.map((a) => a.status)).toEqual(['active']);
+      expect(assignments.map((a) => a.operatorName)).toEqual(['Juan Dela Cruz']);
+      const onSite = await withTenantTx(adminCtx, (tx) =>
+        tx
+          .select()
+          .from(timekeeperSiteAssignments)
+          .where(and(eq(timekeeperSiteAssignments.userId, timekeeperId), eq(timekeeperSiteAssignments.projectSiteId, siteId))),
+      );
+      expect(onSite).toHaveLength(1);
       expect(await notificationTypes(booking.id)).toContain('equipment_delivered');
 
       // On site: no cancelling, and delivering twice is refused.
@@ -158,6 +185,7 @@ describe('Delivery, return and staff alerts', () => {
         response: { error: 'already_on_site' },
       });
       await expect(bookings.deliver(adminCtx, booking.id)).rejects.toBeInstanceOf(ConflictException);
+      await expect(bookings.cancel(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'already_on_site' } });
 
       await bookings.markReturned(adminCtx, booking.id);
     } finally {
@@ -166,6 +194,7 @@ describe('Delivery, return and staff alerts', () => {
     }
     const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, booking.id)));
     expect(rental?.status).toBe('completed');
+    await expect(bookings.cancel(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'booking_closed' } });
     expect(await notificationTypes(booking.id)).toContain('equipment_returned');
     await expect(bookings.requestChange(customerCtx, booking.id, { kind: 'extend', requestedEnd: day(9, 17) })).rejects.toMatchObject({
       response: { error: 'booking_closed' },

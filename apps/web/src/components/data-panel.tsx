@@ -1,9 +1,9 @@
 import { useQuery, type QueryKey, type UseQueryOptions } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { ApiError } from '../lib/api-client.js';
-import { Surface } from './surface.js';
+import { LoadError } from './load-error.js';
 import { EmptyState } from './empty-state.js';
-import { Button } from './button.js';
+import { Container } from './container.js';
 import { Skeleton } from './skeleton.js';
 
 export interface DataPanelProps<T, TQueryKey extends QueryKey = QueryKey> {
@@ -13,14 +13,9 @@ export interface DataPanelProps<T, TQueryKey extends QueryKey = QueryKey> {
   emptyDescription: string;
   isEmpty: (data: T) => boolean;
   render: (data: T) => ReactNode;
+  emptyAction?: ReactNode;
 }
 
-// Shared loading/error/success/empty wrapper (DESIGN.md §4.1) for the
-// admin-console screens with a live GET endpoint but no bespoke UI yet.
-// Backed by TanStack Query: the query key (not a fetcher function identity)
-// is what determines re-fetch behavior, so a call site passing a fresh
-// options object literal on every render (the previous fetcher-prop shape's
-// bug) no longer causes a refetch loop.
 export function DataPanel<T, TQueryKey extends QueryKey = QueryKey>({
   title,
   options,
@@ -28,31 +23,30 @@ export function DataPanel<T, TQueryKey extends QueryKey = QueryKey>({
   emptyDescription,
   isEmpty,
   render,
+  emptyAction,
 }: DataPanelProps<T, TQueryKey>) {
   const query = useQuery(options);
 
   return (
     <div className="flex flex-col gap-4">
-      {/* No <h1> here. Every screen already renders one through PageHeader,
-          and rendering a second produced the visible duplicate title -- and
-          two competing document outlines for a screen reader. `title` is
-          still used to word the states below. */}
+      {/* No <h1>: PageHeader already renders one. */}
       {query.isPending && <Skeleton label={`Loading ${title.toLowerCase()}`} />}
       {query.isError && (
-        <Surface radius="md" elevation="sm" className="flex flex-col gap-3 border-error p-4">
-          <p className="text-sm text-error">
-            {query.error instanceof ApiError && query.error.status === 403
+        <LoadError
+          message={
+            query.error instanceof ApiError && query.error.status === 403
               ? `You do not have permission to view ${title.toLowerCase()}.`
-              : `${title} could not be loaded just now. Check your connection and try again.`}
-          </p>
-          <Button variant="secondary" onClick={() => query.refetch()}>
-            Retry
-          </Button>
-        </Surface>
+              : `${title} could not be loaded just now. Check your connection and try again.`
+          }
+          onRetry={() => query.refetch()}
+        />
       )}
       {query.isSuccess &&
         (isEmpty(query.data) ? (
-          <EmptyState title={emptyTitle} description={emptyDescription} />
+          // Cloudscape: an empty collection keeps its container and header, e.g. "Incidents (0)".
+          <Container flush header={{ title, count: 0 }}>
+            <EmptyState bare title={emptyTitle} description={emptyDescription} action={emptyAction} />
+          </Container>
         ) : (
           render(query.data)
         ))}

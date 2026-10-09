@@ -1,11 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from './client.js';
 
-// Pre-tenant-context lookup for the @Public catalog endpoint only (see
-// migrations/0008_public_catalog.sql). Calls a narrow SECURITY DEFINER
-// function, not an RLS-protected table directly -- there is no tenant
-// context yet for an unauthenticated caller, same rationale as
-// auth-lookup.ts / payments-lookup.ts.
+// @Public, pre-tenant-context: calls narrow SECURITY DEFINER functions, not RLS tables.
 
 export interface CatalogEquipmentRow {
   id: string;
@@ -13,60 +9,29 @@ export interface CatalogEquipmentRow {
   model: string;
   availabilityStatus: string;
   photoUri: string | null;
-  // The upfront public price (0038 detail, 0042 list): unit card, else type card.
   rateType: string | null;
   rateValue: number | null;
+  optionGroups: { name: string; values: string[] }[];
+  photoCredit: string | null;
+  photoSourceUrl: string | null;
 }
 
 export type CatalogEquipmentDetailRow = CatalogEquipmentRow;
 
-// Bounded at the database: this is an unauthenticated route, and every
-// storefront page load used to ship the anchor tenant's entire equipment
-// table (audit-api-surface.md #8). LIMIT/OFFSET wrap the SECURITY DEFINER
-// function's result set, so the function itself is unchanged.
-export async function listCatalogEquipmentForSlug(
-  slug: string,
-  limit: number,
-  offset: number,
-): Promise<CatalogEquipmentRow[]> {
-  const rows = await db.execute<{
-    id: string;
-    equipment_type_name: string;
-    model: string;
-    availability_status: string;
-    photo_uri: string | null;
-    rate_type: string | null;
-    rate_value: string | null;
-  }>(sql`select * from catalog_list_equipment(${slug}) limit ${limit} offset ${offset}`);
-  return rows.map((row) => ({
-    id: row.id,
-    equipmentTypeName: row.equipment_type_name,
-    model: row.model,
-    availabilityStatus: row.availability_status,
-    photoUri: row.photo_uri,
-    rateType: row.rate_type,
-    rateValue: row.rate_value !== null ? Number(row.rate_value) : null,
-  }));
+interface CatalogEquipmentDbRow extends Record<string, unknown> {
+  id: string;
+  equipment_type_name: string;
+  model: string;
+  availability_status: string;
+  photo_uri: string | null;
+  rate_type: string | null;
+  rate_value: string | null;
+  option_groups: { name: string; values: string[] }[] | null;
+  photo_credit: string | null;
+  photo_source_url: string | null;
 }
 
-// GET /catalog/equipment/:id (@Public, anchor-tenant only -- backend-unblock
-// plan Phase 2). Same catalog_get_equipment SECURITY DEFINER function
-// (migration 0012); null means not found OR belongs to a different/inactive
-// tenant -- the caller cannot distinguish those cases, same as the RLS
-// posture elsewhere (a 404, never a 403, since there is no tenant context
-// to leak).
-export async function getCatalogEquipmentForSlug(slug: string, id: string): Promise<CatalogEquipmentDetailRow | null> {
-  const rows = await db.execute<{
-    id: string;
-    equipment_type_name: string;
-    model: string;
-    availability_status: string;
-    photo_uri: string | null;
-    rate_type: string | null;
-    rate_value: string | null;
-  }>(sql`select * from catalog_get_equipment(${slug}, ${id})`);
-  const row = rows[0];
-  if (!row) return null;
+function toCatalogEquipment(row: CatalogEquipmentDbRow): CatalogEquipmentRow {
   return {
     id: row.id,
     equipmentTypeName: row.equipment_type_name,
@@ -75,14 +40,42 @@ export async function getCatalogEquipmentForSlug(slug: string, id: string): Prom
     photoUri: row.photo_uri,
     rateType: row.rate_type,
     rateValue: row.rate_value !== null ? Number(row.rate_value) : null,
+    optionGroups: row.option_groups ?? [],
+    photoCredit: row.photo_credit,
+    photoSourceUrl: row.photo_source_url,
   };
 }
 
-// GET /catalog/testimonials (@Public, anchor-tenant only). Same
-// pre-tenant-context, SECURITY DEFINER rationale as
-// listCatalogEquipmentForSlug (migration 0015).
+// Bounded at the database: this is an unauthenticated route. The function has no ORDER BY, so paging needs one here.
+export async function listCatalogEquipmentForSlug(
+  slug: string,
+  limit: number,
+  offset: number,
+): Promise<CatalogEquipmentRow[]> {
+  const rows = await db.execute<CatalogEquipmentDbRow>(
+    sql`select * from catalog_list_equipment(${slug}) order by equipment_type_name, model, id limit ${limit} offset ${offset}`,
+  );
+  return rows.map(toCatalogEquipment);
+}
+
+// GET /catalog/equipment/:id (@Public). null means not found OR another/inactive tenant: a 404, never a 403.
+export async function getCatalogEquipmentForSlug(slug: string, id: string): Promise<CatalogEquipmentDetailRow | null> {
+  const rows = await db.execute<CatalogEquipmentDbRow>(sql`select * from catalog_get_equipment(${slug}, ${id})`);
+  return rows[0] ? toCatalogEquipment(rows[0]) : null;
+}
+
+// Rates for one tenant's whole catalog; the caller has already checked the customer is verified.
+export async function listCatalogRatesForSlug(slug: string): Promise<{ equipmentId: string; rateValue: number | null }[]> {
+  const rows = await db.execute<{ id: string; rate_value: string | null }>(
+    sql`select id, rate_value from catalog_list_equipment(${slug})`,
+  );
+  return rows.map((row) => ({ equipmentId: row.id, rateValue: row.rate_value !== null ? Number(row.rate_value) : null }));
+}
+
+// Anchor-tenant only; same SECURITY DEFINER rationale.
 export interface CatalogTestimonialRow {
   id: string;
+  headline: string | null;
   quote: string;
   authorName: string;
   authorTitle: string;
@@ -91,26 +84,32 @@ export interface CatalogTestimonialRow {
 export async function listCatalogTestimonialsForSlug(slug: string): Promise<CatalogTestimonialRow[]> {
   const rows = await db.execute<{
     id: string;
+    headline: string | null;
     quote: string;
     author_name: string;
     author_title: string;
   }>(sql`select * from catalog_list_testimonials(${slug})`);
   return rows.map((row) => ({
     id: row.id,
+    headline: row.headline,
     quote: row.quote,
     authorName: row.author_name,
     authorTitle: row.author_title,
   }));
 }
 
-// GET /catalog/tenant (@Public). The host tenant's public branding; null
-// for an unknown or not-yet-active slug (migrations 0048, 0051). Image
-// fields are storage keys; the API turns them into URLs.
+// null for an unknown or not-yet-active slug. Image fields are storage keys, not URLs.
 export interface CatalogTenantRow {
   name: string;
   logoKey: string | null;
   heroKey: string | null;
+  iconKey: string | null;
+  loginKey: string | null;
   primaryColor: string | null;
+  headerColor: string | null;
+  font: string | null;
+  facebookUrl: string | null;
+  messengerUrl: string | null;
   tagline: string | null;
   about: string | null;
   phone: string | null;
@@ -125,7 +124,13 @@ export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTena
     name: string;
     logo_key: string | null;
     hero_key: string | null;
+    icon_key: string | null;
+    login_key: string | null;
     primary_color: string | null;
+    header_color: string | null;
+    font: string | null;
+    facebook_url: string | null;
+    messenger_url: string | null;
     tagline: string | null;
     about: string | null;
     phone: string | null;
@@ -140,7 +145,13 @@ export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTena
     name: r.name,
     logoKey: r.logo_key,
     heroKey: r.hero_key,
+    iconKey: r.icon_key,
+    loginKey: r.login_key,
     primaryColor: r.primary_color,
+    headerColor: r.header_color,
+    font: r.font,
+    facebookUrl: r.facebook_url,
+    messengerUrl: r.messenger_url,
     tagline: r.tagline,
     about: r.about,
     phone: r.phone,
@@ -151,8 +162,7 @@ export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTena
   };
 }
 
-// GET /catalog/tenants (@Public). The platform directory (migration 0051):
-// active rental companies only, public columns only. NULL filter = none.
+// Active companies and public columns only. NULL filter = none.
 export interface CatalogTenantListRow {
   slug: string;
   name: string;
@@ -160,13 +170,15 @@ export interface CatalogTenantListRow {
   tagline: string | null;
   city: string | null;
   province: string | null;
+  primaryColor: string | null;
+  categories: string[];
 }
 
 export async function listCatalogTenants(
   filters: { q: string | null; category: string | null; location: string | null },
   limit: number,
   offset: number,
-): Promise<CatalogTenantListRow[]> {
+): Promise<{ rows: CatalogTenantListRow[]; total: number }> {
   const rows = await db.execute<{
     slug: string;
     name: string;
@@ -174,21 +186,33 @@ export async function listCatalogTenants(
     tagline: string | null;
     city: string | null;
     province: string | null;
+    primary_color: string | null;
+    categories: string[] | null;
+    total_count: string | number;
   }>(
     sql`select * from catalog_list_tenants(${filters.q}, ${filters.category}, ${filters.location}) limit ${limit} offset ${offset}`,
   );
-  return rows.map((r) => ({
-    slug: r.slug,
-    name: r.name,
-    logoKey: r.logo_key,
-    tagline: r.tagline,
-    city: r.city,
-    province: r.province,
-  }));
+  // total_count rides on every row, so a page past the end reads 0.
+  return {
+    total: rows.length ? Number(rows[0]!.total_count) : 0,
+    rows: rows.map((r) => ({
+      slug: r.slug,
+      name: r.name,
+      logoKey: r.logo_key,
+      tagline: r.tagline,
+      city: r.city,
+      province: r.province,
+      primaryColor: r.primary_color,
+      categories: r.categories ?? [],
+    })),
+  };
 }
 
-// The directory's category filter options: equipment types some listed
-// company actually rents out (migration 0052; type names only).
+export async function listCatalogLocations(): Promise<string[]> {
+  const rows = await db.execute<{ city: string }>(sql`select city from catalog_list_locations()`);
+  return rows.map((r) => r.city);
+}
+
 export async function listEquipmentTypeNames(): Promise<string[]> {
   const rows = await db.execute<{ name: string }>(sql`select name from catalog_list_categories()`);
   return rows.map((r) => r.name);

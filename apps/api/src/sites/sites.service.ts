@@ -1,8 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { and, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import {
   addresses,
   auditLogs,
+  customers,
   equipment,
   equipmentAssignments,
   events,
@@ -13,10 +14,17 @@ import {
   withTenantTx,
 } from '@arkilaunch/db';
 import {
+  manilaDate,
+  onLuzonMainland,
   severityMessage,
   WEATHER_STALE_AFTER_MINUTES,
   type DeploymentCreateRequest,
+  type DeploymentReturnRequest,
+  type IncidentCompanyTallyResponse,
   type IncidentListQuery,
+  type IncidentReviewRequest,
+  type IncidentStatus,
+  type SiteEquipmentWeatherResponse,
   type SiteListQuery,
   type IncidentListResponse,
   type RequestContext,
@@ -36,25 +44,20 @@ import {
   findAvailableAlternatives,
 } from '../common/equipment-availability.js';
 import { countRows } from '../common/count-rows.js';
+import { loadFieldLogs } from '../common/field-logs.js';
+import { latestEquipmentWeather } from '../common/equipment-weather.js';
 
-// Upper bound on the active-alert scan behind GET /weather/advisories.
-// One row per site is returned after the JS dedupe; this caps the rows
-// read to get there.
+// Caps the active-alert rows scanned before the per-site dedupe.
 const ACTIVE_ADVISORY_SCAN_LIMIT = 1000;
 
 const EMPTY_OBSERVATION: WeatherObservation = { tempC: 0, windKph: 0, precipMm: 0, code: 0 };
 
-// Pure row-to-response mapping shared by weather() and advisories() (PRD-F5)
-// so a single-site read and the tenant-wide list can never disagree about
-// what a reading means -- the same shared-pure-function shape as
-// evaluateSeverity() in packages/shared/src/weather.ts.
 function toWeatherAdvisoryResponse(
   siteId: string,
   latest: typeof weatherAlerts.$inferSelect | undefined,
 ): WeatherAdvisoryResponse {
   if (!latest) {
-    // No poll has ever run for this site (ENABLE_WEATHER_POLL default off,
-    // or the site was just created) -- nothing to serve yet.
+    // No poll has run for this site yet: nothing to serve.
     return {
       siteId,
       observed: EMPTY_OBSERVATION,
@@ -77,32 +80,121 @@ function toWeatherAdvisoryResponse(
   };
 }
 
-// EDTR v2 discrepancy rules (packages/shared/src/weather-attestation.ts).
-function discrepancyDetail(rule?: string, date?: string, half?: string): string {
+function discrepancyDetail(
+  rule?: string,
+  date?: string,
+  half?: string,
+  system?: { totalPrecipMm?: number; maxWindKph?: number },
+  readings?: { minute: number; precip_mm: number }[],
+): string {
   const when = `${date ?? ''}${half && half !== 'day' ? ` ${half.toUpperCase()}` : ''}`;
-  if (rule === 'D1') return `Idle hours put down to weather, but the site readings show no rain or wind (${when}).`;
-  if (rule === 'D2') return `Worked through a weather warning the timekeeper marked clear or cloudy (${when}).`;
-  return `Weather report discrepancy (${when}).`;
+  const base =
+    rule === 'D1'
+      ? `Idle hours put down to weather, but the site readings show no rain or wind (${when}).`
+      : rule === 'D2'
+        ? `Worked through a weather warning the timekeeper marked clear or cloudy (${when}).`
+        : `Weather report discrepancy (${when}).`;
+  const evidence: string[] = [];
+  if (typeof system?.totalPrecipMm === 'number') evidence.push(`${system.totalPrecipMm} mm rain recorded`);
+  if (typeof system?.maxWindKph === 'number') evidence.push(`wind up to ${Math.round(system.maxWindKph)} km/h`);
+  if (readings?.length) {
+    const wet = readings.filter((r) => r.precip_mm > 0).length;
+    evidence.push(`rain in ${wet} of ${readings.length} half-hourly readings`);
+  }
+  return `${base}${evidence.length ? ` Recorded: ${evidence.join(', ')}.` : ''} For review, not a finding.`;
+}
+
+const LOGGED_INCIDENT_NAMES = ['weather_liability_incident', 'equipment_used_despite_warning'];
+const INCIDENT_EVENT_NAMES = [...LOGGED_INCIDENT_NAMES, 'edtr_weather_discrepancy'];
+
+interface IncidentProperties {
+  project_site_id?: string;
+  rental_id?: string;
+  severity?: string;
+  observed?: unknown;
+  rule?: string;
+  date?: string;
+  half?: 'am' | 'pm' | 'day';
+  system?: unknown;
+  level?: string;
+  reasons?: string[];
+  hours_active?: number;
+  weather_hours?: number | null;
+  warned_at?: string;
+  equipment_id?: string;
+  edtr_id?: string;
+  source?: 'system' | 'sheet';
+  reported?: { am: string | null; pm: string | null };
+  readings?: { minute: number; precip_mm: number }[];
+  review?: { status: IncidentStatus; note: string | null; by: string; at: string };
+}
+
+const BAD_WEATHER_WORDS: Record<string, string> = { HR: 'heavy rain', W: 'strong wind', T: 'a storm signal' };
+
+function sheetWeatherDetail(p: IncidentProperties): string {
+  const marked = (['am', 'pm'] as const).flatMap((half) => {
+    const words = BAD_WEATHER_WORDS[p.reported?.[half] ?? ''];
+    return words ? [`${words} (${half.toUpperCase()})`] : [];
+  });
+  return `${p.hours_active ?? '?'} h logged on ${p.date ?? 'that day'} while the field log itself marks ${marked.join(' and ') || 'bad weather'}.`;
 }
 
 @Injectable()
 export class SitesService {
   constructor(private readonly events: EventsService) {}
 
-  // GET /api/v1/sites (S12). Readable by any authenticated tenant member --
-  // site-safety information, same posture as fleet/reference reads; RLS is
-  // the isolation boundary.
   async list(ctx: RequestContext, query: SiteListQuery): Promise<SiteListResponse> {
     return withTenantTx(ctx, async (tx) => {
-      // Count first: an empty page past the end still has to report the real
-      // total, or the pager cannot offer a way back.
-      const total = await countRows(tx, projectSites);
-      const rows = await tx
-        .select()
+      // On site = delivered (active), or a legacy deployment unit left 'scheduled' but deployed and active nowhere else.
+      // Upcoming = a confirmed booking's unit still in the yard, due within 14 days.
+      const onSite = sql`(${equipmentAssignments.status} = 'active' or (${equipmentAssignments.status} = 'scheduled' and ${equipment.availabilityStatus} = 'deployed' and not exists (select 1 from equipment_assignments other where other.equipment_id = ${equipmentAssignments.equipmentId} and other.status = 'active')))`;
+      const arriving = sql`(${equipmentAssignments.status} = 'scheduled' and ${rentals.status} = 'confirmed' and ${equipment.availabilityStatus} <> 'deployed' and ${equipmentAssignments.start} >= now() - interval '1 day' and ${equipmentAssignments.start} < now() + interval '14 days')`;
+      const units = tx
+        .select({
+          siteId: sql<string>`${rentals.projectSiteId}`.as('site_id'),
+          active: sql<number>`(count(distinct ${equipmentAssignments.equipmentId}) filter (where ${onSite}))::int`.as('active_units'),
+          upcoming: sql<number>`(count(distinct ${equipmentAssignments.equipmentId}) filter (where ${arriving}))::int`.as('upcoming_units'),
+          nextArrival: sql<string | null>`min(${equipmentAssignments.start}) filter (where ${arriving})`.as('next_arrival'),
+        })
+        .from(equipmentAssignments)
+        .innerJoin(rentals, eq(rentals.id, equipmentAssignments.rentalId))
+        .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+        .groupBy(rentals.projectSiteId)
+        .as('site_units');
+      const activeUnits = sql<number>`coalesce(${units.active}, 0)`;
+      const upcomingUnits = sql<number>`coalesce(${units.upcoming}, 0)`;
+      const where =
+        query.deployment === 'active'
+          ? sql`${activeUnits} > 0`
+          : query.deployment === 'upcoming'
+            ? sql`${upcomingUnits} > 0`
+            : query.deployment === 'idle'
+              ? sql`${activeUnits} = 0 and ${upcomingUnits} = 0`
+              : undefined;
+
+      // Count first: an empty page past the end still has to report the real total.
+      const [counted] = await tx
+        .select({ value: count() })
         .from(projectSites)
-        .orderBy(desc(projectSites.createdAt))
+        .leftJoin(units, eq(units.siteId, projectSites.id))
+        .where(where);
+      const total = counted?.value ?? 0;
+      const found = await tx
+        .select({
+          site: projectSites,
+          activeUnits,
+          upcomingUnits,
+          nextArrival: units.nextArrival,
+          customerName: customers.companyName,
+        })
+        .from(projectSites)
+        .leftJoin(units, eq(units.siteId, projectSites.id))
+        .leftJoin(customers, eq(customers.id, projectSites.customerId))
+        .where(where)
+        .orderBy(sql`(${activeUnits} > 0) desc`, sql`(${upcomingUnits} > 0) desc`, desc(projectSites.createdAt))
         .limit(query.limit)
         .offset(query.offset);
+      const rows = found.map((row) => row.site);
       if (rows.length === 0) return { items: [], total };
 
       const alertRows = await tx
@@ -120,8 +212,6 @@ export class SitesService {
         if (!latestBySite.has(alert.projectSiteId)) latestBySite.set(alert.projectSiteId, alert);
       }
 
-      // Human-readable location (BRAND.md: a site is never shown as a bare
-      // UUID) -- same address join get() already does, applied here too.
       const addressRows = await tx
         .select()
         .from(addresses)
@@ -133,7 +223,7 @@ export class SitesService {
         );
       const addressById = new Map(addressRows.map((address) => [address.id, address]));
 
-      const items: SiteResponse[] = rows.map((row) => {
+      const items: SiteResponse[] = found.map(({ site: row, ...deployment }) => {
         const latest = latestBySite.get(row.id);
         const address = addressById.get(row.addressId);
         return {
@@ -144,13 +234,16 @@ export class SitesService {
           city: address?.city ?? null,
           province: address?.province ?? null,
           observedAt: latest?.effectiveAt.toISOString() ?? null,
+          activeUnits: deployment.activeUnits,
+          upcomingUnits: deployment.upcomingUnits,
+          nextArrival: deployment.nextArrival ? new Date(deployment.nextArrival).toISOString() : null,
+          customerName: deployment.customerName,
         };
       });
       return { items, total };
     });
   }
 
-  // GET /api/v1/sites/:id (S12).
   async get(ctx: RequestContext, id: string): Promise<SiteDetailResponse> {
     return withTenantTx(ctx, async (tx) => {
       const [site] = await tx.select().from(projectSites).where(eq(projectSites.id, id)).limit(1);
@@ -190,10 +283,9 @@ export class SitesService {
     });
   }
 
-  // POST /api/v1/sites (addition beyond SDD §4; see AGENTS.md §5.1 Change
-  // Record). site:manage-gated. project_sites.address_id is NOT NULL, so
-  // this inserts the address row in the same transaction.
+  // project_sites.address_id is NOT NULL, so the address row goes in the same transaction.
   async create(ctx: RequestContext, body: SiteCreateRequest) {
+    if (!onLuzonMainland(body.latitude, body.longitude)) throw new UnprocessableEntityException({ error: 'outside_luzon_mainland' });
     return withTenantTx(ctx, async (tx) => {
       const [address] = await tx
         .insert(addresses)
@@ -233,7 +325,6 @@ export class SitesService {
     });
   }
 
-  // PATCH /api/v1/sites/:id. site:manage-gated.
   async update(ctx: RequestContext, id: string, body: SiteUpdateRequest) {
     return withTenantTx(ctx, async (tx) => {
       const [existing] = await tx
@@ -242,6 +333,9 @@ export class SitesService {
         .where(eq(projectSites.id, id))
         .limit(1);
       if (!existing) throw new NotFoundException({ error: 'project_site_not_found' });
+
+      if (!onLuzonMainland(body.latitude ?? Number(existing.latitude), body.longitude ?? Number(existing.longitude)))
+        throw new UnprocessableEntityException({ error: 'outside_luzon_mainland' });
 
       const [updated] = await tx
         .update(projectSites)
@@ -269,13 +363,7 @@ export class SitesService {
     });
   }
 
-  // POST /api/v1/sites/:id/deployments (PRD-F4 "deploy equipment"). Reuses
-  // the exact overlap-check + FOR UPDATE lock + alternatives logic
-  // bookings.service.ts uses, so QAD-T16/QAD-T21 (never deploy a
-  // maintenance-flagged/already-deployed unit, never double-book) hold on
-  // this path too, not only the booking path. Unlike a booking (which only
-  // schedules a future window), a deployment happens now: the equipment's
-  // own availabilityStatus flips to 'deployed' immediately.
+  // Same overlap check + FOR UPDATE lock as bookings, so never-double-book holds here too; the unit flips to deployed now.
   async createDeployment(ctx: RequestContext, siteId: string, body: DeploymentCreateRequest) {
     return withTenantTx(ctx, async (tx) => {
       const [site] = await tx
@@ -290,11 +378,7 @@ export class SitesService {
         .from(rentals)
         .where(eq(rentals.id, body.rentalId))
         .limit(1);
-      // A rental for a different site can never deploy "to" this one --
-      // equipment_assignments has no project_site_id of its own (it is
-      // derived from the rental), so this is also what keeps
-      // returnDeployment's own rental.projectSiteId === siteId check
-      // (below) from ever finding a deployment it cannot return.
+      // equipment_assignments has no site of its own, so the rental's site is the only boundary.
       if (!rental || rental.projectSiteId !== siteId) {
         throw new NotFoundException({ error: 'rental_not_found' });
       }
@@ -306,7 +390,7 @@ export class SitesService {
         .for('update');
       if (!equipmentRow) throw new NotFoundException({ error: 'equipment_not_found' });
 
-      if (equipmentRow.availabilityStatus !== 'available') {
+      if (equipmentRow.availabilityStatus !== 'available' || equipmentRow.retiredAt) {
         const alternatives = await findAvailableAlternatives(
           tx,
           equipmentRow.equipmentTypeId,
@@ -319,8 +403,7 @@ export class SitesService {
           alternatives,
         });
       }
-      // The FK alone would accept another tenant's user id; the operator
-      // must be a member of this tenant (explicit, not just RLS).
+      // The FK alone would accept another tenant's user id; the operator must be a member of this tenant.
       if (body.operatorUserId) {
         const [operator] = await tx
           .select({ id: users.id })
@@ -392,9 +475,12 @@ export class SitesService {
     });
   }
 
-  // PATCH /api/v1/sites/:id/deployments/:assignmentId/return (PRD-F4
-  // "return equipment"). Frees the unit for its next deployment/booking.
-  async returnDeployment(ctx: RequestContext, siteId: string, assignmentId: string) {
+  async returnDeployment(
+    ctx: RequestContext,
+    siteId: string,
+    assignmentId: string,
+    body: DeploymentReturnRequest = {},
+  ) {
     return withTenantTx(ctx, async (tx) => {
       const [assignment] = await tx
         .select()
@@ -413,6 +499,33 @@ export class SitesService {
       }
       if (assignment.status === 'completed' || assignment.status === 'cancelled') {
         throw new ConflictException({ error: 'already_returned' });
+      }
+
+      // Unapproved days before today would close billing on an incomplete record; today's sheet may not be in yet.
+      const today = manilaDate(new Date());
+      const logs = await loadFieldLogs(tx, [rental.id], today);
+      const open = logs.days.filter(
+        (d) =>
+          d.equipmentId === assignment.equipmentId &&
+          d.date < today &&
+          ['missing', 'pending', 'needs_correction'].includes(d.status),
+      );
+      if (open.length > 0 && !body.confirmIncompleteLogs) {
+        throw new ConflictException({
+          error: 'field_logs_incomplete',
+          missing: open.filter((d) => d.status === 'missing').map((d) => d.date),
+          pending: open.filter((d) => d.status !== 'missing').map((d) => d.date),
+        });
+      }
+      if (open.length > 0) {
+        await tx.insert(auditLogs).values({
+          tenantId: ctx.tenantId,
+          actorId: ctx.userId,
+          action: 'UPDATE',
+          entity: 'return_with_incomplete_field_logs',
+          entityId: assignmentId,
+          reason: `${body.reason ?? ''} (open days: ${open.map((d) => d.date).join(', ')})`.slice(0, 2000),
+        });
       }
 
       await tx
@@ -441,14 +554,7 @@ export class SitesService {
     });
   }
 
-  // GET /api/v1/sites/:id/weather (SDD §4, PRD-F5). Serves the latest
-  // weather_alerts row for the site -- jobs/src/weather-poll.ts writes one
-  // every cycle, calm or not (T2: the alerts table doubles as the reading
-  // cache), so `is_stale` can be computed even for a site that has never
-  // crossed a threshold. Readable by any authenticated tenant member (T4):
-  // this is site-safety information, and timekeepers are the ones
-  // physically on site; RLS is the isolation boundary, same posture as
-  // reference/*.
+  // The poller writes a row every cycle, calm or not, so `is_stale` works for a site that never crossed a threshold.
   async weather(ctx: RequestContext, siteId: string): Promise<WeatherAdvisoryResponse> {
     return withTenantTx(ctx, async (tx) => {
       const [site] = await tx
@@ -469,17 +575,9 @@ export class SitesService {
     });
   }
 
-  // GET /api/v1/weather/advisories (S13). Active advisories (status !=
-  // 'cleared') across every site in the tenant, one row per site (its
-  // latest active reading).
   async advisories(ctx: RequestContext): Promise<WeatherAdvisoryListResponse> {
     return withTenantTx(ctx, async (tx) => {
-      // The response is bounded by site count, but the query was not: it
-      // selected every active alert in the tenant and collapsed it in a JS
-      // Map afterwards (audit-api-surface.md #10). Bound it the way the
-      // sibling incidents() in this file already does. The cap is on
-      // alerts, not sites, so it is set well above the per-site fan-out a
-      // tenant's sites can produce.
+      // Bounded like incidents(); the cap is on alerts, not sites.
       const rows = await tx
         .select()
         .from(weatherAlerts)
@@ -499,11 +597,16 @@ export class SitesService {
     });
   }
 
-  // GET /api/v1/incidents?projectSiteId=... (S14 Liability Incident Log).
-  // No new table: reads the `events` rows jobs/src/weather-poll.ts already
-  // writes on a new-or-worsening severity crossing (SDD §4 "auto-logs a
-  // liability incident") -- a dedicated incidents table would duplicate
-  // data the first-party analytics sink already holds (restraint ladder).
+  // No reading yet reads as no data, never as an all-clear.
+  async equipmentWeather(ctx: RequestContext, siteId: string): Promise<SiteEquipmentWeatherResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const [site] = await tx.select({ id: projectSites.id }).from(projectSites).where(eq(projectSites.id, siteId)).limit(1);
+      if (!site) throw new NotFoundException({ error: 'project_site_not_found' });
+      return latestEquipmentWeather(tx, siteId);
+    });
+  }
+
+  // No incidents table: reads the `events` rows the weather poller and the field-log checks write.
   async incidents(ctx: RequestContext, query: IncidentListQuery): Promise<IncidentListResponse> {
     return withTenantTx(ctx, async (tx) => {
       const names =
@@ -511,10 +614,23 @@ export class SitesService {
           ? ['weather_liability_incident']
           : query.kind === 'discrepancy'
             ? ['edtr_weather_discrepancy']
-            : ['weather_liability_incident', 'edtr_weather_discrepancy'];
+            : query.kind === 'used_despite_warning'
+              ? ['equipment_used_despite_warning']
+              : // D1/D2 report discrepancies stay out of the log; one field log's weather check still reads them.
+                query.edtrId
+                ? INCIDENT_EVENT_NAMES
+                : LOGGED_INCIDENT_NAMES;
       const conditions: SQL[] = [inArray(events.name, names)];
       if (query.projectSiteId) {
         conditions.push(sql`${events.properties} ->> 'project_site_id' = ${query.projectSiteId}`);
+      }
+      if (query.edtrId) {
+        conditions.push(sql`${events.properties} ->> 'edtr_id' = ${query.edtrId}`);
+      }
+      if (query.customerId) {
+        conditions.push(
+          sql`${events.properties} ->> 'rental_id' in (select ${rentals.id}::text from ${rentals} where ${rentals.customerId} = ${query.customerId})`,
+        );
       }
 
       const total = await countRows(tx, events, and(...conditions));
@@ -526,15 +642,12 @@ export class SitesService {
         .limit(query.limit)
         .offset(query.offset);
 
-      const siteIds = [
-        ...new Set(
-          rows
-            .map((row) => (row.properties as { project_site_id?: string }).project_site_id)
-            .filter((id): id is string => Boolean(id)),
-        ),
+      const propsOf = (row: (typeof rows)[number]) => row.properties as IncidentProperties;
+      const ids = (key: 'project_site_id' | 'rental_id') => [
+        ...new Set(rows.map((row) => propsOf(row)[key]).filter((id): id is string => Boolean(id))),
       ];
-      // Human-readable location (an incident is never shown as a bare
-      // project_site_id UUID) -- same address-via-site join as GET /sites.
+      const siteIds = ids('project_site_id');
+      const rentalIds = ids('rental_id');
       const siteRows =
         siteIds.length === 0
           ? []
@@ -544,34 +657,127 @@ export class SitesService {
               .leftJoin(addresses, eq(addresses.id, projectSites.addressId))
               .where(inArray(projectSites.id, siteIds));
       const siteById = new Map(siteRows.map((site) => [site.id, site]));
+      const companyRows =
+        rentalIds.length === 0
+          ? []
+          : await tx
+              .select({ rentalId: rentals.id, customerId: customers.id, companyName: customers.companyName })
+              .from(rentals)
+              .innerJoin(customers, eq(customers.id, rentals.customerId))
+              .where(inArray(rentals.id, rentalIds));
+      const companyByRental = new Map(companyRows.map((c) => [c.rentalId, c]));
 
       const items = rows.map((row) => {
-        const properties = row.properties as {
-          project_site_id?: string;
-          severity?: string;
-          observed?: unknown;
-          rule?: string;
-          date?: string;
-          half?: string;
-          system?: unknown;
-        };
+        const properties = propsOf(row);
         const discrepancy = row.name === 'edtr_weather_discrepancy';
-        const site = properties.project_site_id
-          ? siteById.get(properties.project_site_id)
-          : undefined;
+        const ignored = row.name === 'equipment_used_despite_warning';
+        const site = properties.project_site_id ? siteById.get(properties.project_site_id) : undefined;
+        const company = properties.rental_id ? companyByRental.get(properties.rental_id) : undefined;
+        // Logged before the sheet source existed: those came from the system warning.
+        const source = ignored ? (properties.source ?? 'system') : null;
         return {
           id: row.id,
           projectSiteId: properties.project_site_id ?? null,
           siteCity: site?.city ?? null,
           siteProvince: site?.province ?? null,
-          severity: discrepancy ? 'high' : (properties.severity ?? null),
-          observed: (discrepancy ? properties.system : properties.observed) ?? null,
+          severity: discrepancy || ignored ? 'high' : (properties.severity ?? null),
+          // Everything the event recorded, for the detail drawer; minute readings stay summarised in `detail`.
+          observed: discrepancy
+            ? { ...(properties.system as object | undefined), rule: properties.rule, date: properties.date, half: properties.half }
+            : ignored
+              ? source === 'sheet'
+                ? {
+                    equipment_id: properties.equipment_id,
+                    hours_active: properties.hours_active,
+                    weather_hours: properties.weather_hours ?? null,
+                    date: properties.date,
+                    reported_am: properties.reported?.am ?? null,
+                    reported_pm: properties.reported?.pm ?? null,
+                  }
+                : {
+                    equipment_id: properties.equipment_id,
+                    level: properties.level,
+                    hours_active: properties.hours_active,
+                    date: properties.date,
+                    warned_at: properties.warned_at,
+                    reasons: properties.reasons ?? [],
+                  }
+              : (properties.observed ?? null),
           occurredAt: row.occurredAt,
-          kind: discrepancy ? ('discrepancy' as const) : ('weather' as const),
-          detail: discrepancy ? discrepancyDetail(properties.rule, properties.date, properties.half) : null,
+          kind: ignored ? ('used_despite_warning' as const) : discrepancy ? ('discrepancy' as const) : ('weather' as const),
+          edtrId: properties.edtr_id ?? null,
+          half: properties.half === 'am' || properties.half === 'pm' || properties.half === 'day' ? properties.half : null,
+          detail: ignored
+            ? source === 'sheet'
+              ? sheetWeatherDetail(properties)
+              : `${properties.hours_active ?? '?'} h logged on ${properties.date ?? 'that day'} on a machine warned to STOP WORK${
+                  properties.warned_at ? ` at ${new Date(properties.warned_at).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit' })}` : ''
+                }${properties.reasons?.length ? `: ${properties.reasons.join('; ')}` : ''}.`
+            : discrepancy
+              ? discrepancyDetail(
+                  properties.rule,
+                  properties.date,
+                  properties.half,
+                  properties.system as { totalPrecipMm?: number; maxWindKph?: number } | undefined,
+                  properties.readings,
+                )
+              : null,
+          customerId: company?.customerId ?? null,
+          customerName: company?.companyName ?? null,
+          source,
+          status: properties.review?.status ?? 'open',
+          reviewNote: properties.review?.note ?? null,
+          reviewedAt: properties.review?.at ? new Date(properties.review.at) : null,
         };
       });
       return { items, total };
+    });
+  }
+
+  // Repeat offenders: used-despite-warning incidents per renting company, dismissed ones left out.
+  async incidentCompanies(ctx: RequestContext): Promise<IncidentCompanyTallyResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const status = sql`coalesce(${events.properties} -> 'review' ->> 'status', 'open')`;
+      const rows = await tx
+        .select({
+          customerId: customers.id,
+          companyName: customers.companyName,
+          total: sql<number>`count(*)::int`,
+          open: sql<number>`(count(*) filter (where ${status} = 'open'))::int`,
+        })
+        .from(events)
+        .innerJoin(rentals, sql`${rentals.id}::text = ${events.properties} ->> 'rental_id'`)
+        .innerJoin(customers, eq(customers.id, rentals.customerId))
+        .where(and(eq(events.name, 'equipment_used_despite_warning'), sql`${status} <> 'dismissed'`))
+        .groupBy(customers.id, customers.companyName)
+        .orderBy(sql`count(*) desc`, customers.companyName);
+      return { items: rows };
+    });
+  }
+
+  // A person's call on an incident; the event row keeps it, the audit log keeps who and why. Never money (RFC-2).
+  async reviewIncident(ctx: RequestContext, id: string, body: IncidentReviewRequest) {
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx
+        .select({ id: events.id })
+        .from(events)
+        .where(and(eq(events.id, id), inArray(events.name, INCIDENT_EVENT_NAMES)))
+        .limit(1);
+      if (!row) throw new NotFoundException({ error: 'incident_not_found' });
+      const review = { status: body.status, note: body.note || null, by: ctx.userId, at: new Date().toISOString() };
+      await tx
+        .update(events)
+        .set({ properties: sql`${events.properties} || jsonb_build_object('review', ${JSON.stringify(review)}::jsonb)` })
+        .where(eq(events.id, id));
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'incident',
+        entityId: id,
+        reason: review.note ? `${review.status}: ${review.note}` : review.status,
+      });
+      return { id, status: review.status, reviewNote: review.note, reviewedAt: new Date(review.at) };
     });
   }
 }

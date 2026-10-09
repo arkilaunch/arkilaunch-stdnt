@@ -1,17 +1,16 @@
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { authLayoutRoute } from './_auth.js';
 import { currentHost } from '../lib/host.js';
+import { useTenantName } from '../lib/tenant.js';
 import { login, requestPasswordReset, verify2fa } from '../lib/auth-client.js';
-import { getCurrentRole, homeRouteForRole } from '../lib/guards.js';
+import { getCurrentRole, homeRouteForRole, redirectIfSignedIn } from '../lib/guards.js';
 import { Button } from '../components/button.js';
 import { Input } from '../components/input.js';
 import { Surface } from '../components/surface.js';
+import { captchaError, Turnstile, TURNSTILE_SITE_KEY } from '../components/turnstile.js';
 
-// Only accept an internal path (starts with '/', not '//'); a leaf value
-// like `//evil.com` is protocol-relative and would send a successful login
-// off-site. This is the input-validation half of the redirect-preservation
-// feature the guards raise via ?redirect=.
+// Internal paths only: `//evil.com` is protocol-relative and would send a login off-site.
 function isSafeInternalRedirect(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//');
 }
@@ -22,39 +21,68 @@ function validateLoginSearch(search: Record<string, unknown>): { redirect?: stri
 
 function LoginPage() {
   const onPlatform = currentHost.kind === 'platform';
+  const tenantName = useTenantName();
   const navigate = useNavigate();
   const { redirect: redirectTo } = loginRoute.useSearch();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  // Set once AuthService.login returns a TwoFaChallenge instead of
-  // AuthTokens; presence of this token switches the form to the code-entry
-  // step (POST /auth/2fa/verify), which is a live, tested backend endpoint.
   const [twoFaToken, setTwoFaToken] = useState<string | null>(null);
   const [code, setCode] = useState('');
-  // 'form' shows the forgot-password email box; 'sent' its confirmation.
   const [forgot, setForgot] = useState<'off' | 'form' | 'sent'>('off');
+  // Turnstile: forgot-password always; sign-in only once the API answers 'captcha_required'.
+  const [captcha, setCaptcha] = useState<string | null>(null);
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const [loginNeedsCaptcha, setLoginNeedsCaptcha] = useState(false);
+  const retryWhenVerified = useRef(false);
+  const waitingOnCaptcha = Boolean(TURNSTILE_SITE_KEY) && !captcha;
 
-  async function goHome() {
-    await navigate({ to: redirectTo ?? homeRouteForRole(getCurrentRole()) });
+  function freshCaptcha() {
+    setCaptcha(null);
+    setCaptchaKey((k) => k + 1);
   }
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  async function goHome() {
+    // replace: Back from the home page must not return to this form.
+    await navigate({ to: redirectTo ?? homeRouteForRole(getCurrentRole()), replace: true });
+  }
+
+  async function attemptLogin(token: string | null) {
     setError(null);
     setSubmitting(true);
     try {
-      const response = await login({ email, password });
+      const response = await login({ email, password }, token);
       if ('requires2fa' in response) {
         setTwoFaToken(response.twoFaToken);
         return;
       }
       await goHome();
-    } catch {
-      setError('Incorrect email or password.');
+    } catch (err) {
+      const code = err instanceof Error ? err.message : '';
+      if (loginNeedsCaptcha) freshCaptcha();
+      if ((code === 'captcha_required' || code === 'captcha_failed') && TURNSTILE_SITE_KEY) {
+        setLoginNeedsCaptcha(true);
+        retryWhenVerified.current = true;
+        setError('Quick security check before you try again.');
+      } else {
+        setError(captchaError(code) ?? 'Incorrect email or password.');
+      }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    await attemptLogin(captcha);
+  }
+
+  function onLoginCaptcha(token: string | null) {
+    setCaptcha(token);
+    if (token && retryWhenVerified.current) {
+      retryWhenVerified.current = false;
+      void attemptLogin(token);
     }
   }
 
@@ -78,10 +106,11 @@ function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      await requestPasswordReset(email);
+      await requestPasswordReset(email, captcha);
       setForgot('sent');
-    } catch {
-      setError('Could not send the request. Try again in a minute.');
+    } catch (err) {
+      setError(captchaError(err instanceof Error ? err.message : '') ?? 'Could not send the request. Try again in a minute.');
+      freshCaptcha();
     } finally {
       setSubmitting(false);
     }
@@ -91,21 +120,22 @@ function LoginPage() {
     const back = () => {
       setForgot('off');
       setError(null);
+      freshCaptcha();
     };
     return (
-      <Surface radius="lg" elevation="md" className="w-full max-w-sm p-8">
-        <h1 id="forgot-heading" className="mb-1 font-display text-xl font-semibold text-text">
+      <Surface radius="lg" elevation="md" className="w-full max-w-md p-8">
+        <h1 id="forgot-heading" className="mb-1 text-heading-lg text-text">
           Reset your password
         </h1>
         {forgot === 'sent' ? (
           <p role="status" className="mb-6 text-sm text-text-muted">
-            If that email has an account, the rental team has been told. They will send you a link to
-            set a new password.
+            If that email has an account, we've sent it a link to set a new password. Check your inbox
+            and spam folder.
           </p>
         ) : (
           <form onSubmit={onForgot} aria-labelledby="forgot-heading">
             <p className="mb-6 text-sm text-text-muted">
-              Enter your account email. The rental team will send you a link to set a new password.
+              Enter your account email and we'll send you a link to set a new password.
             </p>
             <Input
               label="Email address"
@@ -118,8 +148,11 @@ function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               {...(error ? { error } : {})}
             />
-            <Button type="submit" loading={submitting} disabled={submitting} className="mt-4 w-full">
-              Request a reset
+            <div className="mt-4">
+              <Turnstile key={captchaKey} onToken={setCaptcha} />
+            </div>
+            <Button type="submit" loading={submitting} disabled={submitting || waitingOnCaptcha} className="mt-4 w-full">
+              Send reset link
             </Button>
           </form>
         )}
@@ -136,9 +169,9 @@ function LoginPage() {
 
   if (twoFaToken) {
     return (
-      <Surface radius="lg" elevation="md" className="w-full max-w-sm p-8">
+      <Surface radius="lg" elevation="md" className="w-full max-w-md p-8">
         <form onSubmit={onVerifyCode} aria-labelledby="twofa-heading">
-          <h1 id="twofa-heading" className="mb-1 font-display text-xl font-semibold text-text">
+          <h1 id="twofa-heading" className="mb-1 text-heading-lg text-text">
             Enter your code
           </h1>
           <p className="mb-6 text-sm text-text-muted">
@@ -184,13 +217,15 @@ function LoginPage() {
   }
 
   return (
-    <Surface radius="lg" elevation="md" className="w-full max-w-sm p-8">
+    <Surface radius="lg" elevation="md" className="w-full max-w-md p-8">
       <form onSubmit={onSubmit} aria-labelledby="login-heading">
-        <h1 id="login-heading" className="mb-1 font-display text-xl font-semibold text-text">
+        <h1 id="login-heading" className="mb-1 text-heading-lg text-text">
           Sign in
         </h1>
         <p className="mb-6 text-sm text-text-muted">
-          {onPlatform ? 'Sign in to the ArkiLaunch console.' : 'Enter your credentials to start renting equipment.'}
+          {onPlatform
+            ? 'Sign in to the ArkiLaunch console.'
+            : `Welcome back${tenantName ? ` to ${tenantName}` : ''}. Sign in to book equipment.`}
         </p>
 
         <div className="mb-4">
@@ -222,14 +257,26 @@ function LoginPage() {
           onClick={() => {
             setForgot('form');
             setError(null);
+            freshCaptcha();
           }}
           className="mt-1 text-sm text-text-muted underline decoration-dotted"
         >
           Forgot password?
         </button>
 
-        <Button type="submit" loading={submitting} disabled={submitting} className="mt-4 w-full">
-          Sign in to system
+        {loginNeedsCaptcha && (
+          <div className="mt-4">
+            <Turnstile key={captchaKey} onToken={onLoginCaptcha} />
+          </div>
+        )}
+
+        <Button
+          type="submit"
+          loading={submitting}
+          disabled={submitting || (loginNeedsCaptcha && waitingOnCaptcha)}
+          className="mt-4 w-full"
+        >
+          Sign in
         </Button>
 
         <p className="mt-6 text-center text-sm text-text-muted">
@@ -246,6 +293,7 @@ function LoginPage() {
 export const loginRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: '/login',
+  beforeLoad: redirectIfSignedIn,
   validateSearch: validateLoginSearch,
   component: LoginPage,
 });

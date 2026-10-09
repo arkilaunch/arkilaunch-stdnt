@@ -1,44 +1,44 @@
 import { createRoute, Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fieldLayoutRoute } from './_field.js';
-import { sitesQueries, edtrQueries } from '../lib/queries.js';
-import { useScanDeployments } from '../lib/use-scan-deployments.js';
+import { edtrQueries, sitesQueries } from '../lib/queries.js';
 import { Button } from '../components/button.js';
 import { CaptureModal } from '../components/capture-modal.js';
 import { EmptyState } from '../components/empty-state.js';
-import { Surface } from '../components/surface.js';
+import { BlankEdtrDownload } from '../components/blank-edtr-download.js';
+import { formatDate, pluralize } from '../lib/format.js';
+import { usePendingUploads, type QueuedCapture } from '../lib/upload-queue.js';
 import { useToast } from '../components/toast.js';
-import { pluralize } from '../lib/format.js';
 
 function OperatorDashboardPage() {
   const queryClient = useQueryClient();
-  const toast = useToast();
   const { data: sites, isPending: sitesPending } = useQuery(sitesQueries.list());
-  const { data: edtrList, isPending: edtrPending } = useQuery(edtrQueries.list());
 
-  // Recording a field log is this role's whole job (PRD US-02), but until
-  // now the only screen that opened the capture modal was /app/ocr, which
-  // requireRole() closes to admin/owner/platform_admin. A timekeeper was
-  // redirected to this dashboard and had nowhere to go. The server always
-  // allowed it: POST /edtr asks for `edtr:create`, which this role holds.
   const [captureOpen, setCaptureOpen] = useState(false);
 
-  // The pick lists the modal needs. Fetched once the operator has sites,
-  // since with no assignment there is nothing to record against. A failure
-  // is non-fatal: the dashboard still reads, and the capture button is
-  // disabled below rather than opening a modal with empty pick lists.
   const hasSites = !!sites && sites.total > 0;
-  const { equipmentList, rentals, rentalLabel } = useScanDeployments(hasSites);
+  // Only machines on site now at this timekeeper's sites (QA 32).
+  const targets = useQuery({ ...edtrQueries.scanTargets(), enabled: hasSites });
+  const nothingOnSite = (targets.data?.items.length ?? 0) === 0;
 
-  const pendingCount = (edtrList?.items as { status?: string }[] | undefined)?.filter(
-    (e) => e.status === 'review' || e.status === 'extracted',
-  ).length;
+  // Photos saved on this phone while offline; they send themselves when the signal is back.
+  const toast = useToast();
+  const onRefused = useCallback(
+    (items: QueuedCapture[]) => {
+      for (const item of items) {
+        toast.error('A saved field log was not accepted', `${formatDate(item.fields.reportDate)}: record it again.`);
+      }
+      void queryClient.invalidateQueries({ queryKey: ['edtr'] });
+    },
+    [toast, queryClient],
+  );
+  const pendingUploads = usePendingUploads(onRefused);
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="font-display text-xl font-semibold text-text">Dashboard</h1>
-      {sitesPending || edtrPending ? (
+      <h1 className="text-heading-lg text-text">Dashboard</h1>
+      {sitesPending ? (
         <p className="text-sm text-text-muted">Loading your work...</p>
       ) : hasSites ? (
         <div className="flex flex-col gap-3">
@@ -46,23 +46,21 @@ function OperatorDashboardPage() {
             variant="primary"
             size="field"
             className="w-full"
-            disabled={rentals.length === 0}
+            disabled={nothingOnSite}
             onClick={() => setCaptureOpen(true)}
           >
             Record a field log
           </Button>
-          {rentals.length === 0 && (
+          {nothingOnSite && !targets.isPending && (
             <p className="text-sm text-text-muted">
-              Nothing is out on rental at your sites yet, so there are no hours to record.
+              No machine is on site at your sites yet, so there are no hours to record.
             </p>
           )}
-          {pendingCount ? (
-            <Surface radius="md" elevation="sm" className="p-4">
-              <p className="text-sm font-medium text-text">
-                {pluralize(pendingCount, 'field log')} waiting on review
-              </p>
-            </Surface>
-          ) : null}
+          {pendingUploads > 0 && (
+            <p role="status" className="text-sm text-text">
+              Waiting to upload ({pendingUploads}): {pluralize(pendingUploads, 'field log')} saved on this phone will send when the signal is back.
+            </p>
+          )}
           <p className="text-sm text-text-muted">
             You are assigned to {pluralize(sites.total, 'site')}.
           </p>
@@ -72,6 +70,7 @@ function OperatorDashboardPage() {
           >
             Scan a DTR
           </Link>
+          <BlankEdtrDownload />
           <Link
             to="/field/deployment"
             className="min-h-12 rounded-sm border border-border bg-surface px-4 py-3 text-sm font-medium text-text"
@@ -89,13 +88,11 @@ function OperatorDashboardPage() {
       <CaptureModal
         open={captureOpen}
         onClose={() => setCaptureOpen(false)}
-        rentals={rentals}
-        equipmentList={equipmentList}
-        rentalLabel={rentalLabel}
         onCaptured={() => {
           void queryClient.invalidateQueries({ queryKey: ['edtr'] });
         }}
-        toast={toast}
+        initialSource="paper_ocr"
+        submitOnly
       />
     </div>
   );

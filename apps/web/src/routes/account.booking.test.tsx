@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { renderRoute } from '../test/render-route.js';
+import { makeToken, makeValidClaims } from '../test/make-token.js';
+import { setAccessToken } from '../lib/auth-client.js';
 import type { BookingDetailResponse } from '@arkilaunch/shared';
-import { bookingStage, bookingTimeline, leaseProgress } from './account.booking.js';
+import { bookingStage, bookingTimeline, leaseProgress, rentalDuration } from './account.booking.js';
 import { amountDue } from './account.checkout.js';
 import { describeNotification } from '../components/notification-feed.js';
 
-// The progress bar is the one piece of arithmetic on the booking screen, and
-// the failure that matters is not an off-by-one percentage -- it is showing
-// a confident "0% complete, 0 days remaining" on a hire whose dates are not
-// actually known, which reads as "your rental is over".
+// The failure that matters: a confident "0% complete" on a hire whose dates are unknown.
 describe('leaseProgress', () => {
   const start = '2026-10-01T00:00:00.000Z';
   const end = '2026-10-11T00:00:00.000Z';
@@ -35,6 +37,7 @@ describe('leaseProgress', () => {
 function booking(overrides: Partial<BookingDetailResponse> = {}): BookingDetailResponse {
   return {
     id: '11111111-1111-4111-8111-111111111111',
+    code: 'EQR-2026-0001',
     status: 'pending',
     projectSiteId: '22222222-2222-4222-8222-222222222222',
     siteCity: 'Pasig',
@@ -48,6 +51,7 @@ function booking(overrides: Partial<BookingDetailResponse> = {}): BookingDetailR
     createdAt: new Date('2026-09-01T00:00:00Z'),
     items: [
       {
+        id: '66666666-6666-4666-8666-666666666666',
         equipmentId: '44444444-4444-4444-8444-444444444444',
         start: new Date('2026-10-01T08:00:00Z'),
         end: new Date('2026-10-05T17:00:00Z'),
@@ -71,17 +75,16 @@ const accepted = {
   createdAt: new Date('2026-09-02T00:00:00Z'),
 };
 
-// What the checkout screen tells the customer they will pay. It must match
-// the server's rule, above all never showing the deposit twice.
+// Must match the server's rule, above all never showing the deposit twice.
 describe('amountDue', () => {
-  it('is the accepted quote plus the contract deposit', () => {
+  it('charges the consumable deposit plus mob/demob upfront, not the rent', () => {
     const due = amountDue(
       booking({
         quotation: accepted,
         deposit: { required: 5000, totalDeducted: 0, deductions: [] },
       }),
     );
-    expect(due).toEqual({ rent: 30000, deposit: 5000, total: 35000 });
+    expect(due).toEqual({ rent: 30000, deposit: 5000, mobilization: 0, total: 5000 });
   });
 
   it('leaves out a deposit already paid on the reservation', () => {
@@ -99,7 +102,25 @@ describe('amountDue', () => {
         ],
       }),
     );
-    expect(due.total).toBe(30000);
+    expect(due.total).toBe(0);
+  });
+
+  it('shows an issued booking invoice as it stands, coupon discount included', () => {
+    const due = amountDue(
+      booking({
+        quotation: accepted,
+        deposit: { required: 5000, totalDeducted: 0, deductions: [] },
+        invoices: [
+          {
+            id: '77777777-7777-4777-8777-777777777777',
+            invoiceType: 'booking',
+            amount: 32000,
+            status: 'issued',
+          },
+        ],
+      }),
+    );
+    expect(due.total).toBe(32000);
   });
 
   it('does not invent a total before anything is priced', () => {
@@ -142,21 +163,21 @@ describe('describeNotification', () => {
     const described = describeNotification('quote_ready', {
       rental_id: booking().id,
       total_php: 30000,
-    });
+    }, 'account');
     expect(described?.title).toBe('Quote ready');
     expect(described?.action?.to).toBe('/account/negotiation/$bookingId');
   });
 
   it('describes delivery, return and staff cancellation instead of dumping the payload', () => {
     for (const type of ['equipment_delivered', 'equipment_returned', 'booking_cancelled']) {
-      expect(describeNotification(type, { rental_id: booking().id })?.action?.to).toBe(
+      expect(describeNotification(type, { rental_id: booking().id }, 'account')?.action?.to).toBe(
         '/account/bookings/$bookingId',
       );
     }
   });
 
   it('falls back for anything it does not know', () => {
-    expect(describeNotification('maintenance_due', { equipment_id: 'x' })).toBeNull();
+    expect(describeNotification('maintenance_due', { equipment_id: 'x' }, 'account')).toBeNull();
   });
 });
 
@@ -165,5 +186,113 @@ describe('bookingStage', () => {
     expect(bookingStage(booking())).toEqual({ paid: false, onSite: false, cancelled: false });
     expect(bookingStage(booking({ status: 'confirmed' }))).toEqual({ paid: true, onSite: false, cancelled: false });
     expect(bookingStage(booking({ status: 'active' }))).toEqual({ paid: true, onSite: true, cancelled: false });
+  });
+});
+
+describe('customer booking page', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setAccessToken(null);
+  });
+
+  it('names the machine without asking for the staff-only fleet list', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    const b = booking();
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(String(url).includes(`/bookings/${b.id}`) ? { ...b, items: [{ ...b.items[0], equipmentName: 'CAT 320D' }] } : []),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await renderRoute(`/account/bookings/${b.id}`);
+
+    expect(await screen.findByText('CAT 320D')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/equipment?'))).toBe(false);
+  });
+});
+
+
+describe('rentalDuration', () => {
+  it('uses the same rounded-up rental days as booking pricing', () => {
+    expect(rentalDuration('2026-10-01T08:00:00Z', '2026-10-05T17:00:00Z')).toBe(5);
+    expect(rentalDuration('2026-10-01T08:00:00Z', '2026-10-01T17:00:00Z')).toBe(1);
+  });
+  it('does not invent days for unknown or invalid dates', () => {
+    expect(rentalDuration('2026-10-01', null)).toBeNull();
+    expect(rentalDuration('bad', '2026-10-02')).toBeNull();
+    expect(rentalDuration('2026-10-02', '2026-10-01')).toBeNull();
+  });
+});
+
+describe('customer cost breakdown', () => {
+  afterEach(() => { vi.unstubAllGlobals(); setAccessToken(null); });
+  it('shows saved line costs, hours and adjustments alongside each machine rental duration', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    const b = booking({ quotation: accepted });
+    const quote = {
+      ...accepted, lineItems: [
+        { kind: 'equipment', equipmentTypeId: 'excavator', equipmentTypeName: 'Excavator', quantity: 1, estimatedHours: 40, rentParts: [], rent: 24000, hourlyRate: 600, operatingCost: 24000, buffer: 0, subtotal: 24000 },
+        { kind: 'equipment', equipmentTypeId: 'loader', equipmentTypeName: 'Loader', quantity: 2, estimatedHours: 8, rentParts: [], rent: 3000, hourlyRate: 375, operatingCost: 6000, buffer: 0, subtotal: 6000 },
+      ], mobilization: 2000, demobilization: 1000, subtotal: 33000, discount: 3000, total: 30000,
+    };
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+      String(url).includes('/quotes/') ? quote : String(url).includes('/bookings/') ? b : []
+    ), { status: 200 }))));
+    await renderRoute('/account/bookings/' + b.id);
+    expect(await screen.findByRole('heading', { name: 'Equipment cost breakdown' })).toBeVisible();
+    const lines = await screen.findByRole('list', { name: 'Quote line items' });
+    expect(within(lines).getByText('40 quoted billable hours per unit')).toBeVisible();
+    expect(within(lines).getByText('8 quoted billable hours per unit')).toBeVisible();
+    expect(within(lines).getByText(/per unit before booking-level/)).toHaveTextContent('3,000');
+    expect(screen.getByText('Mobilization')).toBeVisible();
+    expect(screen.getByText('Demobilization')).toBeVisible();
+    expect(screen.getByText('Discount')).toBeVisible();
+    expect(screen.getByText('Quoted rental total').parentElement).toHaveTextContent('30,000');
+    expect(within(lines).getAllByText('Quoted line total')[0]).toBeDefined();
+    expect(screen.getByText('5 rental days')).toBeVisible();
+  });
+  it('itemises the all-in hourly rate into rent, operator, maintenance and fuel', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    const b = booking({ quotation: accepted });
+    const quote = {
+      ...accepted, lineItems: [
+        { kind: 'equipment', equipmentTypeId: 'excavator', equipmentTypeName: 'Excavator', quantity: 2, estimatedHours: 8,
+          rentParts: [{ rateType: 'hourly', ratePhp: 1200, count: 8 }], rent: 9600, hourlyRate: 1200, operatingCost: 19200, buffer: 0, subtotal: 19200,
+          rateBreakdown: { allIn: 1200, rent: 280, operator: 150, maintenance: 50, fuel: 720, dieselPhp: 60 } },
+      ], mobilization: 0, demobilization: 0, subtotal: 19200, discount: 0, total: 19200,
+    };
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(
+      String(url).includes('/quotes/') ? quote : String(url).includes('/bookings/') ? b : []
+    ), { status: 200 }))));
+    await renderRoute('/account/bookings/' + b.id);
+    await userEvent.click(await screen.findByText('Price breakdown per hour'));
+    for (const [label, value] of [['Rent', '280'], ['Operator', '150'], ['Maintenance', '50'], ['Fuel', '720'], ['Total', '1,200']]) {
+      expect(screen.getByText(new RegExp(`^${label}`)).parentElement).toHaveTextContent(value!);
+    }
+    expect(screen.getByText(/× 8 hours × 2 units/)).toBeVisible();
+  });
+  it.each([null, { ...accepted, totalPhp: null }])('shows a preparing message when the quote has no price: %j', async (quotation) => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    const b = booking({ quotation });
+    const fetchMock = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes('/bookings/') ? b : []), { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    await renderRoute('/account/bookings/' + b.id);
+    expect(await screen.findByText(/Your equipment costs will appear here/)).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/quotes/'))).toBe(false);
+  });
+});
+
+describe('amountDue mobilization', () => {
+  it('adds mob and demob to the deposit', () => {
+    const due = amountDue(
+      booking({
+        quotation: { ...accepted, mobilizationPhp: 15000, demobilizationPhp: 12000 },
+        deposit: { required: 5000, totalDeducted: 0, deductions: [] },
+      }),
+    );
+    expect(due).toEqual({ rent: 30000, deposit: 5000, mobilization: 27000, total: 32000 });
   });
 });

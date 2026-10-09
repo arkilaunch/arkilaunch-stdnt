@@ -8,12 +8,13 @@ import { PageHeader } from '../components/page-header.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { formatSeverity, siteName } from '../lib/format.js';
+import { FieldSheetsPanel } from '../components/field-sheets-panel.js';
 
 const COLUMNS: TableColumn<SiteResponse>[] = [
-  { header: 'Site', cell: (row) => siteName(row) },
-  { header: 'Latitude', cell: (row) => row.latitude.toFixed(4), align: 'right' },
-  { header: 'Longitude', cell: (row) => row.longitude.toFixed(4), align: 'right' },
-  { header: 'Weather', cell: (row) => formatSeverity(row.latestSeverity) },
+  { header: 'Site', kind: 'text', cell: (row) => siteName(row) },
+  { header: 'Latitude', kind: 'number', cell: (row) => row.latitude.toFixed(4) },
+  { header: 'Longitude', kind: 'number', cell: (row) => row.longitude.toFixed(4) },
+  { header: 'Weather', kind: 'status', cell: (row) => formatSeverity(row.latestSeverity) },
 ];
 
 function OperatorDeploymentPage() {
@@ -25,6 +26,7 @@ function OperatorDeploymentPage() {
         title="Your sites"
         description="Where you are assigned, and the weather over each one."
       />
+      <FieldSheetsPanel />
       <DataPanel
         title="Your sites"
         options={sitesQueries.list(PAGE_SIZE, offset)}

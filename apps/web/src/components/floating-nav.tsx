@@ -1,128 +1,129 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { getAccessToken } from '../lib/auth-client.js';
 import { homeHref } from '../lib/guards.js';
-import { useTenant } from '../lib/tenant.js';
-import { Button } from './button.js';
-import { CloseIcon, MenuIcon } from './icons.js';
+import { useHeaderColor, useTenant } from '../lib/tenant.js';
+import { Button, buttonClass } from './button.js';
+import { Menu, X } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { catalogQueries } from '../lib/queries.js';
 
 const LINKS = [
-  { label: 'Equipments', to: '/equipment' },
+  { label: 'Equipment', to: '/equipment' },
   { label: 'Contact', to: '/contact' },
 ];
 
-// DSD §4 FloatingNav (marketing tier): sticky, glass only past scrollY > 24
-// (--blur-mk-nav, --border-glass, --shadow-mk-nav). Rendered here in
-// Yardboard tokens, not SprintForge's cool palette. Below sm, the nav links
-// and auth actions move into a burger-triggered panel -- at 360px baseline
-// width there isn't room for "Almara" + 2 links + 2 buttons on
-// one row.
-export function FloatingNav({ className }: { className?: string }) {
-  const [scrolled, setScrolled] = useState(false);
+export function FloatingNav() {
   const [open, setOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tenant = useTenant();
+  const { data: testimonials } = useQuery(catalogQueries.testimonials());
+  const testimonialLink = testimonials?.items?.length ? (
+    <Link
+      to="/"
+      hash="testimonials"
+      onClick={() => setOpen(false)}
+      className="inline-flex min-h-11 items-center rounded-sm px-3 hover:bg-current/10"
+    >
+      Testimonials
+    </Link>
+  ) : null;
   const tenantName = tenant?.name ?? '';
+  const mark = tenant?.iconUrl ?? tenant?.logoUrl;
   const signedIn = typeof window !== 'undefined' && Boolean(getAccessToken());
+  const bar = useHeaderColor();
+  const tile = 'rounded-sm px-3 hover:bg-current/10';
+  const linkClass = (active: boolean) =>
+    [
+      'inline-flex min-h-11 items-center',
+      tile,
+      active ? 'font-medium underline decoration-2 underline-offset-8' : '',
+    ].join(' ');
 
-  useEffect(() => {
-    function onScroll() {
-      setScrolled(window.scrollY > 24);
-    }
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
-  // A route change (following a link from the panel) should close it, same
-  // as any off-canvas menu -- otherwise it's still open, invisibly, on the
-  // page the user just navigated to.
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
 
   const authActions = signedIn ? (
-    <Button size="default" variant="secondary" onClick={() => window.location.assign(homeHref())}>
+    <Button variant="primary" onClick={() => window.location.assign(homeHref())}>
       Dashboard
     </Button>
   ) : (
     <>
-      <Link to="/login">
-        <Button size="default" variant="ghost">
-          Sign in
-        </Button>
+      <Link to="/login" className={`text-sm ${linkClass(false)}`}>
+        Sign in
       </Link>
-      <Link to="/signup">
-        <Button size="default" variant="primary">
-          Register
-        </Button>
+      <Link to="/signup" className={buttonClass('primary')}>
+        Register
       </Link>
     </>
   );
 
   return (
     <header
-      className={[
-        // Idle used to be bg-transparent, which let the marketing frame's
-        // own (slightly darker) background show through right up to the
-        // nav's bottom edge -- a visible seam against the paper-toned
-        // content sitting just below it. Always matching bg-bg-mk keeps the
-        // nav visually part of the page at rest; scrolling only adds the
-        // glass blur/shadow/border on top of that same base color.
-        'sticky top-0 z-50 bg-bg-mk transition-shadow duration-[160ms]',
-        scrolled || open ? 'shadow-mk-nav backdrop-blur-[24px] border-b border-border-glass' : '',
-        className ?? '',
-      ].join(' ')}
+      className={['sticky top-0 z-50', bar ? '' : 'bg-nav text-text-inverse'].join(' ')}
+      style={bar ?? undefined}
     >
-      <div className="flex items-center justify-between px-6 py-4">
-        <Link
-          to={homeHref()}
-          className="flex items-center gap-2 font-display text-lg font-semibold text-ink-mk"
-          aria-label={`${tenantName} home`}
-        >
-          {tenant?.logoUrl && <img src={tenant.logoUrl} alt="" className="h-8 w-auto max-w-[120px] object-contain" />}
-          {tenantName}
-        </Link>
-        <nav className="hidden items-center gap-6 sm:flex" aria-label="Primary">
-          {LINKS.map((link) => (
-            <Link
-              key={link.to}
-              to={link.to}
-              className={pathname === link.to ? 'text-sm font-semibold text-text' : 'text-sm text-text-muted hover:text-text'}
-            >
-              {link.label}
-            </Link>
-          ))}
-        </nav>
+      <div className="mx-auto flex min-h-14 max-w-shell items-center justify-between gap-6 px-4 sm:px-8">
+        <div className="flex min-w-0 items-center gap-6">
+          <Link
+            to={homeHref()}
+            className="flex min-w-0 items-center gap-2 text-base font-medium"
+            aria-label={`${tenantName} home`}
+          >
+            {mark && <img src={mark} alt="" className="h-8 w-auto max-w-[120px] object-contain" />}
+            <span className="truncate">{tenantName}</span>
+          </Link>
+          <nav className="hidden items-center gap-1 text-sm sm:flex" aria-label="Primary">
+            {LINKS.map((link) => (
+              <Fragment key={link.to}>
+                <Link key={link.to} to={link.to} className={linkClass(pathname === link.to)}>
+                  {link.label}
+                </Link>
+                {link.to === '/equipment' && testimonialLink}
+              </Fragment>
+            ))}
+          </nav>
+        </div>
         <div className="hidden items-center gap-2 sm:flex">{authActions}</div>
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? 'Close menu' : 'Open menu'}
           aria-expanded={open}
-          className="flex min-h-11 min-w-11 items-center justify-center rounded-sm text-ink-mk sm:hidden"
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-sm hover:bg-current/10 sm:hidden"
         >
-          {open ? <CloseIcon className="h-6 w-6" /> : <MenuIcon className="h-6 w-6" />}
+          {open ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
         </button>
       </div>
 
       {open && (
-        <div className="flex flex-col gap-1 border-t border-border-glass px-6 pb-6 pt-2 sm:hidden" aria-label="Mobile">
+        <div
+          className="flex flex-col gap-1 border-t border-current/15 px-4 pb-6 pt-2 sm:hidden"
+          aria-label="Mobile"
+        >
           <nav className="flex flex-col" aria-label="Primary">
             {LINKS.map((link) => (
-              <Link
-                key={link.to}
-                to={link.to}
-                className={[
-                  'block min-h-11 w-full py-3 text-base',
-                  pathname === link.to ? 'font-semibold text-text' : 'text-text-muted',
-                ].join(' ')}
-              >
-                {link.label}
-              </Link>
+              <Fragment key={link.to}>
+                <Link
+                  key={link.to}
+                  to={link.to}
+                  className={`w-full text-base ${linkClass(pathname === link.to)}`}
+                >
+                  {link.label}
+                </Link>
+                {link.to === '/equipment' && testimonialLink}
+              </Fragment>
             ))}
+            {!signedIn && (
+              <Link to="/account/cart" className={`w-full text-base ${linkClass(false)}`}>
+                Cart
+              </Link>
+            )}
           </nav>
-          <div className="mt-2 flex flex-col gap-2 [&_a]:w-full [&_button]:w-full">{authActions}</div>
+          <div className="mt-2 flex flex-col gap-2 [&_a]:w-full [&_button]:w-full">
+            {authActions}
+          </div>
         </div>
       )}
     </header>

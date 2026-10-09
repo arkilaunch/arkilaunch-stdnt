@@ -1,39 +1,33 @@
-// Lives in packages/shared, same convention as document-intelligence-port.ts
-// and weather-port.ts: browser-safe (no Node builtins -- apps/web imports
-// @arkilaunch/shared too), so the port contract and stub adapter can be
-// shared without pulling apps/api's internals in. The real PayMongo HTTP
-// adapter and its HMAC signature verification live in apps/api (they need
-// node:crypto and env-scoped secrets), see apps/api/src/ports/payments.port.ts.
+// Browser-safe: the real PayMongo adapter and its HMAC verification live in apps/api.
 
 export interface CheckoutSession {
   id: string;
   checkoutUrl: string;
 }
 
-// PRD-F2 (PayMongo Payment Interface). The platform stores no card/bank
-// data (AGENTS.md); this interface is what a webhook handler verifies
-// against. `amountPhp` is in PHP (not centavos); the adapter converts to
-// PayMongo's integer-centavo `amount` at the boundary.
-// PayMongo checkout channel codes (all five accepted by a live test-mode
-// POST /v1/checkout_sessions, 2026-09-26). The customer picks one on our
-// page (Figma 168:2161 / 216:2049) and PayMongo's hosted page does the
-// rest -- wallet login, bank login, OTP -- so no credential ever touches us.
-export const CHECKOUT_METHODS = ['gcash', 'paymaya', 'qrph', 'dob', 'card'] as const;
+// No card/bank data is stored. amountPhp is PHP; the adapter converts to centavos at the boundary.
+// Only QR Ph is activated on the account. Re-enable channels by extending this list.
+export const CHECKOUT_METHODS = ['qrph'] as const;
 export type CheckoutMethod = (typeof CHECKOUT_METHODS)[number];
+// Labels for activated channels; inactive entries never render or validate.
+export const CHECKOUT_METHOD_INFO: Record<string, { title: string; description: string }> = {
+  qrph: { title: 'QR Ph', description: 'Scan the QR code with any banking or e-wallet app that supports QR Ph.' },
+  gcash: { title: 'GCash', description: 'Confirm with GCash on the secure payment page.' },
+  paymaya: { title: 'Maya', description: 'Confirm with Maya on the secure payment page.' },
+  dob: { title: 'Online banking', description: 'Pay through your bank on the secure payment page.' },
+  card: { title: 'Credit or debit card', description: 'Enter card details only on the secure payment page.' },
+};
 
 export interface CheckoutOptions {
   label?: string;
+  bookingCode?: string;
   methods?: CheckoutMethod[];
-  // The tenant's PayMongo child account (org_...): the net amount is
-  // routed there with split_payment.transfer_to. Absent = collected on the
-  // parent account (cr-arkilaunch-paymongo-linked-accounts.md).
+  // Net amount routed to the tenant's child account via split_payment.transfer_to; absent = parent account.
   transferTo?: string;
   successUrl: string;
   cancelUrl: string;
 }
 
-// What PayMongo says about a session, asked server-to-server when the
-// customer lands back on the success page.
 export interface CheckoutSessionStatus {
   paid: boolean;
   paymentId?: string;
@@ -43,6 +37,7 @@ export interface CheckoutSessionStatus {
 export interface PaymentsPort {
   createCheckoutSession(amountPhp: number, invoiceId: string, options: CheckoutOptions): Promise<CheckoutSession>;
   getCheckoutSession(sessionId: string): Promise<CheckoutSessionStatus>;
+  expireCheckoutSession(sessionId: string): Promise<void>;
   refund(paymentId: string, amountPhp: number, reason: RefundReason): Promise<{ id: string }>;
 }
 
@@ -57,6 +52,8 @@ export class StubPaymentsAdapter implements PaymentsPort {
   async getCheckoutSession(_sessionId: string): Promise<CheckoutSessionStatus> {
     return { paid: false };
   }
+
+  async expireCheckoutSession(_sessionId: string): Promise<void> {}
 
   async refund(paymentId: string): Promise<{ id: string }> {
     return { id: `stub_ref_${paymentId}` };

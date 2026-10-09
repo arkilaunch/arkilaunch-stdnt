@@ -1,0 +1,132 @@
+import type { CatalogEquipment, CatalogTenant } from '@arkilaunch/shared';
+import { brandVars, headTags, isIndexable, pageTitle, robotsFor, sitemapXml, webManifest, type PageDetail } from '../src/lib/brand.js';
+import { PLATFORM_TITLE, platformHeadTags } from '../src/lib/platform-brand.js';
+
+// Writes the tenant's own head tags into the shared SPA shell; any failure serves the untouched shell.
+
+interface Env {
+  ASSETS: Fetcher;
+  API_BASE_URL: string;
+  PLATFORM_DOMAIN: string;
+}
+
+const TIMEOUT_MS = 1500;
+const CACHE_SECONDS = 300;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Same label rule as the API's slug check; anything else is not a tenant.
+const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function tenantSlug(hostname: string, platformDomain: string): string | null {
+  for (const root of ['localhost', platformDomain]) {
+    if (!hostname.endsWith(`.${root}`)) continue;
+    const label = hostname.slice(0, -root.length - 1);
+    return SLUG.test(label) ? label : null;
+  }
+  return null;
+}
+
+// The cache key carries the slug, so one tenant's branding is never served for another.
+async function catalog<T>(env: Env, ctx: ExecutionContext, slug: string, path: string): Promise<T | null> {
+  const key = new Request(`https://edge-cache.invalid/${slug}${path}`);
+  const cache = caches.default;
+  const hit = await cache.match(key);
+  if (hit) return (await hit.json()) as T;
+  try {
+    const res = await fetch(`${env.API_BASE_URL}${path}`, {
+      headers: { 'X-Tenant-Slug': slug, Accept: 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.text();
+    ctx.waitUntil(
+      cache.put(key, new Response(body, { headers: { 'Cache-Control': `max-age=${CACHE_SECONDS}`, 'Content-Type': 'application/json' } })),
+    );
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+function equipmentDetail(eq: CatalogEquipment, tenant: CatalogTenant): PageDetail {
+  return {
+    title: eq.model,
+    description: `${eq.model} (${eq.equipmentTypeName}) for rent from ${tenant.name}.`,
+    imageUrl: eq.photoUri ?? null,
+  };
+}
+
+async function tenantPage(request: Request, env: Env, ctx: ExecutionContext, slug: string): Promise<Response> {
+  const url = new URL(request.url);
+  const shell = () => env.ASSETS.fetch(new Request(new URL('/', url), request));
+  const tenant = await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant');
+  if (!tenant) return shell();
+
+  const id = /^\/equipment\/([^/]+)\/?$/.exec(url.pathname)?.[1];
+  const eq = id && UUID.test(id) ? await catalog<CatalogEquipment>(env, ctx, slug, `/catalog/equipment/${id}`) : null;
+  const detail = eq ? equipmentDetail(eq, tenant) : null;
+  const style = Object.entries(brandVars(tenant))
+    .map(([k, v]) => `${k}:${v}`)
+    .join(';');
+
+  let rewriter = new HTMLRewriter()
+    .on('title', { element: (e) => void e.setInnerContent(pageTitle(url.pathname, tenant.name, detail?.title) ?? tenant.name) })
+    .on('head', { element: (e) => void e.append(headTags(tenant, url, detail), { html: true }) });
+  if (style) rewriter = rewriter.on('html', { element: (e) => void e.setAttribute('style', style) });
+  // The shell's platform theme color and touch icon come first in the head, so they would win: drop the ones the
+  // tenant replaces (the appended tenant tags are not matched by these selectors).
+  if (tenant.headerColor ?? tenant.primaryColor) rewriter = rewriter.on('meta[name="theme-color"]', { element: (e) => void e.remove() });
+  if (tenant.iconUrl ?? tenant.logoUrl) rewriter = rewriter.on('link[rel="apple-touch-icon"]', { element: (e) => void e.remove() });
+  if (isIndexable(url.pathname)) {
+    rewriter = rewriter.on('meta[name="robots"]', { element: (e) => void e.setAttribute('content', 'index, follow') });
+  }
+  if (tenant.font === 'plex') {
+    rewriter = rewriter.on('link[rel="preload"][href="/fonts/inter-variable-latin.woff2"]', {
+      element: (e) => void e.setAttribute('href', '/fonts/ibm-plex-sans-variable.woff2'),
+    });
+  }
+  return rewriter.transform(await shell());
+}
+
+export default {
+  async fetch(request, env, ctx): Promise<Response> {
+    const url = new URL(request.url);
+    const slug = tenantSlug(url.hostname, env.PLATFORM_DOMAIN);
+    if (!slug) {
+      const assets = await env.ASSETS.fetch(request);
+      if (url.hostname !== env.PLATFORM_DOMAIN || url.pathname !== '/' || !assets.headers.get('Content-Type')?.includes('text/html')) return assets;
+      return new HTMLRewriter()
+        .on('title', { element: (e) => void e.setInnerContent(PLATFORM_TITLE) })
+        .on('head', { element: (e) => void e.append(platformHeadTags(url.origin), { html: true }) })
+        .on('meta[name="robots"]', { element: (e) => void e.setAttribute('content', 'index, follow') })
+        .transform(assets);
+    }
+
+    if (url.pathname === '/robots.txt') {
+      const res = await env.ASSETS.fetch(request);
+      return new Response(robotsFor(await res.text(), url.origin), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    }
+    if (url.pathname === '/sitemap.xml') {
+      // ponytail: first 100 units (the API's page cap); page through if a tenant lists more.
+      const list = await catalog<{ items: { id: string }[] }>(env, ctx, slug, '/catalog/equipment?limit=100');
+      if (!(await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant'))) return env.ASSETS.fetch(request);
+      return new Response(sitemapXml(url.origin, list?.items.map((i) => i.id) ?? []), {
+        headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+      });
+    }
+    // The tenant's installable app: its name and colors on the home screen; the static platform manifest otherwise.
+    if (url.pathname === '/manifest.webmanifest') {
+      const tenant = await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant');
+      if (!tenant) return env.ASSETS.fetch(request);
+      return new Response(JSON.stringify(webManifest(tenant)), {
+        headers: { 'Content-Type': 'application/manifest+json', 'Cache-Control': `max-age=${CACHE_SECONDS}` },
+      });
+    }
+    if (url.pathname === '/favicon.ico') {
+      const tenant = await catalog<CatalogTenant>(env, ctx, slug, '/catalog/tenant');
+      const icon = tenant?.iconUrl ?? tenant?.logoUrl;
+      return icon ? Response.redirect(icon, 302) : env.ASSETS.fetch(request);
+    }
+    if (/\.[a-z0-9]+$/i.test(url.pathname)) return env.ASSETS.fetch(request);
+    return tenantPage(request, env, ctx, slug);
+  },
+} satisfies ExportedHandler<Env>;

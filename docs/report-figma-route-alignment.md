@@ -83,7 +83,7 @@ Structural notes on the file itself:
 | Pending Company Approval | `621:8341` | `/app/companies/pending` |
 | Approved Companies | `621:8533` | `/app/companies/approved` |
 | Manage Company Application | `369:1589` | `/app/companies/$applicationId` |
-| Ticket Management | `613:5692` | `/app/tickets` |
+| Ticket Management | `613:5692` | `/app/tickets`; built (form + tickets; KB sections remain unbacked) |
 | Security Logs | `613:5693` | `/app/security-logs` |
 | Operator Dashboard | `350:1268` | `/field` |
 | Deployment - Operator | `350:1540` | `/field/deployment` |
@@ -121,9 +121,9 @@ information: `731:1724` / `731:1842` (OCR Tool Review / OCR Tool), `663:2533`
 | Figma frame | Node | Route | What is missing |
 |---|---|---|---|
 | Manage Registrations (Company Applications) | `206:2083` | `/account/applications` | The frame is a **list**: Total / Approved / Pending counter tiles, a search field, three filter tabs (All / Pending Approval / Approved), and one card per application with thumbnail, status pill, registration number and a **Manage** action. `account.applications.tsx` renders a single `Surface` from `GET /tenants/me/application` — one application, no counters, no search, no filters, no Manage. ~~**Blocked**: the endpoint is singular; a per-customer list endpoint is needed first.~~ **Closed 2026-09-23.** Nothing was blocked: the screen was reading the wrong entity. `GET /tenants/me/application` is the *tenant onboarding* application and is correctly singular; the companies the frame draws are the `customers` rows already served by `GET /me/companies`. Rebuilt against that, with `/account/companies` absorbed into it — see `cr-arkilaunch-company-applications.md`. Mobile twin `826:2218`. |
-| Help Center | `750:6444` | `/help` | The frame is a complete 2299px-tall Help Center. `help.tsx` is an `EmptyState` reading "Support articles are being written." **Mostly blocked, not content-only** — see below. |
+| Help Center | `750:6444` | `/help`, `/account/help` | built (form + tickets; KB sections remain unbacked) |
 
-The Help Center frame decomposes into six sections, and only two are backed:
+The Help Center frame has backed direct channels and support tickets. Knowledge-base sections remain unbacked:
 
 | Section | Node | Backed? |
 |---|---|---|
@@ -131,11 +131,11 @@ The Help Center frame decomposes into six sections, and only two are backed:
 | Contact / legal footer | `750:6577` | Yes — supplied by the `_public` layout already. |
 | Search knowledge base | `750:6452` | No knowledge base exists. |
 | Category cards (Fleet Ops, Billing, Technical Support) | `750:6459`+ | No articles behind them. |
-| Submit Support Ticket form | `750:6484` | No ticket table, no endpoint — the same gap `/app/tickets` names. |
+| Submit Support Ticket form | `750:6484` | built (form + tickets; KB sections remain unbacked) |
 | Top Articles list | `750:6557` | No articles. |
 | Network status | `750:6548` | No status endpoint. |
 
-Shipping the ticket form or the article lists as they are drawn would fabricate
+Shipping the unbacked article lists as they are drawn would fabricate
 content, which `src/routes/unbacked-screens.tsx` explicitly rules out: *"A queue full
 of invented tickets ... is worse than an empty one — it looks finished, it gets
 screenshotted into a report, and nobody can tell which numbers were real."*
@@ -215,7 +215,7 @@ debt on Figma's side, not code to delete.
 Endpoints that turned out to exist and had never been called by anything:
 `GET /bookings/:id`, `GET /invoices/:id`, `GET /notifications` +
 `PATCH /notifications/:id/read`, and `GET /users/me`. The active rental,
-invoice, notification-centre and profile screens are real as a result.
+invoice, notification-center and profile screens are real as a result.
 
 - `/app/security-logs` — no audit endpoint exists. Layout only, placeholder rows.
 - `/app/tickets` — no ticket table, no endpoint. Layout only.
@@ -258,7 +258,7 @@ invoice, notification-centre and profile screens are real as a result.
 - The Figma company-application frame's compliance repository and verification trail
   need that same missing KYC list.
 
-`/app/tickets`, `/app/security-logs` and `/field/settings` render the deliberate
+`/app/security-logs` and `/field/settings` render the deliberate
 `GapScreen` in `src/routes/unbacked-screens.tsx`, which cites this section. New
 endpoint-blocked screens should extend that pattern rather than shipping
 layout-only routes.

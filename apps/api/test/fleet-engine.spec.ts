@@ -1,15 +1,15 @@
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, vi } from 'vitest';
 import { ConflictException, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import postgres from 'postgres';
-import type { RequestContext } from '@arkilaunch/shared';
+import { maintenanceWindows, withTenantTx } from '@arkilaunch/db';
+import { manilaDate, type RequestContext } from '@arkilaunch/shared';
 import { FleetService } from '../src/fleet/fleet.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { PermissionsGuard } from '../src/common/guards/permissions.guard.js';
+import { FleetController } from '../src/fleet/fleet.controller.js';
+import { PERMISSION_KEY } from '../src/common/decorators/require-permission.decorator.js';
 
-// PRD-F4 (Fleet Inventory, Maintenance & Reporting): QAD-T16 (deploy a
-// flagged/busy unit), QAD-T19 (owner denied a data-entry permission),
-// QAD-T30 (injection in free-text), plus the endpoints' happy paths.
 describe('FleetService (PRD-F4)', () => {
   const fleet = new FleetService(new EventsService());
   let adminCtx: RequestContext;
@@ -40,9 +40,63 @@ describe('FleetService (PRD-F4)', () => {
     });
     expect(created.runtimeHours).toBe(0);
 
-    const { items, total } = await fleet.list(adminCtx, { status: 'available', limit: 50, offset: 0 });
+    // By its own serial: the list is ordered by category, so a new unit is
+    // not necessarily on the first page of a busy shared fleet.
+    const { items, total } = await fleet.list(adminCtx, { status: 'available', q: created.serialNo, limit: 50, offset: 0 });
     expect(total).toBeGreaterThan(0);
     expect(items.some((item) => item.id === created.id)).toBe(true);
+  });
+
+  // QA 31: blocked dates are visible and filterable from the list, not only inside one unit's modal.
+  it('filters by maintenance-blocked dates and shows each unit its next block', async () => {
+    const run = Date.now();
+    const blocked = await fleet.create(adminCtx, { equipmentTypeId, model: `Blocked ${run}`, serialNo: `fleet-test-${run}-blocked`, availabilityStatus: 'available' });
+    const free = await fleet.create(adminCtx, { equipmentTypeId, model: `Free ${run}`, serialNo: `fleet-test-${run}-free`, availabilityStatus: 'available' });
+    // Blocked 2040-03-10 to 2040-03-12 (Manila).
+    await withTenantTx(adminCtx, (tx) => tx.insert(maintenanceWindows).values({
+      tenantId: adminCtx.tenantId, equipmentId: blocked.id,
+      startsAt: new Date('2040-03-10T00:00:00+08:00'), endsAt: new Date('2040-03-13T00:00:00+08:00'), notes: 'Engine overhaul',
+    }));
+    const ids = async (q: { blockedFrom?: string; blockedTo?: string }) =>
+      (await fleet.list(adminCtx, { q: `${run}`, limit: 50, offset: 0, ...q })).items.map((i) => i.id);
+
+    expect(await ids({ blockedFrom: '2040-03-12', blockedTo: '2040-03-20' })).toEqual([blocked.id]);
+    expect(await ids({ blockedFrom: '2040-03-13', blockedTo: '2040-03-20' })).toEqual([]); // ends at midnight, exclusive
+    expect(await ids({ blockedFrom: '2040-03-01', blockedTo: '2040-03-09' })).toEqual([]);
+    expect(await ids({ blockedFrom: '2040-01-01' })).toEqual([blocked.id]); // open-ended
+
+    const all = (await fleet.list(adminCtx, { q: `${run}`, limit: 50, offset: 0 })).items;
+    expect(all.find((i) => i.id === blocked.id)?.nextBlock).toMatchObject({ notes: 'Engine overhaul' });
+    expect(all.find((i) => i.id === free.id)?.nextBlock).toBeNull();
+  });
+
+  it('filters by category, search and missing photo, and counts each category', async () => {
+    const run = Date.now();
+    const serialNo = `fleet-test-${run}-classify`;
+    const created = await fleet.create(adminCtx, {
+      equipmentTypeId,
+      model: `Fleet Classify ${run} 100%_Loader`,
+      serialNo,
+      availabilityStatus: 'available',
+      optionGroups: [{ name: 'Arm', values: ['Short', 'Long'] }],
+    });
+    expect(created.optionGroups).toEqual([{ name: 'Arm', values: ['Short', 'Long'] }]);
+
+    // A literal % and _ in the search match themselves, not any text.
+    const found = await fleet.list(adminCtx, { q: `${run} 100%_load`, typeId: equipmentTypeId, limit: 50, offset: 0 });
+    expect(found.items.map((item) => item.id)).toEqual([created.id]);
+    expect(found.items[0]?.equipmentTypeName).toEqual(expect.any(String));
+    expect(await fleet.list(adminCtx, { q: `${run} 100%x`, limit: 50, offset: 0 })).toMatchObject({ total: 0 });
+
+    const noPhoto = await fleet.list(adminCtx, { missing: 'photo', q: serialNo, limit: 50, offset: 0 });
+    expect(noPhoto.total).toBe(1);
+
+    // Counts ignore the category filter itself, so every chip stays visible.
+    const all = await fleet.list(adminCtx, { limit: 1, offset: 0 });
+    const narrowed = await fleet.list(adminCtx, { typeId: equipmentTypeId, limit: 1, offset: 0 });
+    // (Names only: other specs write to the shared fleet between the calls.)
+    expect(narrowed.categories?.map((c) => c.name)).toEqual(all.categories?.map((c) => c.name));
+    expect(all.categories?.find((c) => c.equipmentTypeId === equipmentTypeId)?.count).toBeGreaterThan(0);
   });
 
   it('rejects a duplicate serial number for the same tenant', async () => {
@@ -151,9 +205,6 @@ describe('FleetService (PRD-F4)', () => {
     expect(updated.availabilityStatus).toBe('deployed');
   });
 
-  // QAD-T30: SQL/XSS payload in a free-text field is stored and returned
-  // inert -- parameterized queries and Zod validation neutralize it,
-  // never string-built into SQL, never unescaped HTML.
   it('QAD-T30: an injection payload in maintenance-log notes is stored and returned verbatim, never executed', async () => {
     const created = await fleet.create(adminCtx, {
       equipmentTypeId,
@@ -183,10 +234,73 @@ describe('FleetService (PRD-F4)', () => {
     expect(Array.isArray(report.fleet)).toBe(true);
   });
 
-  // QAD-T19: an owner (report:read only, no fleet:manage) is denied a
-  // data-entry permission -- the RBAC guard, not FleetService, is what
-  // enforces this at the controller boundary (same technique as
-  // role-escalation.spec.ts).
+  it('counts an approved matched pair once in utilization and the equipment report', async () => {
+    const unit = await fleet.create(adminCtx, {
+      equipmentTypeId,
+      model: 'Utilization Test Unit',
+      serialNo: `fleet-util-${Date.now()}`,
+      availabilityStatus: 'available',
+    });
+    const today = manilaDate(new Date());
+    const billed = { running: 8, billable: 8, idle: 0, breakdown: 0, weather: 0, otherDowntime: 0 };
+    const sql = postgres(process.env.DATABASE_URL_DIRECT!, { max: 1 });
+    const [rental] = await sql`select id from rentals where tenant_id = ${adminCtx.tenantId} limit 1`;
+    const logs = await sql`
+      insert into edtr (tenant_id, rental_id, equipment_id, source, report_date, status)
+      values (${adminCtx.tenantId}, ${(rental as { id: string }).id}, ${unit.id}, 'paper_ocr', ${today}, 'reconciled'),
+             (${adminCtx.tenantId}, ${(rental as { id: string }).id}, ${unit.id}, 'digital_entry', ${today}, 'reconciled')
+      returning id`;
+    const [a, b] = logs.map((row) => (row as { id: string }).id);
+    await sql`insert into edtr_line_items (tenant_id, edtr_id, hours_active, hours_idle) values (${adminCtx.tenantId}, ${a!}, 8, 0), (${adminCtx.tenantId}, ${b!}, 8, 0)`;
+    await sql`
+      insert into edtr_reconciliations (tenant_id, edtr_id, counterpart_edtr_id, tolerance, status, adjustments)
+      values (${adminCtx.tenantId}, ${a!}, ${b!}, 0.5, 'approved', ${sql.json({ billed })}),
+             (${adminCtx.tenantId}, ${b!}, ${a!}, 0.5, 'approved', null)`;
+    await sql.end();
+
+    const report = await fleet.utilizationReport(adminCtx, { from: today, to: today });
+    expect(report.fleet.find((row) => row.equipmentId === unit.id)?.utilizationPct).toBe(100);
+    const unitReport = await fleet.report(adminCtx, unit.id);
+    expect(unitReport.totals.hours).toBe(8);
+    expect(unitReport.months.at(-1)?.hours).toBe(8);
+  });
+
+  it("the equipment report ends on Manila's month, not a UTC server's", async () => {
+    const unit = await fleet.create(adminCtx, {
+      equipmentTypeId,
+      model: 'Month Bucket Unit',
+      serialNo: `fleet-month-${Date.now()}`,
+      availabilityStatus: 'available',
+    });
+    const tz = process.env.TZ;
+    process.env.TZ = 'UTC';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 20:00 UTC on Sep 30 is already Oct 1 in Manila.
+    vi.setSystemTime(new Date('2026-09-30T20:00:00Z'));
+    try {
+      const unitReport = await fleet.report(adminCtx, unit.id);
+      expect(unitReport.months.map((m) => m.month)).toEqual(['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10']);
+    } finally {
+      vi.useRealTimers();
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    }
+  });
+
+  it('GET /equipment/:id/report needs report:read, which a timekeeper lacks', async () => {
+    expect(new Reflector().get(PERMISSION_KEY, FleetController.prototype.report)).toEqual(['report:read']);
+    const reflector = new Reflector();
+    reflector.getAllAndOverride = () => ['report:read'];
+    const req = { ctx: { tenantId: adminCtx.tenantId, userId: adminCtx.userId, role: 'timekeeper' } };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => req }),
+      getHandler: () => {},
+      getClass: () => class {},
+    } as unknown as ExecutionContext;
+    expect(await new PermissionsGuard(reflector).canActivate(context)).toBe(false);
+  });
+
+  // The RBAC guard, not FleetService, enforces this at the controller boundary.
   it('QAD-T19: PermissionsGuard denies owner the fleet:manage permission but allows report:read', async () => {
     const reflector = new Reflector();
     const req = { ctx: { tenantId: adminCtx.tenantId, userId: adminCtx.userId, role: 'owner' } };
@@ -259,9 +373,7 @@ describe('FleetService (PRD-F4)', () => {
       });
       await fleet.retire(adminCtx, created.id);
 
-      // The (tenant_id, serial_no) unique index still covers retired rows, so
-      // the create-time check must keep counting them -- otherwise this is a
-      // raw constraint violation instead of a clean 409.
+      // The unique index still covers retired rows, so the create-time check must count them (clean 409).
       await expect(
         fleet.create(adminCtx, {
           equipmentTypeId,
@@ -273,9 +385,7 @@ describe('FleetService (PRD-F4)', () => {
     });
   });
 
-  // Migration 0026 REVOKEd table-wide UPDATE and granted it back per column.
-  // Miss a column there and the owning code path fails with a bare permission
-  // error far from its cause, so the writes are exercised here directly.
+  // 0026 grants UPDATE per column; a missed column fails far from its cause, so exercise the writes here.
   it('0026 grants: every request-path write to equipment still works', async () => {
     const created = await fleet.create(adminCtx, {
       equipmentTypeId,

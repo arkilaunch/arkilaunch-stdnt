@@ -1,39 +1,38 @@
 import { tenantSlug } from './host.js';
+import { decodeAccessToken } from './jwt.js';
+import { clearOwner, currentOwner, markOwner, watchOwner } from './session-owner.js';
+import { clearCart } from './cart-client.js';
 import type {
   CustomerSignup,
   AuthTokens,
   LoginRequest,
   RefreshRequest,
   TwoFaChallenge,
+  ResetPasswordRequest,
   UserActivateRequest,
   Verify2faRequest,
 } from '@arkilaunch/shared';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 
-// Every API call says which tenant host it came from. The API only uses it
-// to pick a tenant for public reads and to scope login/signup; authenticated
-// data is still scoped by the JWT alone (RFC-1).
+// Only picks the tenant for public reads and login/signup; authed data is scoped by the JWT alone.
 function hostHeaders(): Record<string, string> {
   const slug = tenantSlug();
   return slug ? { 'X-Tenant-Slug': slug } : {};
 }
 
 const REFRESH_TOKEN_KEY = 'arkilaunch.refreshToken';
+const TAB_USER_KEY = 'arkilaunch.tabUser';
+const USER_TAB_KEYS = ['arkilaunch.cart', 'setup-modal-seen'];
 
-// RFC-1 §3: "Client keeps [the access token] in memory (not localStorage)."
-// Held as a module-level variable rather than sessionStorage -- it does not
-// survive a reload, which is why bootstrapSession() below exists to
-// silently re-derive it from the (still sessionStorage-held) refresh token.
+// Access token lives in memory only, never storage; bootstrapSession() re-derives it after a reload.
 let accessToken: string | null = null;
 
 export function getAccessToken(): string | null {
   return accessToken;
 }
 
-// Exported for tests only, which previously seeded state via
-// `sessionStorage.setItem('arkilaunch.accessToken', ...)`; that key no
-// longer exists, so tests call this directly instead.
+// Tests only.
 export function setAccessToken(token: string | null): void {
   accessToken = token;
 }
@@ -42,61 +41,104 @@ function getRefreshToken(): string | null {
   return sessionStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
+function tabUser(): string | null {
+  return sessionStorage.getItem(TAB_USER_KEY);
+}
+
+// Moving the browser-wide owner marker to this user signs every other tab out.
 function storeTokens(tokens: AuthTokens): void {
   accessToken = tokens.accessToken;
   sessionStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
+  const userId = decodeAccessToken(tokens.accessToken)?.sub ?? null;
+  if (!userId) return;
+  const previousUser = tabUser();
+  if (previousUser && previousUser !== userId) {
+    clearCart();
+    sessionStorage.removeItem('setup-modal-seen');
+  } else if (!previousUser) {
+    // A visitor's cart survives into their login.
+    sessionStorage.removeItem('setup-modal-seen');
+  }
+  sessionStorage.setItem(TAB_USER_KEY, userId);
+  markOwner(userId);
 }
 
-export function clearTokens(): void {
+function dropTabSession(): void {
   accessToken = null;
   sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+  sessionStorage.removeItem(TAB_USER_KEY);
+  for (const key of USER_TAB_KEYS) sessionStorage.removeItem(key);
 }
 
-// Called once on app boot (main.tsx) before the router renders: a page
-// reload always starts with accessToken === null now, so without this every
-// reload of an authed route would bounce to /login even with a perfectly
-// valid refresh token sitting in sessionStorage.
+// Never clears an owner marker another account now holds.
+export function clearTokens(): void {
+  const me = tabUser();
+  dropTabSession();
+  if (me && currentOwner() === me) clearOwner();
+}
+
+function signedOutElsewhere(): void {
+  dropTabSession();
+  window.location.replace('/login');
+}
+
+export function watchSessionOwner(): void {
+  watchOwner(() => (getRefreshToken() ? tabUser() : null), signedOutElsewhere);
+}
+
 export async function bootstrapSession(): Promise<void> {
   if (!getRefreshToken()) return;
+  // Another account owns the browser now: never refresh this tab's session back.
+  if (!tabUser() || currentOwner() !== tabUser()) {
+    dropTabSession();
+    return;
+  }
   try {
     await ensureFreshToken();
-  } catch {
-    clearTokens();
+  } catch (err) {
+    if (isAuthFailure(err)) clearTokens();
   }
+}
+
+// Only a refused refresh ends the session; a network drop, 5xx or 429 keeps it.
+function isAuthFailure(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status;
+  return status === 400 || status === 401 || (err instanceof Error && err.message === 'no_refresh_token');
 }
 
 function isAuthTokens(response: AuthTokens | TwoFaChallenge): response is AuthTokens {
   return 'accessToken' in response;
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+export function turnstileHeaders(token?: string | null): Record<string, string> {
+  return token ? { 'X-Turnstile-Token': token } : {};
+}
+
+async function postJson<T>(path: string, body: unknown, turnstileToken?: string | null): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...hostHeaders() },
+    headers: { 'Content-Type': 'application/json', ...hostHeaders(), ...turnstileHeaders(turnstileToken) },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const payload = await res.json().catch(() => ({}));
-    throw new Error(payload.error ?? 'request_failed');
+    throw Object.assign(new Error(payload.error ?? 'request_failed'), { status: res.status });
   }
   return res.json() as Promise<T>;
 }
 
-// AuthService.login can return a TwoFaChallenge (no accessToken/refreshToken
-// at all) instead of AuthTokens for a timekeeper with TOTP enrolled. Storing
-// tokens unconditionally here used to write the literal string "undefined"
-// into sessionStorage, which then passed every getAccessToken() presence
-// check downstream -- a silent fake "signed in" state. Only store real
-// tokens; the caller (login.tsx) must branch on the discriminant.
-export async function login(request: LoginRequest): Promise<AuthTokens | TwoFaChallenge> {
-  const response = await postJson<AuthTokens | TwoFaChallenge>('/auth/login', request);
+// A TwoFaChallenge carries no tokens: store only real ones or presence checks see a fake sign-in.
+export async function login(
+  request: LoginRequest,
+  turnstileToken?: string | null,
+): Promise<AuthTokens | TwoFaChallenge> {
+  const response = await postJson<AuthTokens | TwoFaChallenge>('/auth/login', request, turnstileToken);
   if (isAuthTokens(response)) storeTokens(response);
   return response;
 }
 
-// POST /auth/register-customer: storefront self-signup, signed straight in.
-export async function registerCustomer(request: CustomerSignup): Promise<AuthTokens> {
-  const tokens = await postJson<AuthTokens>('/auth/register-customer', request);
+export async function registerCustomer(request: CustomerSignup, turnstileToken?: string | null): Promise<AuthTokens> {
+  const tokens = await postJson<AuthTokens>('/auth/register-customer', request, turnstileToken);
   storeTokens(tokens);
   return tokens;
 }
@@ -113,48 +155,50 @@ export async function verify2fa(request: Verify2faRequest): Promise<AuthTokens> 
   return tokens;
 }
 
-// POST /auth/activate: redeems the activationToken an approval hands out
-// and sets the account's first password. Returns 204 with no body and no
-// tokens, so the caller sends the user to /login afterwards. The endpoint
-// has existed since S19 but had no client at all, which left an approved
-// owner holding a token with no screen to redeem it
-// (audit-api-surface.md #3).
 export async function activateAccount(request: UserActivateRequest): Promise<void> {
   await postJson<void>('/auth/activate', request);
 }
 
-// POST /auth/forgot-password: always answers 200, whether or not the email
-// has an account. There is no email provider; the tenant's admins are told
-// and send the reset link themselves.
-export async function requestPasswordReset(email: string): Promise<void> {
-  await postJson<{ ok: true }>('/auth/forgot-password', { email });
+export async function requestPasswordReset(email: string, turnstileToken?: string | null): Promise<void> {
+  await postJson<{ ok: true }>('/auth/forgot-password', { email }, turnstileToken);
 }
 
-// Single-flight refresh: apps/api/test/refresh-rotation.spec.ts proves a
-// refresh token replayed after rotation revokes the ENTIRE token family, so
-// two concurrent refresh calls with the same stored refresh token would not
-// just fail one of them -- they would destroy the session. Every concurrent
-// 401 must await the same in-flight refresh promise rather than each firing
-// its own POST /auth/refresh. sessionStorage is per-tab, so there is no
-// cross-tab race to additionally guard against here.
+export async function resetPassword(request: ResetPasswordRequest): Promise<void> {
+  await postJson<{ ok: true }>('/auth/reset-password', request);
+}
+
+// A replayed refresh token revokes the whole family, so refresh is single-flight, one per browser (Web Locks),
+// and each rotation is broadcast so a duplicated tab swaps its stale copy.
+// ponytail: without Web Locks this falls back to per-tab single flight.
 let inflightRefresh: Promise<AuthTokens> | null = null;
+const rotations = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('arkilaunch.refresh');
+rotations?.addEventListener('message', (e: MessageEvent<{ from: string; to: string }>) => {
+  if (getRefreshToken() === e.data?.from) sessionStorage.setItem(REFRESH_TOKEN_KEY, e.data.to);
+});
+
+async function rotate(): Promise<AuthTokens> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) throw new Error('no_refresh_token');
+  const tokens = await refresh({ refreshToken });
+  rotations?.postMessage({ from: refreshToken, to: tokens.refreshToken });
+  return tokens;
+}
 
 export function ensureFreshToken(): Promise<AuthTokens> {
   if (inflightRefresh) return inflightRefresh;
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    return Promise.reject(new Error('no_refresh_token'));
-  }
-  inflightRefresh = refresh({ refreshToken }).finally(() => {
+  if (!getRefreshToken()) return Promise.reject(new Error('no_refresh_token'));
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  inflightRefresh = (locks ? locks.request('arkilaunch.refresh', rotate) : rotate()).finally(() => {
     inflightRefresh = null;
   });
   return inflightRefresh;
 }
 
+// replace, not assign: Back must not return to the page that lost its session.
 function redirectToLogin(): void {
   clearTokens();
   const dest = window.location.pathname + window.location.search;
-  window.location.assign(`/login?redirect=${encodeURIComponent(dest)}`);
+  window.location.replace(`/login?redirect=${encodeURIComponent(dest)}`);
 }
 
 export async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -174,7 +218,8 @@ export async function authorizedFetch(path: string, init: RequestInit = {}): Pro
       ...init,
       headers: { ...headers, Authorization: `Bearer ${refreshed.accessToken}` },
     });
-  } catch {
+  } catch (err) {
+    if (!isAuthFailure(err)) throw err;
     redirectToLogin();
     return res;
   }

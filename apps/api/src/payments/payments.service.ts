@@ -1,7 +1,10 @@
 import { ConflictException, ForbiddenException, HttpException, HttpStatus, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne } from 'drizzle-orm';
 import {
+  type Tx,
   auditLogs,
+  couponRedemptions,
+  coupons,
   customers,
   findTenantByInvoiceIdForWebhook,
   findTenantByProviderPaymentIdForWebhook,
@@ -15,44 +18,45 @@ import {
   tenants,
   truckRequests,
   withTenantTx,
+  recomputeCustomerTier,
+  voidEdtrInvoice,
 } from '@arkilaunch/db';
 import {
+  round2HalfUp,
   PaymongoEventEnvelopeSchema,
   type CheckoutRequest,
+  type InvoiceAmountUpdate,
+  type InvoiceVoid,
   type PaymentsPort,
   type RefundRequest,
   type RequestContext,
 } from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
-import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
+import { notifyBookingCustomer, notifyStaff, notifyUser } from '../common/notify-customer.js';
 import { customerOwnsInvoice, ownsCustomer } from '../common/customer-scope.js';
+import { renewLapsedHold } from '../common/booking-hold.js';
+import { countRows } from '../common/count-rows.js';
+import { resolveBookingRef } from '../common/booking-ref.js';
 import { checkoutReturnOrigin } from './return-origin.js';
+import { claimCoupon, previewCoupon } from './coupons.js';
 import { verifyPaymongoSignature } from './signature.js';
 import { PAYMENTS_PORT } from './payments.tokens.js';
 
-// Documented simplification (same category as edtr.service.ts's
-// deposit-ledger note): a booking created via bookings.service.ts has no
-// quotation/rental_contracts chain (that only exists for the quote->rental
-// path, RFC-3), so most bookings have no deposit_required to read. Falls
-// back to a fixed placeholder deposit when no rental_contracts row exists.
 const CHECKOUT_RATE_WINDOW_MS = 60_000;
 const CHECKOUT_RATE_LIMIT = 20;
 
-// A synthetic actor for webhook-originated writes: PayMongo's webhook
-// carries no human user and no JWT, so there is no real users.id to set as
-// an audit_logs actor (that table's actor_id is NOT NULL with an FK to
-// users, correctly -- an append-only audit trail should never accept a
-// fabricated actor). The webhook therefore never writes to audit_logs (see
-// cr-arkilaunch-f2-f8-bookings-payments.md); this ctx exists only to carry
-// the resolved tenant_id into withTenantTx's GUCs, which RLS reads. userId
-// participates in no policy or query here.
-type Tx = Parameters<Parameters<typeof withTenantTx>[1]>[0];
-
+// Webhook ctx only carries the resolved tenant into the RLS GUCs; the webhook never writes audit_logs (no real actor).
 const WEBHOOK_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 
-// metadata.invoice_id is ours, but it is still external input: a non-uuid
-// would make the lookup's uuid cast throw, 500, and PayMongo would retry
-// it forever.
+// Upfront on an accepted quote: the consumable deposit (the admin's % of the
+// rented hours) plus mob/demob. Hours past the deposit accrue to the weekly
+// invoices. A coupon lowers what is paid, never the credited deposit.
+const DEPOSIT_LINE_PREFIX = 'Consumable deposit';
+
+// Weekly and deposit_deduction invoices are ledger-derived and never hand-priced.
+const ADJUSTABLE_INVOICE_TYPES = new Set(['booking', 'deposit', 'truck']);
+
+// External input: a non-uuid would throw in the uuid cast, 500, and PayMongo would retry forever.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface OnlineCheckout {
@@ -70,80 +74,41 @@ export class PaymentsService {
     private readonly events: EventsService,
   ) {}
 
-  // POST /api/v1/bookings/:id/checkout (SDD §4, PRD-F2 US-08). Stores only
-  // provider_ref + status -- never a card/account number.
-  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string) {
+  // Stores only provider_ref + status, never a card/account number.
+  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string, office = false) {
     return withTenantTx(ctx, async (tx) => {
-      const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1);
+      // Locked so two concurrent checkouts serialize and the second reuses the first's issued invoice.
+      const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1).for('update');
       if (!rental) throw new NotFoundException({ error: 'booking_not_found' });
 
       if (ctx.role === 'customer') {
         if (!(await ownsCustomer(tx, ctx, rental.customerId))) throw new NotFoundException({ error: 'booking_not_found' });
       }
+      // A cancel or hold expiry that won the lock first leaves nothing to pay for.
+      if (rental.status === 'cancelled') throw new ConflictException({ error: 'booking_cancelled' });
 
-      // Customer prerequisites CR: a booking can be quoted before its
-      // company is verified, but money moves only once staff have checked
-      // the company's ID and registration.
+      // Money moves only once staff have verified the company.
       const [company] = await tx.select().from(customers).where(eq(customers.id, rental.customerId)).limit(1);
       if (company?.kycStatus !== 'approved') {
         throw new ConflictException({ error: 'company_not_verified', status: company?.kycStatus ?? null });
       }
-      // Callback before payment: staff confirm the booking by phone first.
-      if (!rental.callConfirmedAt) throw new ConflictException({ error: 'call_not_confirmed' });
+      // Callback before payment: staff confirm the booking by phone first (or the customer is at the office).
+      if (!rental.callConfirmedAt && !office) throw new ConflictException({ error: 'call_not_confirmed' });
+      // A request past its hold pays only if its dates are still free.
+      await renewLapsedHold(tx, ctx.tenantId, bookingId);
 
-      // QAD-T31 (resource abuse / cost bomb): a rapid repeated burst of
-      // checkout-session creation is throttled per tenant. Postgres-backed
-      // (no Redis in V1, SDD §3/§7).
+      // Per-tenant throttle on checkout-session bursts (cost bomb); Postgres-backed, no Redis.
       const windowStart = new Date(Date.now() - CHECKOUT_RATE_WINDOW_MS);
-      const recent = await tx
-        .select()
-        .from(payments)
-        .where(and(eq(payments.tenantId, ctx.tenantId), gte(payments.createdAt, windowStart)));
-      if (recent.length >= CHECKOUT_RATE_LIMIT) {
+      const recent = await countRows(tx, payments, and(eq(payments.tenantId, ctx.tenantId), gte(payments.createdAt, windowStart)));
+      if (recent >= CHECKOUT_RATE_LIMIT) {
         throw new HttpException(
           { error: 'rate_limited', retryAfterSeconds: Math.ceil(CHECKOUT_RATE_WINDOW_MS / 1000) },
           HttpStatus.TOO_MANY_REQUESTS,
         );
       }
 
-      // Two shapes of checkout. A booking whose latest quote the customer
-      // accepted pays rent + deposit in one go, on one 'booking' invoice
-      // itemised as two lines; the rent is the stored, engine-priced quote
-      // total, never a client number. A booking with no quote at all keeps
-      // the original deposit-only checkout. A quote that exists but is not
-      // accepted blocks checkout: paying before the price is agreed is how
-      // a customer ends up charged for a number they never saw.
-      const [quotation] = await tx
-        .select()
-        .from(quotations)
-        .where(eq(quotations.rentalId, bookingId))
-        .orderBy(desc(quotations.createdAt))
-        .limit(1);
-      if (quotation && quotation.status !== 'accepted') {
-        throw new ConflictException({ error: 'quote_not_accepted', status: quotation.status });
-      }
-
-      let depositAmount = (await getBillingSettings(tx, ctx.tenantId)).minDepositPhp;
-      if (quotation) {
-        const [contract] = await tx
-          .select()
-          .from(rentalContracts)
-          .where(eq(rentalContracts.quotationId, quotation.id))
-          .orderBy(desc(rentalContracts.createdAt))
-          .limit(1);
-        if (contract) depositAmount = Number(contract.depositRequired);
-        // A deposit already paid on the deposit-only path is already held;
-        // charging it again on the booking invoice would double-take it.
-        const [paidDeposit] = await tx
-          .select()
-          .from(invoices)
-          .where(and(eq(invoices.rentalId, bookingId), eq(invoices.invoiceType, 'deposit'), eq(invoices.status, 'paid')))
-          .limit(1);
-        if (paidDeposit) depositAmount = 0;
-      }
-      const rentAmount = quotation ? Number(quotation.totalPhp ?? 0) : 0;
-      const invoiceType = quotation ? 'booking' : 'deposit';
-      const amount = rentAmount + depositAmount;
+      const { quotation, mobAmount, demobAmount, depositAmount, invoiceType } = await this.bookingCharge(tx, ctx, bookingId);
+      const amount = round2HalfUp(mobAmount + demobAmount + depositAmount);
 
       const [alreadyPaid] = await tx
         .select()
@@ -170,28 +135,32 @@ export class PaymentsService {
           })
           .returning();
         if (invoice && quotation) {
-          const lines = [
-            {
+          const invoiceId = invoice.id;
+          const lines = (
+            [
+              [`${DEPOSIT_LINE_PREFIX} (prepaid hours, quote revision ${quotation.revision})`, depositAmount],
+              ['Mobilization', mobAmount],
+              ['Demobilization', demobAmount],
+            ] as const
+          )
+            .filter(([, value]) => value > 0)
+            .map(([description, value]) => ({
               tenantId: ctx.tenantId,
-              invoiceId: invoice.id,
-              description: `Equipment rental (quote revision ${quotation.revision})`,
-              unitPrice: String(rentAmount),
-              amount: String(rentAmount),
-            },
-            {
-              tenantId: ctx.tenantId,
-              invoiceId: invoice.id,
-              description: 'Refundable security deposit',
-              unitPrice: String(depositAmount),
-              amount: String(depositAmount),
-            },
-          ].filter((line) => Number(line.amount) > 0);
+              invoiceId,
+              description,
+              unitPrice: String(value),
+              amount: String(value),
+            }));
           if (lines.length > 0) await tx.insert(invoiceLineItems).values(lines);
         }
       }
       if (!invoice) throw new Error('invoices insert returned no row');
-      // Charge what the invoice says, not what was recomputed: a reused
-      // issued invoice must never be re-priced underneath the customer.
+      // A coupon is the one thing that re-prices an issued invoice, and only once.
+      if (body.couponCode) {
+        if (!quotation) throw new ConflictException({ error: 'coupon_invalid' });
+        invoice = await this.applyCoupon(tx, ctx, invoice, rental.customerId, body.couponCode);
+      }
+      // Charge the invoice's amount: a reused issued invoice is never re-priced underneath the customer.
       const chargeAmount = Number(invoice.amount);
 
       if (body.cash) return this.issueCash(tx, ctx, invoice.id, chargeAmount);
@@ -199,29 +168,274 @@ export class PaymentsService {
       return this.startOnline(tx, ctx, {
         invoiceId: invoice.id,
         amount: chargeAmount,
-        label: quotation ? 'Equipment rental and deposit' : 'Rental deposit',
+        label: quotation ? 'Equipment deposit and mobilization' : 'Rental deposit',
         method: body.method,
         origin,
       });
     });
   }
 
-  // The one way an online checkout starts, for every invoice kind. A tenant
-  // linked to a PayMongo child account is paid there (split_payment); an
-  // unlinked one is collected on ArkiLaunch's own (parent) account.
-  // TODO(paymongo-child-accounts): once companies can be linked as PayMongo
-  // children, make unlinked tenants cash-only again (throw
-  // online_payment_unavailable) so ArkiLaunch never holds tenant money.
+  // Accepted quote: consumable deposit + mob/demob on one 'booking' invoice. No quote: deposit only.
+  // A quote that exists but isn't accepted blocks checkout (no paying before the price is agreed).
+  private async bookingCharge(tx: Tx, ctx: RequestContext, bookingId: string) {
+    const [quotation] = await tx
+      .select()
+      .from(quotations)
+      .where(eq(quotations.rentalId, bookingId))
+      .orderBy(desc(quotations.createdAt))
+      .limit(1);
+    if (quotation && quotation.status !== 'accepted') {
+      throw new ConflictException({ error: 'quote_not_accepted', status: quotation.status });
+    }
+
+    let depositAmount = (await getBillingSettings(tx, ctx.tenantId)).minDepositPhp;
+    if (quotation) {
+      const [contract] = await tx
+        .select()
+        .from(rentalContracts)
+        .where(eq(rentalContracts.quotationId, quotation.id))
+        .orderBy(desc(rentalContracts.createdAt))
+        .limit(1);
+      if (contract) depositAmount = Number(contract.depositRequired);
+      // A deposit already paid on the deposit-only path is not charged again.
+      const [paidDeposit] = await tx
+        .select()
+        .from(invoices)
+        .where(and(eq(invoices.rentalId, bookingId), eq(invoices.invoiceType, 'deposit'), eq(invoices.status, 'paid')))
+        .limit(1);
+      if (paidDeposit) depositAmount = 0;
+    }
+    const mobAmount = quotation ? Number(quotation.mobilizationPhp ?? 0) : 0;
+    const demobAmount = quotation ? Number(quotation.demobilizationPhp ?? 0) : 0;
+    const invoiceType = quotation ? 'booking' : 'deposit';
+    return { quotation, mobAmount, demobAmount, depositAmount, invoiceType };
+  }
+
+  // Read-only preview; checkout re-checks and claims it.
+  async previewCoupon(ctx: RequestContext, bookingId: string, code: string) {
+    return withTenantTx(ctx, async (tx) => {
+      const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1);
+      if (!rental || (ctx.role === 'customer' && !(await ownsCustomer(tx, ctx, rental.customerId)))) {
+        throw new NotFoundException({ error: 'booking_not_found' });
+      }
+      const { quotation, mobAmount, demobAmount, depositAmount } = await this.bookingCharge(tx, ctx, bookingId);
+      if (!quotation) throw new ConflictException({ error: 'coupon_invalid' });
+      const upfront = round2HalfUp(mobAmount + demobAmount + depositAmount);
+
+      const [applied] = await tx
+        .select({ code: coupons.code, discountPhp: couponRedemptions.discountPhp })
+        .from(couponRedemptions)
+        .innerJoin(coupons, eq(coupons.id, couponRedemptions.couponId))
+        .innerJoin(invoices, eq(invoices.id, couponRedemptions.invoiceId))
+        .where(and(eq(invoices.rentalId, bookingId), eq(invoices.invoiceType, 'booking'), eq(invoices.status, 'issued')))
+        .limit(1);
+      if (applied && applied.code !== code) throw new ConflictException({ error: 'coupon_already_applied' });
+      const discountPhp = applied
+        ? Number(applied.discountPhp)
+        : (await previewCoupon(tx, code, rental.customerId, upfront)).discountPhp;
+      return {
+        code,
+        discountPhp,
+        mobilizationPhp: round2HalfUp(mobAmount + demobAmount),
+        depositPhp: depositAmount,
+        totalPhp: round2HalfUp(upfront - discountPhp),
+      };
+    });
+  }
+
+  // One coupon per invoice (the same code again is a no-op). Re-pricing closes any session opened at the old amount.
+  private async applyCoupon(
+    tx: Tx,
+    ctx: RequestContext,
+    invoice: typeof invoices.$inferSelect,
+    customerId: string,
+    code: string,
+  ) {
+    const [applied] = await tx
+      .select({ code: coupons.code })
+      .from(couponRedemptions)
+      .innerJoin(coupons, eq(coupons.id, couponRedemptions.couponId))
+      .where(eq(couponRedemptions.invoiceId, invoice.id))
+      .limit(1);
+    if (applied) {
+      if (applied.code === code) return invoice;
+      throw new ConflictException({ error: 'coupon_already_applied' });
+    }
+
+    await this.closePendingPayments(tx, invoice.id);
+
+    const { coupon, discountPhp } = await claimCoupon(tx, code, customerId, Number(invoice.amount));
+    // Lines can't go negative, so the discount comes off each line in turn, the deposit (or trip) line first.
+    const lines = await tx.select().from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoice.id));
+    const depositFirst = (d: string) => (d.startsWith(DEPOSIT_LINE_PREFIX) ? 0 : 1);
+    lines.sort((a, b) => depositFirst(a.description) - depositFirst(b.description));
+    let left = discountPhp;
+    for (const line of lines) {
+      const cut = round2HalfUp(Math.min(left, Number(line.amount)));
+      if (cut <= 0) continue;
+      left = round2HalfUp(left - cut);
+      const after = round2HalfUp(Number(line.amount) - cut);
+      await tx
+        .update(invoiceLineItems)
+        .set({
+          unitPrice: String(after),
+          amount: String(after),
+          description: `${line.description}, coupon ${coupon.code} -PHP ${cut.toFixed(2)}`,
+        })
+        .where(eq(invoiceLineItems.id, line.id));
+    }
+    const [repriced] = await tx
+      .update(invoices)
+      .set({ amount: String(round2HalfUp(Number(invoice.amount) - discountPhp)) })
+      .where(eq(invoices.id, invoice.id))
+      .returning();
+    if (!repriced) throw new Error('invoices update returned no row');
+    await tx.insert(couponRedemptions).values({
+      tenantId: ctx.tenantId,
+      couponId: coupon.id,
+      customerId,
+      invoiceId: invoice.id,
+      discountPhp: String(discountPhp),
+    });
+    await this.events.emit(ctx, 'coupon_redeemed', { invoice_id: invoice.id, coupon_id: coupon.id });
+    return repriced;
+  }
+
+  // Nothing may stay payable at the old amount; a session PayMongo already reports paid blocks the re-price.
+  private async closePendingPayments(tx: Tx, invoiceId: string) {
+    const pending = await tx
+      .select()
+      .from(payments)
+      .where(and(eq(payments.invoiceId, invoiceId), eq(payments.status, 'pending')));
+    for (const payment of pending) {
+      if (payment.method === 'cash' || !payment.providerRef) continue;
+      if ((await this.paymentsPort.getCheckoutSession(payment.providerRef)).paid) {
+        throw new ConflictException({ error: 'payment_in_progress' });
+      }
+      // An already-expired session refuses to expire again; either way it can no longer be paid.
+      await this.paymentsPort.expireCheckoutSession(payment.providerRef).catch(() => undefined);
+    }
+    if (pending.length > 0) {
+      await tx
+        .update(payments)
+        .set({ status: 'failed' })
+        .where(and(eq(payments.invoiceId, invoiceId), eq(payments.status, 'pending')));
+    }
+  }
+
+  // The deal changed: void unpaid checkout invoices so nothing is payable at the old figure.
+  async voidUnpaid(tx: Tx, of: { rentalId: string } | { truckRequestId: string }) {
+    const open = await tx
+      .select({ id: invoices.id })
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.status, 'issued'),
+          'rentalId' in of
+            ? and(eq(invoices.rentalId, of.rentalId), inArray(invoices.invoiceType, ['booking', 'deposit']))
+            : eq(invoices.truckRequestId, of.truckRequestId),
+        ),
+      );
+    for (const invoice of open) await this.closePendingPayments(tx, invoice.id);
+    if (open.length) {
+      await tx
+        .update(invoices)
+        .set({ status: 'void' })
+        .where(inArray(invoices.id, open.map((i) => i.id)));
+    }
+  }
+
+  // Lowers, never raises (the customer agreed to the price they saw); rent line first, deposit last.
+  // ponytail: a cut into the deposit line doesn't lower deposit_required, so the ledger still credits the full deposit.
+  async adjustAmount(ctx: RequestContext, invoiceId: string, body: InvoiceAmountUpdate) {
+    return withTenantTx(ctx, async (tx) => {
+      const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
+      if (!invoice) throw new NotFoundException({ error: 'invoice_not_found' });
+      if (invoice.status !== 'issued') throw new ConflictException({ error: 'invoice_not_payable', status: invoice.status });
+      if (!ADJUSTABLE_INVOICE_TYPES.has(invoice.invoiceType)) {
+        throw new ConflictException({ error: 'invoice_not_adjustable', invoiceType: invoice.invoiceType });
+      }
+      const current = Number(invoice.amount);
+      const target = round2HalfUp(body.amountPhp);
+      if (target > current) throw new ConflictException({ error: 'amount_above_invoice', amountPhp: current });
+      if (target === current) return { invoiceId, amountPhp: current };
+
+      await this.closePendingPayments(tx, invoiceId);
+
+      const lines = await tx.select().from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoiceId));
+      const depositLast = (d: string) => (d.startsWith('Consumable deposit') ? 1 : 0);
+      lines.sort((a, b) => depositLast(a.description) - depositLast(b.description));
+      let cut = round2HalfUp(current - target);
+      for (const line of lines) {
+        const take = Math.min(cut, Number(line.amount));
+        if (take <= 0) continue;
+        const after = round2HalfUp(Number(line.amount) - take);
+        await tx
+          .update(invoiceLineItems)
+          .set({
+            amount: String(after),
+            // Checkout lines are quantity 1; keep unit price x quantity = amount.
+            unitPrice: String(round2HalfUp(after / Number(line.quantity || 1))),
+            description: `${line.description}, adjusted by staff -PHP ${take.toFixed(2)}`,
+          })
+          .where(eq(invoiceLineItems.id, line.id));
+        cut = round2HalfUp(cut - take);
+      }
+
+      await tx.update(invoices).set({ amount: String(target) }).where(eq(invoices.id, invoiceId));
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'invoices',
+        entityId: invoiceId,
+        reason: `amount PHP ${current.toFixed(2)} -> PHP ${target.toFixed(2)}: ${body.reason}`,
+      });
+      await this.events.emit(ctx, 'invoice_amount_adjusted', { invoice_id: invoiceId });
+      return { invoiceId, amountPhp: target };
+    });
+  }
+
+  async voidBill(ctx: RequestContext, invoiceId: string, body: InvoiceVoid) {
+    return withTenantTx(ctx, async (tx) => {
+      // An open online checkout for this bill must not be paid after the void.
+      await this.closePendingPayments(tx, invoiceId);
+      const result = await voidEdtrInvoice(tx, { tenantId: ctx.tenantId, invoiceId });
+      if (!result.ok) {
+        if (result.error === 'invoice_not_found') throw new NotFoundException({ error: result.error });
+        throw new ConflictException({ error: result.error });
+      }
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'invoice_voided',
+        entityId: invoiceId,
+        reason: `${body.reason} (${result.released} field-log day(s) back to waiting)`,
+      });
+      return { invoiceId, status: 'void' as const, released: result.released };
+    });
+  }
+
+  // A tenant linked to a PayMongo child account is paid there (split_payment); an unlinked one on the parent account.
+  // TODO(paymongo-child-accounts): make unlinked tenants cash-only once linking exists, so ArkiLaunch never holds tenant money.
   private async startOnline(tx: Tx, ctx: RequestContext, c: OnlineCheckout) {
+    // PayMongo: "Total amount must be between 1.00 and 999,999,999.99".
+    if (c.amount < 1) throw new ConflictException({ error: 'amount_below_minimum', minimumPhp: 1 });
     const [tenant] = await tx
       .select({ paymongoAccountId: tenants.paymongoAccountId })
       .from(tenants)
       .where(eq(tenants.id, ctx.tenantId))
       .limit(1);
 
+    // Expire the earlier session first so one invoice never has two payable sessions.
+    await this.closePendingPayments(tx, c.invoiceId);
+
     const returnTo = checkoutReturnOrigin(c.origin);
+    const bookingRef = await resolveBookingRef(tx, { invoice_id: c.invoiceId });
     const session = await this.paymentsPort.createCheckoutSession(c.amount, c.invoiceId, {
       label: c.label,
+      ...(bookingRef ? { bookingCode: bookingRef.code } : {}),
       ...(c.method ? { methods: [c.method] } : {}),
       ...(tenant?.paymongoAccountId ? { transferTo: tenant.paymongoAccountId } : {}),
       successUrl: `${returnTo}/account/checkout/success?invoice=${c.invoiceId}`,
@@ -245,9 +459,7 @@ export class PaymentsService {
     return { checkoutUrl: session.checkoutUrl, invoiceId: c.invoiceId, paymentId: payment.id };
   }
 
-  // Cash: the invoice stays 'issued' and a pending cash payment marks the
-  // customer's choice. Nothing is settled until staff record the receipt
-  // (recordCash) -- a customer can never mark their own invoice paid.
+  // Cash settles only when staff record the receipt: a customer can never mark their own invoice paid.
   private async issueCash(tx: Tx, ctx: RequestContext, invoiceId: string, amount: number) {
     await tx.insert(payments).values({
       tenantId: ctx.tenantId,
@@ -260,8 +472,6 @@ export class PaymentsService {
     return { checkoutUrl: null, invoiceId, cash: true };
   }
 
-  // What a paid invoice unlocks, whichever way it was paid (PayMongo
-  // webhook or a staff-recorded cash receipt).
   private async settleInvoice(tx: Tx, tenantId: string, invoiceId: string) {
     const [invoice] = await tx
       .update(invoices)
@@ -269,22 +479,45 @@ export class PaymentsService {
       .where(eq(invoices.id, invoiceId))
       .returning();
     if (invoice?.rentalId) {
-      // Only the booking's own invoice confirms it; a weekly invoice is
-      // paid on a rental already under way.
+      // Only the booking's own invoice confirms it.
       if (invoice.invoiceType === 'booking' || invoice.invoiceType === 'deposit') {
-        await tx.update(rentals).set({ status: 'confirmed' }).where(eq(rentals.id, invoice.rentalId));
+        // A cancelled booking stays cancelled; staff refund what came in.
+        await tx
+          .update(rentals)
+          .set({ status: 'confirmed' })
+          .where(and(eq(rentals.id, invoice.rentalId), ne(rentals.status, 'cancelled')));
       }
       await notifyBookingCustomer(tx, tenantId, invoice.rentalId, 'payment_received', { invoice_id: invoiceId });
+      const [rental] = await tx.select({ customerId: rentals.customerId }).from(rentals).where(eq(rentals.id, invoice.rentalId)).limit(1);
+      if (rental) await recomputeCustomerTier(tx, tenantId, rental.customerId);
     }
     if (invoice?.truckRequestId) {
-      await tx.update(truckRequests).set({ status: 'paid' }).where(eq(truckRequests.id, invoice.truckRequestId));
+      const [request] = await tx
+        .update(truckRequests)
+        .set({ status: 'paid' })
+        .where(and(eq(truckRequests.id, invoice.truckRequestId), ne(truckRequests.status, 'cancelled')))
+        .returning({ requestedBy: truckRequests.requestedBy });
+      if (request?.requestedBy) {
+        await notifyUser(tx, tenantId, request.requestedBy, 'payment_received', {
+          truck_request_id: invoice.truckRequestId,
+          invoice_id: invoiceId,
+        });
+      }
     }
   }
 
-  // POST /truck-requests/:id/checkout (the customer's own). Same money rules
-  // as a rental: the amount is the staff-accepted price stored on the row,
-  // never a client number, and an issued invoice is reused, never re-priced.
-  async checkoutTruck(ctx: RequestContext, truckRequestId: string, body: CheckoutRequest = {}, origin?: string) {
+  // Once-per-customer counts against the trip's company, else the requester's approved one.
+  private truckCouponCustomer(
+    request: typeof truckRequests.$inferSelect,
+    companies: (typeof customers.$inferSelect)[],
+  ): string {
+    const id = request.customerId ?? companies.find((c) => c.kycStatus === 'approved')?.id;
+    if (!id) throw new ConflictException({ error: 'coupon_invalid' });
+    return id;
+  }
+
+  // Read-only preview of a coupon on the agreed trip price; checkout re-checks and claims it.
+  async previewTruckCoupon(ctx: RequestContext, truckRequestId: string, code: string) {
     return withTenantTx(ctx, async (tx) => {
       const [request] = await tx
         .select()
@@ -292,21 +525,53 @@ export class PaymentsService {
         .where(and(eq(truckRequests.id, truckRequestId), eq(truckRequests.requestedBy, ctx.userId)))
         .limit(1);
       if (!request) throw new NotFoundException({ error: 'truck_request_not_found' });
-      if (request.status === 'paid') throw new ConflictException({ error: 'already_paid' });
+      if (request.agreedPricePhp === null) throw new ConflictException({ error: 'price_not_agreed', status: request.status });
+      const companies = await tx
+        .select()
+        .from(customers)
+        .where(request.customerId ? eq(customers.id, request.customerId) : eq(customers.userId, request.requestedBy));
+      const customerId = this.truckCouponCustomer(request, companies);
+      const pricePhp = Number(request.agreedPricePhp);
+      const [applied] = await tx
+        .select({ code: coupons.code, discountPhp: couponRedemptions.discountPhp })
+        .from(couponRedemptions)
+        .innerJoin(coupons, eq(coupons.id, couponRedemptions.couponId))
+        .innerJoin(invoices, eq(invoices.id, couponRedemptions.invoiceId))
+        .where(and(eq(invoices.truckRequestId, truckRequestId), eq(invoices.status, 'issued')))
+        .limit(1);
+      if (applied && applied.code !== code) throw new ConflictException({ error: 'coupon_already_applied' });
+      const discountPhp = applied ? Number(applied.discountPhp) : (await previewCoupon(tx, code, customerId, pricePhp)).discountPhp;
+      return { code, discountPhp, mobilizationPhp: 0, depositPhp: 0, totalPhp: round2HalfUp(pricePhp - discountPhp) };
+    });
+  }
+
+  // Same money rules as a rental: the stored staff-accepted price, never a client number.
+  async checkoutTruck(ctx: RequestContext, truckRequestId: string, body: CheckoutRequest = {}, origin?: string, office = false) {
+    return withTenantTx(ctx, async (tx) => {
+      const [request] = await tx
+        .select()
+        .from(truckRequests)
+        .where(and(eq(truckRequests.id, truckRequestId), office ? undefined : eq(truckRequests.requestedBy, ctx.userId)))
+        .limit(1)
+        .for('update');
+      if (!request) throw new NotFoundException({ error: 'truck_request_not_found' });
+      if (request.status === 'paid' || request.status === 'dispatched') throw new ConflictException({ error: 'already_paid' });
       if (request.status !== 'agreed' || request.agreedPricePhp === null) {
         throw new ConflictException({ error: 'price_not_agreed', status: request.status });
       }
-      // Same gates as a booking: a verified company and a confirming call.
-      // A truck request has no customer_id, so the requester's companies
-      // are checked; any one approved is enough.
-      const companies = await tx.select().from(customers).where(eq(customers.userId, request.requestedBy));
+      // Older requests have no company, so any approved company of the requester is enough.
+      const companies = await tx
+        .select()
+        .from(customers)
+        .where(request.customerId ? eq(customers.id, request.customerId) : eq(customers.userId, request.requestedBy));
       if (!companies.some((c) => c.kycStatus === 'approved')) {
         throw new ConflictException({ error: 'company_not_verified', status: companies[0]?.kycStatus ?? null });
       }
-      if (!request.callConfirmedAt) throw new ConflictException({ error: 'call_not_confirmed' });
-      // Never above the locked cap without the customer's OK (approve-price).
-      if (request.capPhp !== null && Number(request.agreedPricePhp) > Number(request.capPhp)) {
-        throw new ConflictException({ error: 'over_cap', capPhp: Number(request.capPhp) });
+      // At the office the customer is present and pays the agreed price in person: that is the call and the accept.
+      if (!request.callConfirmedAt && !office) throw new ConflictException({ error: 'call_not_confirmed' });
+      // The customer accepted exactly this price; a staff change since clears the accept.
+      if (!office && (request.acceptedPricePhp === null || Number(request.acceptedPricePhp) !== Number(request.agreedPricePhp))) {
+        throw new ConflictException({ error: 'price_not_accepted', agreedPricePhp: Number(request.agreedPricePhp) });
       }
 
       let [invoice] = await tx
@@ -335,6 +600,9 @@ export class PaymentsService {
           amount: request.agreedPricePhp,
         });
       }
+      if (body.couponCode) {
+        invoice = await this.applyCoupon(tx, ctx, invoice, this.truckCouponCustomer(request, companies), body.couponCode);
+      }
       const chargeAmount = Number(invoice.amount);
       if (body.cash) return this.issueCash(tx, ctx, invoice.id, chargeAmount);
 
@@ -348,9 +616,6 @@ export class PaymentsService {
     });
   }
 
-  // POST /me/invoices/:id/checkout: the customer pays a weekly invoice
-  // (reconciled hours past the deposit, jobs/src/weekly-billing.ts) by
-  // PayMongo or cash, same as a booking. The amount is the invoice's.
   async checkoutInvoice(ctx: RequestContext, invoiceId: string, body: CheckoutRequest = {}, origin?: string) {
     return withTenantTx(ctx, async (tx) => {
       const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
@@ -368,14 +633,14 @@ export class PaymentsService {
     });
   }
 
-  // POST /invoices/:id/cash-payment (staff). The only way cash becomes
-  // 'paid': a person with the money in hand records it, and is named on
-  // the payment row.
-  async recordCash(ctx: RequestContext, invoiceId: string) {
+  // The only way cash becomes 'paid': a named staff member with the money in hand.
+  async recordCash(ctx: RequestContext, invoiceId: string, receiptNo?: string) {
     return withTenantTx(ctx, async (tx) => {
       const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
       if (!invoice) throw new NotFoundException({ error: 'invoice_not_found' });
       if (invoice.status !== 'issued') throw new ConflictException({ error: 'invoice_not_payable', status: invoice.status });
+      // Cash for a lapsed request whose dates went to someone else would double-book the unit.
+      if (invoice.rentalId) await renewLapsedHold(tx, ctx.tenantId, invoice.rentalId);
       const [pendingCash] = await tx
         .select()
         .from(payments)
@@ -384,7 +649,7 @@ export class PaymentsService {
       if (pendingCash) {
         await tx
           .update(payments)
-          .set({ status: 'paid', recordedByUserId: ctx.userId })
+          .set({ status: 'paid', recordedByUserId: ctx.userId, receiptNo: receiptNo ?? null })
           .where(eq(payments.id, pendingCash.id));
       } else {
         await tx.insert(payments).values({
@@ -394,6 +659,7 @@ export class PaymentsService {
           amount: invoice.amount,
           status: 'paid',
           recordedByUserId: ctx.userId,
+          receiptNo: receiptNo ?? null,
         });
       }
       await this.settleInvoice(tx, ctx.tenantId, invoiceId);
@@ -402,24 +668,50 @@ export class PaymentsService {
     });
   }
 
-  // A PayMongo payment that paid this invoice, from the webhook or the
-  // return check. Replay-safe: an invoice no longer `issued` is left alone,
-  // so the second of two deliveries (or a webhook after the return check)
-  // is a no-op. The amount PayMongo collected must be exactly the invoice's
-  // -- anything else goes to staff, it never settles.
+  // A walk-in paying at the office: issue (or reuse) the payable invoice as cash, then settle it under the staff
+  // member's name. Same money rules as checkout (verified company, agreed price/accepted quote, stored amounts).
+  // ponytail: two transactions; a failure between them leaves an issued cash invoice, exactly what a customer's
+  // "pay cash" choice leaves, so the Payments page or a retry settles it.
+  async markPaidAtOffice(ctx: RequestContext, service: 'rental' | 'truck', id: string, receiptNo?: string) {
+    const issued =
+      service === 'rental'
+        ? await this.checkout(ctx, id, { cash: true }, undefined, true)
+        : await this.checkoutTruck(ctx, id, { cash: true }, undefined, true);
+    const result = await this.recordCash(ctx, issued.invoiceId, receiptNo);
+    await withTenantTx(ctx, (tx) =>
+      tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: service === 'rental' ? 'rentals' : 'truck_requests',
+        entityId: id,
+        reason: `paid at the office; price accepted in person${receiptNo ? `; OR ${receiptNo}` : ''}`,
+      }),
+    );
+    return result;
+  }
+
+  // Replay-safe: an invoice no longer `issued` is left alone. Any amount but the invoice's goes to staff, never settles.
   private async settleOnlinePayment(
     tx: Tx,
     tenantId: string,
     p: { invoiceId: string; sessionId: string; paymentId: string; amountCentavos: number },
   ): Promise<boolean> {
     const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, p.invoiceId)).limit(1);
-    if (!invoice || invoice.status !== 'issued') return false;
+    if (!invoice) return false;
     const [payment] = await tx
       .select()
       .from(payments)
       .where(and(eq(payments.invoiceId, p.invoiceId), eq(payments.providerRef, p.sessionId)))
       .limit(1);
     if (!payment) return false;
+    // Paid between a void and PayMongo expiring the session: record the money, unlock nothing, tell staff to refund.
+    if (invoice.status === 'void' && payment.status !== 'paid') {
+      await tx.update(payments).set({ status: 'paid', providerPaymentId: p.paymentId }).where(eq(payments.id, payment.id));
+      await notifyStaff(tx, tenantId, 'payment_on_void_invoice', { invoice_id: p.invoiceId, paid_centavos: p.amountCentavos });
+      return false;
+    }
+    if (invoice.status !== 'issued') return false;
     const expectedCentavos = Math.round(Number(invoice.amount) * 100);
     if (p.amountCentavos !== expectedCentavos) {
       await notifyStaff(tx, tenantId, 'payment_amount_mismatch', {
@@ -438,12 +730,7 @@ export class PaymentsService {
     return true;
   }
 
-  // POST /me/invoices/:id/confirm-payment: the customer is back on the
-  // success page. The server asks PayMongo about the session it created
-  // (never the browser), so a missed or late webhook still confirms the
-  // booking. cr-arkilaunch-paymongo-linked-accounts.md amends PRD-F2 US-08
-  // AC2: the webhook and this server-to-server read are both authorities;
-  // the redirect itself still proves nothing.
+  // The server asks PayMongo about its own session, so a missed webhook still confirms; the redirect proves nothing.
   async confirmPayment(ctx: RequestContext, invoiceId: string) {
     return withTenantTx(ctx, async (tx) => {
       const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
@@ -473,10 +760,7 @@ export class PaymentsService {
     });
   }
 
-  // POST /invoices/:id/refund (staff). Asks PayMongo to refund the
-  // invoice's paid online payment (cash goes back by hand); the
-  // `refunded` row is written when PayMongo's payment.refund.updated says
-  // it succeeded, never here, so the ledger only shows money that moved.
+  // The `refunded` row is written only on PayMongo's payment.refund.updated, so the ledger shows only money that moved.
   async refund(ctx: RequestContext, invoiceId: string, body: RefundRequest) {
     return withTenantTx(ctx, async (tx) => {
       const [payment] = await tx
@@ -503,13 +787,9 @@ export class PaymentsService {
     });
   }
 
-  // POST /api/v1/webhooks/paymongo (@Public, SDD §4, PRD-F2 US-08).
-  // Signature verified BEFORE any parse/DB access (QAD-T28). Returns a
-  // plain result object; the controller always answers 2xx once this
-  // resolves without throwing, so a durable write always precedes the 2xx.
+  // Signature verified BEFORE any parse/DB access; a durable write always precedes the 2xx.
   async handleWebhook(rawBody: string, signatureHeader: string | undefined, webhookSecret: string | undefined) {
-    // Test-mode events are signed in `te` and leave `li` empty; which one
-    // to check follows the key this API runs with.
+    // Test-mode events are signed in `te` and leave `li` empty.
     const live = !(process.env.PAYMONGO_SECRET_KEY ?? '').startsWith('sk_test_');
     if (!webhookSecret || !signatureHeader || !verifyPaymongoSignature(rawBody, signatureHeader, webhookSecret, { live })) {
       throw new ForbiddenException({ error: 'invalid_signature' });
@@ -533,8 +813,7 @@ export class PaymentsService {
     const metadata = resource.attributes.metadata as Record<string, unknown> | undefined;
     const invoiceId = typeof metadata?.invoice_id === 'string' ? metadata.invoice_id : undefined;
 
-    // Nothing to correlate this event to; ack it rather than retry-loop
-    // PayMongo forever on an event we can never resolve.
+    // Unresolvable: ack rather than have PayMongo retry forever.
     if (!invoiceId || !UUID_RE.test(invoiceId)) return { received: true, unresolved: true };
     const lookup = await findTenantByInvoiceIdForWebhook(invoiceId);
     if (!lookup) return { received: true, unresolved: true };
@@ -544,8 +823,6 @@ export class PaymentsService {
     await withTenantTx(ctx, async (tx) => {
       switch (eventType) {
         case 'checkout_session.payment.paid': {
-          // The session is ours (provider_ref); its payments[] carries
-          // PayMongo's pay_ id and the amount actually collected.
           const sessionPayments = resource.attributes.payments as
             | { id: string; attributes: { status: string; amount: number } }[]
             | undefined;
@@ -561,8 +838,7 @@ export class PaymentsService {
           break;
         }
         case 'payment.failed': {
-          // Booking stays pending/unpaid; a failed attempt only ever marks
-          // a still-pending payment, never a paid one.
+          // A failed attempt only ever marks a still-pending payment, never a paid one.
           const [pending] = await tx
             .select()
             .from(payments)
@@ -586,10 +862,7 @@ export class PaymentsService {
     return { received: true };
   }
 
-  // payment.refund.updated: the resource is the refund. A succeeded refund
-  // becomes a NEW payments row (audit immutability, SDD §3/§4), keyed on
-  // the refund's own ref_ id in the globally unique provider_ref -- so a
-  // replayed event inserts nothing.
+  // A succeeded refund is a NEW payments row keyed on its ref_ id (unique provider_ref), so a replay inserts nothing.
   private async handleRefundEvent(resource: { id: string; attributes: Record<string, unknown> }) {
     const { status, amount, payment_id: providerPaymentId } = resource.attributes;
     if (status !== 'succeeded' || typeof providerPaymentId !== 'string' || typeof amount !== 'number') {

@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
+import { round2HalfUp } from './pricing.js';
+import { WEATHER_CODES } from './weather-attestation.js';
+import type { ApprovedDayHours } from './field-logs.js';
 
-// RFC-2 §3: the ocr_payload JSONB contract, written verbatim by the
-// edtr-ocr-worker and validated with Zod before use (AI-02: insecure output
-// handling -- extracted text is data, never a command, and never flows into
-// a query unvalidated).
+// RFC-2: OCR output is data, never a command; validate before any use (AI-02).
 export const OcrFieldSchema = z.object({
   name: z.string(),
   value: z.union([z.number(), z.string()]),
@@ -24,34 +24,36 @@ export const OcrPayloadSchema = z.object({
   fields: z.array(OcrFieldSchema),
   min_field_confidence: z.number().min(0).max(1),
   pages: z.number().int().min(1),
+  // What the sheet said about weather, kept so a reviewer sees every half, not only the flagged ones.
+  weather: z
+    .object({
+      am: z.enum(WEATHER_CODES).nullable(),
+      pm: z.enum(WEATHER_CODES).nullable(),
+      amWindow: z.tuple([z.number(), z.number()]).nullable(),
+      pmWindow: z.tuple([z.number(), z.number()]).nullable(),
+    })
+    .optional(),
+  // The sheet's handwritten WEEK SUMMARY, kept on every day of the sheet for the office's week cross-check.
+  week_summary: z.object({ billable: z.number().nullable(), not_billed: z.number().nullable() }).optional(),
 });
 export type OcrPayload = z.infer<typeof OcrPayloadSchema>;
 
-// RFC-2 §2/§3 state-machine constants. Tenant tolerance is stored per-row
-// on edtr_reconciliations.tolerance (this is only the seed default for a
-// newly created reconciliation row).
+// Seed default only; the live tolerance is per-row on edtr_reconciliations.tolerance.
 export const CONFIDENCE_GATE = 0.9;
+// Weather tick boxes feed review flags and the TOTAL cross-check only, never the billed figure, and
+// Azure scores scanned selection marks lower than text (0.68-0.69 on EQR-2026-0013). Digits keep CONFIDENCE_GATE.
+export const TICK_CONFIDENCE_GATE = 0.6;
 export const DEFAULT_TOLERANCE_HOURS = 0.25;
 
-// The model_id recorded when a human read the paper sheet instead of a
-// model (cr-arkilaunch-pilot-honesty.md §2.1). Not a real model, and
-// deliberately named so no query, report, or reviewer can mistake it for
-// one.
+// Not a real model: marks hours a human read off the paper sheet.
 export const MANUAL_TRANSCRIPTION_MODEL_ID = 'manual_transcription';
 
 export function isManualTranscription(payload: { model_id?: string } | null | undefined): boolean {
   return payload?.model_id === MANUAL_TRANSCRIPTION_MODEL_ID;
 }
 
-// Builds the ocr_payload for a human-transcribed paper EDTR.
-//
-// min_field_confidence is 1, and that is correct rather than a fudge:
-// packages/db/src/reconciliation.ts already returns 1 for digital_entry on
-// the stated grounds that it "has no OCR step". A human transcription has
-// no OCR step either. The 0.90 gate exists to gate MODEL output; where
-// there is no model there is nothing for it to gate, and the double-entry
-// tolerance check against the counterpart log remains the real control --
-// which is the whole point of RFC-2's two-independent-logs design.
+// Confidence 1 is correct: no model means nothing for the 0.90 gate to gate;
+// the double-entry tolerance check remains the control (RFC-2).
 export function buildManualTranscriptionPayload(input: {
   hoursActive: number;
   hoursIdle: number;
@@ -83,67 +85,26 @@ export interface GateResult {
   reason: ReconciliationReason;
 }
 
-// The divergence between two independent logs of the same equipment-day.
-// RFC-2 §2 names five dimensions (start time, end time, active hours, idle
-// hours, breakdown status); only the two hour fields exist on
-// edtr_line_items today, so only those two are compared here.
-//
-// `total` is carried separately rather than derived from `active` + `idle`
-// because it is NOT derivable from them: the per-dimension deltas are
-// absolute values, so they have already discarded the sign that decides
-// whether two errors accumulate or cancel.
+// Only the two hour fields exist on edtr_line_items, so only those are compared.
+// total is separate: abs per-dimension deltas lose the sign that decides cancel vs accumulate.
 export interface HourDeltas {
   active: number;
-  // null when either log did not record idle hours at all. The real Almara
-  // paper form has no idle column (docs/cr-arkilaunch-edtr-real-form.md),
-  // so this is the normal case for a paper/digital pair, not an edge case.
-  //
-  // An absent dimension is skipped, not defaulted to 0. A 0 delta would be
-  // an assertion that the two logs AGREE about idle hours, which is a claim
-  // nobody made -- it would pull a real disagreement elsewhere through the
-  // gate on the strength of evidence that does not exist.
+  // null when either log lacks idle hours; skipped, never 0 -- a 0 would assert agreement.
   idle: number | null;
-  // Null whenever idle is, since the summed total includes idle hours and
-  // so cannot be compared either.
   total: number | null;
 }
 
-// The single worst divergence across every compared dimension. This is both
-// what the gate tests and what gets persisted to
-// edtr_reconciliations.delta_hours, deliberately from one definition: if the
-// stored number were computed separately it could drift from the number that
-// actually decided the gate, and a review screen would then show a delta
-// inside tolerance on a row the gate had rejected.
+// Both the gate test and the persisted delta_hours, so the two can never drift.
 export function worstDelta(deltas: HourDeltas): number {
   return Math.max(...comparableDeltas(deltas));
 }
 
-// The dimensions both logs actually recorded. `active` is always present:
-// it is the hours the deduction is priced on, and a pair with no active
-// reading never reaches the gate (packages/db/src/reconciliation.ts fails
-// that closed as 'unreadable').
 function comparableDeltas(deltas: HourDeltas): number[] {
   return [deltas.active, deltas.idle, deltas.total].filter((d): d is number => d !== null);
 }
 
-// Pure gate evaluation (RFC-2 §3 state machine), no DB/IO -- unit-testable
-// in isolation from the worker's claim/lock loop and the DB orchestration
-// in packages/db/src/reconciliation.ts.
-//
-// Every dimension is compared against the tolerance, and ALL of them must
-// pass. Comparing only a single summed total was a false-accept hole: a log
-// reading 8h active / 0h idle and a counterpart reading 0h active / 8h idle
-// both sum to 8, so the pair auto-accepted at delta 0 even though the
-// deduction it then approved prices hours_active alone (apps/api/src/edtr/
-// edtr.service.ts). An equal-and-opposite misclassification is exactly the
-// error two independent logs exist to catch, so it has to fail the gate.
-//
-// The summed total is still checked alongside the per-dimension deltas, and
-// deliberately so: dropping it would make this gate LOOSER than the one it
-// replaces for same-signed errors, where active +0.2 and idle +0.2 clear a
-// 0.25 tolerance individually but accumulate to 0.4. Checking all three is
-// strictly stricter than either rule alone, so no pair that is blocked
-// today can start passing.
+// RFC-2 gate. Every dimension AND the summed total must pass: summing alone let
+// 8h active/0h idle auto-accept against 0h/8h, yet the deduction prices hours_active.
 export function evaluateGate(
   minConfidenceA: number,
   minConfidenceB: number,
@@ -159,18 +120,22 @@ export function evaluateGate(
   return { matched: true, reason: 'auto_accept' };
 }
 
-// RFC-2 §3 `POST /api/v1/edtr`. File upload / Supabase Storage wiring is a
-// follow-up (no real Storage integration exists yet, same stubbed-pending
-// state as the Payments/Weather/DI ports); paper_ocr accepts an
-// already-uploaded file reference rather than a multipart body for now.
-//
-// A plain object with a superRefine invariant, not z.discriminatedUnion:
-// nestjs-zod's createZodDto cannot extend a discriminated union (its
-// generated class base type is a bare union, not an object type). The
-// source-conditional requirement (rawFileUri for paper_ocr, lineItems for
-// digital_entry) is still enforced, just at validation time instead of the
-// type level; callers narrow on `source` after the boundary has already
-// guaranteed the invariant holds.
+const hours = z.number().finite().min(0).max(24);
+export const EdtrLineItemsInputSchema = z.object({
+  hoursActive: hours,
+  hoursIdle: hours,
+  hoursTotal: hours.nullable().optional(),
+  hoursBreakdown: hours.nullable().optional(),
+  hoursWeather: hours.nullable().optional(),
+  hoursOtherDowntime: hours.nullable().optional(),
+  downtimeNote: z.string().trim().max(500).nullable().optional(),
+  hourMeterStart: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+  hourMeterEnd: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+  weatherAm: z.string().max(4).nullable().optional(),
+  weatherPm: z.string().max(4).nullable().optional(),
+});
+export type EdtrLineItemsInput = z.infer<typeof EdtrLineItemsInputSchema>;
+
 export const EdtrCaptureRequestSchema = z
   .object({
     source: z.enum(['paper_ocr', 'digital_entry']),
@@ -178,12 +143,9 @@ export const EdtrCaptureRequestSchema = z
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     rawFileUri: z.string().min(1).optional(),
-    lineItems: z
-      .object({
-        hoursActive: z.number().finite().min(0),
-        hoursIdle: z.number().finite().min(0),
-      })
-      .optional(),
+    // Client-made per capture: a retry after a lost response returns the first row, never a twin that could pair with it.
+    captureId: z.string().uuid().optional(),
+    lineItems: EdtrLineItemsInputSchema.optional(),
   })
   .superRefine((data, ctx) => {
     if (data.source === 'paper_ocr' && !data.rawFileUri) {
@@ -195,25 +157,15 @@ export const EdtrCaptureRequestSchema = z
   });
 export type EdtrCaptureRequest = z.infer<typeof EdtrCaptureRequestSchema>;
 
-// POST /api/v1/edtr wire contract (backend-unblock plan workstream 4): the
-// client-facing fields, WITHOUT rawFileUri -- for paper_ocr the image now
-// arrives as a multipart `file` field, validated and uploaded to Supabase
-// Storage by the controller (see apps/api/src/storage/upload-validation.ts,
-// RFC-2 §6), which then derives rawFileUri itself as the storage object
-// key. A client can never supply rawFileUri directly. digital_entry has no
-// file and is still posted as plain JSON.
+// No rawFileUri: the controller derives it from the uploaded file; a client can never supply it.
 export const EdtrCaptureFieldsSchema = z
   .object({
     source: z.enum(['paper_ocr', 'digital_entry']),
     rentalId: z.string().uuid(),
     equipmentId: z.string().uuid(),
     reportDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    // A paper capture is multipart, and multipart carries every field as a
-    // string -- so a nested object could not be expressed at all, and a
-    // transcribed paper log (the required shape while OCR is disabled) was
-    // rejected as "expected object, received string" no matter how it was
-    // sent. Accept the JSON encoding multipart can actually carry. A
-    // malformed string fails the object check below rather than throwing.
+    captureId: z.string().uuid().optional(),
+    // Multipart carries every field as a string, so accept the JSON encoding.
     lineItems: z
       .preprocess((value) => {
         if (typeof value !== 'string') return value;
@@ -222,10 +174,7 @@ export const EdtrCaptureFieldsSchema = z
         } catch {
           return value;
         }
-      }, z.object({
-        hoursActive: z.number().finite().min(0),
-        hoursIdle: z.number().finite().min(0),
-      }))
+      }, EdtrLineItemsInputSchema)
       .optional(),
   })
   .superRefine((data, ctx) => {
@@ -236,9 +185,40 @@ export const EdtrCaptureFieldsSchema = z
 export type EdtrCaptureFields = z.infer<typeof EdtrCaptureFieldsSchema>;
 
 const AdjustmentsSchema = z.object({
-  hoursActive: z.number().finite().min(0),
-  hoursIdle: z.number().finite().min(0),
+  hoursActive: hours,
+  hoursIdle: hours,
+  hoursBreakdown: hours.nullable().optional(),
+  hoursWeather: hours.nullable().optional(),
+  hoursOtherDowntime: hours.nullable().optional(),
 });
+
+// PATCH /api/v1/edtr/:id/rotation: how the scan reads upright, saved for every reviewer.
+export const EdtrRotationRequestSchema = z.object({
+  degrees: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+});
+export type EdtrRotationRequest = z.infer<typeof EdtrRotationRequestSchema>;
+
+// GET /api/v1/edtr/:id/bill-preview: the same hours approve() would price; omitted = the stored reading.
+const queryHours = z.coerce.number().pipe(hours).optional();
+export const EdtrBillPreviewQuerySchema = z.object({
+  hoursActive: queryHours,
+  hoursIdle: queryHours,
+  hoursBreakdown: queryHours,
+  hoursWeather: queryHours,
+  hoursOtherDowntime: queryHours,
+});
+export type EdtrBillPreviewQuery = z.infer<typeof EdtrBillPreviewQuerySchema>;
+
+export const EdtrBillPreviewResponseSchema = z.object({
+  billableHours: z.number(),
+  hourlyRate: z.number(),
+  amount: z.number(),
+  balanceBefore: z.number(),
+  deducted: z.number(),
+  accrued: z.number(),
+  balanceAfter: z.number(),
+});
+export type EdtrBillPreviewResponse = z.infer<typeof EdtrBillPreviewResponseSchema>;
 
 export const EdtrApproveRequestSchema = z.object({
   reconciliationId: z.string().uuid(),
@@ -246,7 +226,6 @@ export const EdtrApproveRequestSchema = z.object({
 });
 export type EdtrApproveRequest = z.infer<typeof EdtrApproveRequestSchema>;
 
-// GET /api/v1/edtr?... (S8 review queue, cr-arkilaunch-f9-read-surface.md).
 export const EdtrListQuerySchema = PaginationQuerySchema.extend({
   status: z.enum(['queued', 'extracting', 'extracted', 'review', 'reconciled', 'hard_failed']).optional(),
   rentalId: z.string().uuid().optional(),
@@ -262,16 +241,10 @@ export const EdtrListQuerySchema = PaginationQuerySchema.extend({
 });
 export type EdtrListQuery = z.infer<typeof EdtrListQuerySchema>;
 
-// POST /api/v1/edtr/:id/reject (S8, PRD §5.3 "Review -> Rejected ->
-// Capture"). Deducts nothing; a separate action from approve().
 export const EdtrRejectRequestSchema = z.object({
   reason: z.string().max(2000).optional(),
 });
 export type EdtrRejectRequest = z.infer<typeof EdtrRejectRequestSchema>;
-
-// --- Response schemas (egress allowlists). The one part of the EDTR/KYC/
-// Quotes contract that had no shared schema -- the shapes were inline
-// object literals in edtr.service.ts, hand-typed on the frontend.
 
 export const EdtrCaptureResponseSchema = z.object({
   id: z.string().uuid(),
@@ -300,10 +273,7 @@ export const EdtrReconciliationResponseSchema = z.object({
 });
 export type EdtrReconciliationResponse = z.infer<typeof EdtrReconciliationResponseSchema>;
 
-// Provenance of the hours on this row, so a client can never present a
-// human transcription as a model result. A confidence of 1.00 from
-// `manual_transcription` must render as "Human transcription", NOT as
-// "OCR 100% confident" -- the two mean opposite things to a reviewer.
+// manual_transcription confidence 1.00 must render as a human transcription, never "OCR 100%".
 export const EdtrExtractionResponseSchema = z.object({
   modelId: z.string(),
   analyzedAt: z.string(),
@@ -314,11 +284,282 @@ export const EdtrDetailResponseSchema = z.object({
   id: z.string().uuid(),
   status: z.string(),
   source: z.enum(['paper_ocr', 'digital_entry']),
-  lineItems: z.array(z.object({ hoursActive: z.number(), hoursIdle: z.number().nullable() })),
+  lineItems: z.array(
+    z.object({
+      hoursActive: z.number(),
+      hoursIdle: z.number().nullable(),
+      hoursTotal: z.number().nullable().optional(),
+      hoursBreakdown: z.number().nullable().optional(),
+      hoursWeather: z.number().nullable().optional(),
+      hoursOtherDowntime: z.number().nullable().optional(),
+      downtimeNote: z.string().nullable().optional(),
+      hourMeterStart: z.number().nullable().optional(),
+      hourMeterEnd: z.number().nullable().optional(),
+      reviewFlags: z.array(z.string()).optional(),
+    }),
+  ),
   fields: z.array(EdtrFieldResponseSchema),
   reconciliation: EdtrReconciliationResponseSchema.nullable(),
-  // null for digital_entry (no extraction step at all) and for a paper row
-  // still queued for the worker.
   extraction: EdtrExtractionResponseSchema.nullable(),
+  // null: pre-weather rows, digital entries, or a sheet without the weather block.
+  weather: OcrPayloadSchema.shape.weather.unwrap().nullable(),
+  reportDate: z.string().nullable(),
+  failureReason: z.string().nullable(),
+  scanRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
+
+// Downtime causes are null when not recorded (pre-v3 rows), which is NOT zero.
+export interface DayHours {
+  running: number;
+  idle: number | null;
+  breakdown: number | null;
+  weather: number | null;
+  otherDowntime: number | null;
+  total?: number | null;
+  meterStart?: number | null;
+  meterEnd?: number | null;
+}
+
+export interface ClassifiedHours {
+  running: number;
+  billable: number;
+  nonBillable: number;
+  idle: number;
+  breakdown: number;
+  weather: number;
+  otherDowntime: number;
+  // Only a categorised (v3) row proves idle was the customer's choice, so billable.
+  categorised: boolean;
+  meterDelta: number | null;
+}
+
+// The one billable definition (deduction, meter, portal, dashboards). Pre-v3 idle may
+// include weather/breakdown time, so it is billed only on a categorised row.
+export function classifyHours(h: DayHours): ClassifiedHours {
+  const categorised = h.breakdown !== null && h.weather !== null && h.otherDowntime !== null;
+  const idle = h.idle ?? 0;
+  const breakdown = h.breakdown ?? 0;
+  const weather = h.weather ?? 0;
+  const otherDowntime = h.otherDowntime ?? 0;
+  const meterDelta = h.meterStart != null && h.meterEnd != null ? round2HalfUp(h.meterEnd - h.meterStart) : null;
+  return {
+    running: round2HalfUp(h.running),
+    billable: round2HalfUp(h.running + (categorised ? idle : 0)),
+    nonBillable: round2HalfUp(breakdown + weather + otherDowntime),
+    idle: round2HalfUp(idle),
+    breakdown: round2HalfUp(breakdown),
+    weather: round2HalfUp(weather),
+    otherDowntime: round2HalfUp(otherDowntime),
+    categorised,
+    meterDelta,
+  };
+}
+
+// Each flag routes the day to a human; none blocks capture (the signed paper is the evidence).
+export const REVIEW_FLAGS = {
+  total_mismatch: 'Total hours do not equal running + idle + downtime',
+  weather_downtime_clear_sky: 'Weather downtime recorded on a day ticked clear',
+  meter_running_mismatch: 'Hour meter change does not match running hours',
+  meter_backwards: 'Hour meter end is below its start',
+  meter_gap: 'Hour meter start differs from the last approved reading',
+  other_without_note: 'Other downtime has no remark',
+  outside_rental: 'Date is outside the rental period',
+  // QA 32: the printed sheet's QR is the machine-readable identity of the booking and unit.
+  sheet_qr_mismatch: "Sheet QR code names a different booking or machine than it was filed under",
+  sheet_unidentified: 'No sheet QR code read (blank or damaged sheet): confirm the machine by hand',
+  // Weather evidence for a person (RFC-2); each also sits in the incident log except D1/D2.
+  weather_D1: 'Weather idle claimed, but the site readings show no rain or wind',
+  weather_D2: 'Worked through a weather warning the sheet marks clear or cloudy',
+  used_despite_stop_work_am: 'Ran in the morning while the machine was under a stop-work warning',
+  used_despite_stop_work_pm: 'Ran in the afternoon while the machine was under a stop-work warning',
+  worked_in_reported_weather_am: 'Ran in the morning the sheet itself marks heavy rain, wind or storm',
+  worked_in_reported_weather_pm: 'Ran in the afternoon the sheet itself marks heavy rain, wind or storm',
+  worked_in_reported_weather_day: 'Ran on a day the sheet itself marks heavy rain, wind or storm',
+} as const;
+export type ReviewFlag = keyof typeof REVIEW_FLAGS;
+
+export const TOTAL_TOLERANCE_HOURS = 0.25;
+export const METER_TOLERANCE_HOURS = 0.5;
+
+export function validateDayEntry(
+  h: DayHours & {
+    downtimeNote?: string | null;
+    weatherAm?: string | null;
+    weatherPm?: string | null;
+    previousMeterEnd?: number | null;
+    outsideSpan?: boolean;
+  },
+): ReviewFlag[] {
+  const c = classifyHours(h);
+  const flags: ReviewFlag[] = [];
+  if (h.total != null && c.categorised) {
+    const parts = c.running + c.idle + c.nonBillable;
+    if (Math.abs(h.total - parts) > TOTAL_TOLERANCE_HOURS) flags.push('total_mismatch');
+  }
+  if (c.weather > 0 && h.weatherAm === 'C' && h.weatherPm === 'C') flags.push('weather_downtime_clear_sky');
+  if (c.meterDelta !== null) {
+    if (c.meterDelta < 0) flags.push('meter_backwards');
+    else if (Math.abs(c.meterDelta - c.running) > METER_TOLERANCE_HOURS) flags.push('meter_running_mismatch');
+  }
+  if (h.previousMeterEnd != null && h.meterStart != null && Math.abs(h.meterStart - h.previousMeterEnd) > 0.05) {
+    flags.push('meter_gap');
+  }
+  if (c.otherDowntime > 0 && !h.downtimeNote?.trim()) flags.push('other_without_note');
+  if (h.outsideSpan) flags.push('outside_rental');
+  return flags;
+}
+
+export interface ReportSpan {
+  from: string;
+  to: string | null;
+}
+
+export const EDTR_TIME_ZONE = 'Asia/Manila';
+
+export function manilaDate(at: Date | string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: EDTR_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(at));
+}
+
+// Monday of the Manila week that contains `at`.
+export function manilaWeekStart(at: Date | string): string {
+  const day = new Date(`${manilaDate(at)}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  return day.toISOString().slice(0, 10);
+}
+
+export function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function reportSpan(start: Date | string, end: Date | string | null): ReportSpan {
+  return { from: manilaDate(start), to: end === null ? null : manilaDate(end) };
+}
+
+export function isInReportSpan(reportDate: string, span: ReportSpan): boolean {
+  return reportDate >= span.from && (span.to === null || reportDate <= span.to);
+}
+
+export function spanDates(span: ReportSpan, until: string, max = 400): string[] {
+  const last = span.to !== null && span.to < until ? span.to : until;
+  const out: string[] = [];
+  const d = new Date(`${span.from}T00:00:00Z`);
+  while (out.length < max) {
+    const iso = d.toISOString().slice(0, 10);
+    if (iso > last) break;
+    out.push(iso);
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+export function lineItemsToDayHours(li: EdtrLineItemsInput): DayHours {
+  return {
+    running: li.hoursActive,
+    idle: li.hoursIdle,
+    breakdown: li.hoursBreakdown ?? null,
+    weather: li.hoursWeather ?? null,
+    otherDowntime: li.hoursOtherDowntime ?? null,
+    total: li.hoursTotal ?? null,
+    meterStart: li.hourMeterStart ?? null,
+    meterEnd: li.hourMeterEnd ?? null,
+  };
+}
+
+export const EdtrReviewRequestSchema = z
+  .object({
+    decision: z.enum(['approve', 'needs_correction', 'reject']),
+    reason: z.string().trim().max(2000).optional(),
+    hours: EdtrLineItemsInputSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.decision === 'approve' && !data.hours) {
+      ctx.addIssue({ code: 'custom', message: 'hours are required to approve', path: ['hours'] });
+    }
+    if (data.decision !== 'approve' && !data.reason) {
+      ctx.addIssue({ code: 'custom', message: 'a reason is required', path: ['reason'] });
+    }
+  });
+export type EdtrReviewRequest = z.infer<typeof EdtrReviewRequestSchema>;
+
+export const FIELD_LOG_DAY_STATUSES = ['missing', 'pending', 'needs_correction', 'approved', 'rejected'] as const;
+export type FieldLogDayStatus = (typeof FIELD_LOG_DAY_STATUSES)[number];
+
+// ---- Week view and "Approve & bill" (cr-arkilaunch-edtr-site-hub-approval.md, week addendum) ----
+
+// open: a logged day is still undecided. ready: all decided, hours past the deposit wait to be invoiced.
+// billed: this week's hours are invoiced. covered: nothing to invoice (deposit paid for it, or no hours).
+export const WEEK_BILL_STATES = ['open', 'ready', 'billed', 'covered'] as const;
+export type WeekBillState = (typeof WEEK_BILL_STATES)[number];
+
+export interface EdtrWeekDay {
+  date: string;
+  status: FieldLogDayStatus;
+  edtrId: string | null;
+  // What the timekeeper or the scan wrote; prefills an undecided day.
+  reading: EdtrLineItemsInput | null;
+  // What the office decided (approved days only).
+  hours: ApprovedDayHours | null;
+  flags: string[];
+}
+
+export interface EdtrWeekResponse {
+  rentalId: string;
+  equipmentId: string;
+  weekStart: string;
+  unitName: string;
+  bookingCode: string;
+  days: EdtrWeekDay[];
+  // Approved days only, summed.
+  totals: ApprovedDayHours;
+  // The sheet's handwritten WEEK SUMMARY, if the scan read it.
+  sheetSummary: { billable: number | null; notBilled: number | null } | null;
+  billState: WeekBillState;
+  unbilledPhp: number;
+  lastBilledAt: string | null;
+}
+
+export const EdtrWeekBillRequestSchema = z.object({
+  weekBillableHours: z.number().finite().min(0).max(24 * 7),
+  sheetBillableHours: z.number().finite().min(0).max(24 * 7).nullable(),
+  mismatchNote: z.string().trim().max(500).optional(),
+});
+export type EdtrWeekBillRequest = z.infer<typeof EdtrWeekBillRequestSchema>;
+
+export interface EdtrWeekBillResponse {
+  invoiceId: string | null;
+  amountPhp: number;
+  soaEmailedTo: string | null;
+}
+
+export const WEEK_SUMMARY_TOLERANCE_HOURS = 0.1;
+
+// Why "Approve & bill" may not run, or null. Pure, so the screen and the server agree (RFC-2: a person
+// decides every day, and a week that disagrees with its own sheet needs a written reason).
+export function weekBillBlock(input: {
+  days: Pick<EdtrWeekDay, 'date' | 'status'>[];
+  billableHours: number;
+  request: EdtrWeekBillRequest;
+}): { error: 'week_not_reviewed'; dates: string[] } | { error: 'week_total_changed'; billableHours: number } | { error: 'week_summary_mismatch'; sheet: number; days: number } | null {
+  const undecided = input.days.filter((d) => d.status === 'pending' || d.status === 'needs_correction').map((d) => d.date);
+  if (undecided.length > 0) return { error: 'week_not_reviewed', dates: undecided };
+  if (Math.abs(input.billableHours - input.request.weekBillableHours) > 0.01) {
+    return { error: 'week_total_changed', billableHours: input.billableHours };
+  }
+  const sheet = input.request.sheetBillableHours;
+  if (
+    sheet !== null &&
+    Math.abs(sheet - input.billableHours) > WEEK_SUMMARY_TOLERANCE_HOURS &&
+    (input.request.mismatchNote ?? '').length < 3
+  ) {
+    return { error: 'week_summary_mismatch', sheet, days: input.billableHours };
+  }
+  return null;
+}

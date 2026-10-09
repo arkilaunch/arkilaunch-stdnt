@@ -2,13 +2,19 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="robots" content="noindex, nofollow" />
     <title>ArkiLaunch</title>
+    <!-- QA 30: installable. A tenant host gets its own manifest from the worker at the same path. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#10151B" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <!-- DESIGN.md §2.3 font loading: preload only the two most-used cuts. -->
     <link
       rel="preload"
-      href="/fonts/ibm-plex-sans-variable.woff2"
+      href="/fonts/inter-variable-latin.woff2"
       as="font"
       type="font/woff2"
       crossorigin="anonymous"

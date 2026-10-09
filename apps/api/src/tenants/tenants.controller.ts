@@ -5,46 +5,64 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
   Req,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
 import { Public } from '../common/decorators/public.decorator.js';
+import { TurnstileGuard } from '../common/turnstile.js';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
-import type { RequestContext } from '@arkilaunch/shared';
-import { UuidParamPipe } from '../common/uuid-param.pipe.js';
-import { MAX_UPLOAD_BYTES } from '../storage/upload-validation.js';
+import { MAX_UPLOAD_BYTES } from '@arkilaunch/shared';
 import { TenantsService } from './tenants.service.js';
 import {
   CompanyStatusUpdateDto,
+  TestimonialWriteDto,
   TenantApplicationListQueryDto,
   TenantRegisterDto,
   TenantBrandingUpdateDto,
   PaymongoAccountUpdateDto,
 } from './dto.js';
+import type { CtxRequest, MulterFile } from '../common/request.js';
 
-type CtxRequest = Request & { ctx: RequestContext };
-type MulterFile = { buffer: Buffer; size: number; mimetype: string };
-
-function imageKind(kind: string): 'logo' | 'hero' {
-  if (kind !== 'logo' && kind !== 'hero') throw new BadRequestException({ error: 'invalid_kind' });
+function imageKind(kind: string): 'logo' | 'hero' | 'icon' | 'login' {
+  if (kind !== 'logo' && kind !== 'hero' && kind !== 'icon' && kind !== 'login') throw new BadRequestException({ error: 'invalid_kind' });
   return kind;
 }
 
-// Demonstrates the full golden-path chain (AGENTS.md §4): JWT identity,
-// tenant-context derivation, RBAC, and an RLS-scoped read/write -- on a
-// resource this slice actually owns. JwtAuthGuard / TenantContextGuard /
-// PermissionsGuard are applied globally in app.module.ts; this controller
-// just declares the permission it needs.
 @Controller('tenants')
 export class TenantsController {
   constructor(private readonly tenants: TenantsService) {}
+
+  @Get('me/testimonials')
+  @RequirePermission('tenant:manage')
+  listTestimonials(@Req() req: CtxRequest) {
+    return this.tenants.listTestimonials(req.ctx);
+  }
+
+  @Post('me/testimonials')
+  @RequirePermission('tenant:manage')
+  createTestimonial(@Body() body: TestimonialWriteDto, @Req() req: CtxRequest) {
+    return this.tenants.createTestimonial(req.ctx, body);
+  }
+
+  @Patch('me/testimonials/:id')
+  @RequirePermission('tenant:manage')
+  updateTestimonial(@Param('id', ParseUUIDPipe) id: string, @Body() body: TestimonialWriteDto, @Req() req: CtxRequest) {
+    return this.tenants.updateTestimonial(req.ctx, id, body);
+  }
+
+  @Delete('me/testimonials/:id')
+  @RequirePermission('tenant:manage')
+  deleteTestimonial(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.tenants.deleteTestimonial(req.ctx, id);
+  }
 
   @Get('me')
   @RequirePermission('tenant:manage')
@@ -52,9 +70,7 @@ export class TenantsController {
     return this.tenants.me(req.ctx);
   }
 
-  // Branding (migration 0051). Owner/admin edit their own tenant; the tenant
-  // is always req.ctx.tenantId from the verified JWT (RFC-1), never input.
-  // legal_name/slug are not in the DTO (.strict()), so the name stays locked.
+  // The tenant is always req.ctx.tenantId from the verified JWT, never input; legal_name/slug aren't in the strict DTO.
   @Get('me/branding')
   @RequirePermission('tenant:manage')
   myBranding(@Req() req: CtxRequest) {
@@ -82,74 +98,66 @@ export class TenantsController {
     return this.tenants.setBrandingImage(req.ctx, req.ctx.tenantId, imageKind(kind), null);
   }
 
-  // POST /tenants/register (@Public, unauthenticated write -- tight
-  // throttle since there is no credential to rate-limit by).
+  // Unauthenticated write: tight throttle, since there is no credential to rate-limit by.
   @Post('register')
   @Public()
   @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
+  @UseGuards(TurnstileGuard)
   register(@Body() body: TenantRegisterDto) {
     return this.tenants.register(body);
   }
 
-  // GET /tenants/applications (tenant:approve, platform_admin only). No
-  // GET ':id' route exists on this controller, so this literal path cannot
-  // collide with the ':id/approve' | ':id/reject' POST routes below.
+  // No GET ':id' route exists here, so this literal path can't collide with ':id/approve' | ':id/reject'.
   @Get('applications')
   @RequirePermission('tenant:approve')
   listApplications(@Query() query: TenantApplicationListQueryDto) {
     return this.tenants.listApplications(query);
   }
 
-  // GET /tenants/companies (tenant:approve, platform_admin only): every
-  // rental company past review, with headline counts (migration 0049).
   @Get('companies')
   @RequirePermission('tenant:approve')
   listCompanies() {
     return this.tenants.listCompanies();
   }
 
-  // PATCH /tenants/:id/status (tenant:approve): activate or deactivate a
-  // company. Deactivated = no sign-in, no session renewal, storefront offline.
+  // Deactivated = no sign-in, no session renewal, storefront offline.
   @Patch(':id/status')
   @RequirePermission('tenant:approve')
   setStatus(
-    @Param('id', UuidParamPipe) id: string,
+    @Param('id') id: string,
     @Body() body: CompanyStatusUpdateDto,
     @Req() req: CtxRequest,
   ) {
     return this.tenants.setCompanyStatus(req.ctx, id, body.status);
   }
 
-  // Platform admin edits any rental company's branding from /admin/companies.
   @Get(':id/branding')
   @RequirePermission('tenant:approve')
-  companyBranding(@Param('id', UuidParamPipe) id: string) {
+  companyBranding(@Param('id') id: string) {
     return this.tenants.getBranding(id);
   }
 
   @Patch(':id/branding')
   @RequirePermission('tenant:approve')
   updateCompanyBranding(
-    @Param('id', UuidParamPipe) id: string,
+    @Param('id') id: string,
     @Body() body: TenantBrandingUpdateDto,
     @Req() req: CtxRequest,
   ) {
     return this.tenants.updateBranding(req.ctx, id, body);
   }
 
-  // The company's PayMongo child account (org_...), pasted by the platform
-  // admin after the company completes PayMongo's own onboarding. Until it
-  // is set the company takes cash only.
+  // Until set, online payments are collected on ArkiLaunch's parent account (TODO(paymongo-child-accounts)).
   @Get(':id/paymongo-account')
   @RequirePermission('tenant:approve')
-  companyPaymongoAccount(@Param('id', UuidParamPipe) id: string) {
+  companyPaymongoAccount(@Param('id') id: string) {
     return this.tenants.getPaymongoAccount(id);
   }
 
   @Patch(':id/paymongo-account')
   @RequirePermission('tenant:approve')
   setCompanyPaymongoAccount(
-    @Param('id', UuidParamPipe) id: string,
+    @Param('id') id: string,
     @Body() body: PaymongoAccountUpdateDto,
     @Req() req: CtxRequest,
   ) {
@@ -161,7 +169,7 @@ export class TenantsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES } }))
   uploadCompanyImage(
-    @Param('id', UuidParamPipe) id: string,
+    @Param('id') id: string,
     @Param('kind') kind: string,
     @UploadedFile() file: MulterFile | undefined,
     @Req() req: CtxRequest,
@@ -172,22 +180,16 @@ export class TenantsController {
 
   @Delete(':id/branding/:kind')
   @RequirePermission('tenant:approve')
-  removeCompanyImage(@Param('id', UuidParamPipe) id: string, @Param('kind') kind: string, @Req() req: CtxRequest) {
+  removeCompanyImage(@Param('id') id: string, @Param('kind') kind: string, @Req() req: CtxRequest) {
     return this.tenants.setBrandingImage(req.ctx, id, imageKind(kind), null);
   }
 
-  // GET /tenants/me/application (tenant:manage) -- an owner's own pending
-  // application, if any. No platform-console UI exists yet for the list
-  // above, but this unblocks account.applications.tsx immediately.
   @Get('me/application')
   @RequirePermission('tenant:manage')
   myApplication(@Req() req: CtxRequest) {
     return this.tenants.myApplication(req.ctx);
   }
 
-  // POST /tenants/:id/approve | /reject (tenant:approve, platform_admin
-  // only). No platform-console UI exists yet -- this is an API/curl-level
-  // step for now (see the Change Record for this workstream).
   @Post(':id/approve')
   @RequirePermission('tenant:approve')
   approve(@Param('id') id: string, @Req() req: CtxRequest) {

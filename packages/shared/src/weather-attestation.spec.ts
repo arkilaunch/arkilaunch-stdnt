@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { parseEdtrSheet } from './edtr-sheet.js';
 import type { ExtractedTable } from './document-intelligence-port.js';
-import { compareReportedWeather, readTickGroup, WEATHER_CODES, type TimedReading } from './weather-attestation.js';
+import {
+  compareReportedWeather,
+  readTickGroup,
+  reportedWeatherDay,
+  WEATHER_CODES,
+  workedInReportedWeather,
+  type TimedReading,
+} from './weather-attestation.js';
+import { TICK_CONFIDENCE_GATE } from './edtr.js';
 
 const S = ':selected:';
 const U = ':unselected:';
@@ -16,6 +24,10 @@ describe('readTickGroup', () => {
     expect(readTickGroup(`${S} ${S} ${U} ${U} ${U} ${U}`, WEATHER_CODES, 0.95, 0.9)).toBeNull();
     expect(readTickGroup(ticks(5, 0), WEATHER_CODES, 0.95, 0.9)).toBeNull();
     expect(readTickGroup(ticks(6, 0), WEATHER_CODES, 0.5, 0.9)).toBeNull();
+  });
+  it('reads a slashed box at the mark confidence DI gives it (EQR-2026-0013 scan)', () => {
+    expect(readTickGroup(ticks(6, 4), WEATHER_CODES, 0.65, TICK_CONFIDENCE_GATE)).toBe('W');
+    expect(readTickGroup(ticks(6, 4), WEATHER_CODES, 0.55, TICK_CONFIDENCE_GATE)).toBeNull();
   });
 });
 
@@ -42,6 +54,32 @@ describe('compareReportedWeather', () => {
   });
   it('never flags without readings (unverifiable, not the timekeeper)', () => {
     expect(compareReportedWeather({ ...base, idleHours: 3, idleReason: 'weather', hoursActive: 5 }, [])).toEqual([]);
+  });
+  it('D1 fires on a v3 day: weather hours stand in for the idle reason', () => {
+    const day = reportedWeatherDay({ weatherAm: 'C', weatherPm: 'C', hoursActive: 5, weatherHours: 3 });
+    expect(compareReportedWeather(day, dry).map((f) => f.rule)).toEqual(['D1']);
+  });
+});
+
+describe('workedInReportedWeather', () => {
+  const day = (over: Parameters<typeof reportedWeatherDay>[0]) => workedInReportedWeather(reportedWeatherDay(over));
+  it('flags the half ticked HR, W or T when no weather stop was logged', () => {
+    expect(day({ weatherAm: 'HR', weatherPm: 'C', hoursActive: 8, weatherHours: 0 })).toEqual(['am']);
+    expect(day({ weatherAm: 'O', weatherPm: 'T', hoursActive: 8 })).toEqual(['pm']);
+  });
+  it('a recorded weather stop explains one bad half', () => {
+    expect(day({ weatherAm: 'W', weatherPm: 'C', hoursActive: 4, weatherHours: 4 })).toEqual([]);
+  });
+  it('both halves bad with running hours is the whole day', () => {
+    expect(day({ weatherAm: 'HR', weatherPm: 'T', hoursActive: 3, weatherHours: 5 })).toEqual(['day']);
+  });
+  it('uses the time windows when the sheet has them', () => {
+    expect(day({ weatherAm: 'HR', weatherPm: 'HR', hoursActive: 4, amWindow: null, pmWindow: [780, 1020] })).toEqual(['pm']);
+  });
+  it('LR, clear and no running hours never flag', () => {
+    expect(day({ weatherAm: 'LR', weatherPm: 'LR', hoursActive: 8 })).toEqual([]);
+    expect(day({ weatherAm: 'HR', weatherPm: 'T', hoursActive: 0 })).toEqual([]);
+    expect(day({ weatherAm: 'X', weatherPm: null, hoursActive: 8 })).toEqual([]);
   });
 });
 

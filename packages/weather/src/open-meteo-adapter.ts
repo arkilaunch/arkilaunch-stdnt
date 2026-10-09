@@ -2,55 +2,25 @@ import { z } from 'zod';
 import {
   FORECAST_DAYS,
   type DailyForecast,
+  type HourlyForecast,
+  type HourlyForecastPort,
   type WeatherForecastPort,
   type WeatherObservation,
   type WeatherPort,
 } from '@arkilaunch/shared';
 
-// Native fetch, not a vendor SDK -- same "own the small wire contract
-// directly" precedent as packages/document-intelligence/src/azure-adapter.ts
-// and apps/api/src/ports/payments.port.ts (AGENTS.md §5 restraint ladder).
-//
-// FREE tier only (docs/cr-arkilaunch-open-meteo-free-tier.md): keyless,
-// api.open-meteo.com, non-commercial-use licence, 10,000 calls/day /
-// 5,000/hour / 600/min, data CC BY 4.0. This is a deliberate, recorded
-// divergence from the Locked PRD's "requires the commercial plan" line --
-// see the CR before touching this file.
+// Free tier only (keyless, non-commercial, CC BY 4.0) by recorded CR; read it before changing.
 const BASE_URL = 'https://api.open-meteo.com/v1/forecast';
 const REQUEST_TIMEOUT_MS = 10_000;
-// temperature_unit/wind_speed_unit/precipitation_unit already match
-// WeatherObservation's expected units by default (°C, km/h, mm) -- they are
-// passed explicitly anyway, and current_units is validated below against
-// exactly those literals. This is redundant against today's defaults on
-// purpose (AGENTS.md §5's safety carve-out from the restraint ladder): if
-// Open-Meteo ever changed wind_speed_10m's default unit, a real 60 kph gale
-// arriving as 16.7 (m/s) would compare false against every wind threshold
-// in evaluateSeverity() and render "No weather advisory in effect" --
-// silently, on a construction site. An explicit param plus a literal check
-// on the unit it claims to have honoured is the cheapest defence against
-// that.
-const CURRENT_FIELDS = 'temperature_2m,wind_speed_10m,precipitation,weather_code';
-// Same endpoint, same free-tier terms -- the daily block is what the customer
-// forecast rail reads. Units are pinned and checked for exactly the reason
-// the current block pins them (see the comment above CURRENT_FIELDS).
+// Units are pinned and literal-checked: a silent m/s wind would read as "no advisory" on a site.
+const CURRENT_FIELDS = 'temperature_2m,wind_speed_10m,precipitation,weather_code,wind_gusts_10m,relative_humidity_2m';
 const DAILY_FIELDS =
   'temperature_2m_max,temperature_2m_min,wind_speed_10m_max,precipitation_sum,weather_code';
 
 export type WeatherObservationErrorKind = 'http_error' | 'rate_limited' | 'malformed_response' | 'timeout';
 
-// Thrown when Open-Meteo answers but the answer cannot be trusted -- a
-// non-2xx, a rate limit, a timeout, or a response missing/malforming a
-// field this adapter needs. Distinct from WeatherUnavailableError (shared),
-// which means "we never got to call the service at all". Mirrors
-// DocumentAnalysisError in packages/document-intelligence/src/azure-adapter.ts.
-//
-// The one thing this class exists to prevent: a missing or wrongly-scaled
-// field silently becoming a plausible-looking number via `??`, optional
-// chaining, or a trusted-but-unverified unit. An all-zero WeatherObservation
-// evaluates to severity 'none', which severityMessage() renders as "No
-// weather advisory in effect" -- a fabricated all-clear for a construction
-// site (packages/shared/src/weather-port.spec.ts pins this as a regression
-// test). A field this adapter cannot trust must throw, never coerce.
+// Answered but untrustworthy. A field that can't be trusted must throw, never coerce:
+// an all-zero reading renders as a fabricated all-clear.
 export class WeatherObservationError extends Error {
   readonly kind: WeatherObservationErrorKind;
   readonly status?: number;
@@ -67,6 +37,8 @@ const CurrentUnitsSchema = z.object({
   temperature_2m: z.literal('°C'),
   wind_speed_10m: z.literal('km/h'),
   precipitation: z.literal('mm'),
+  wind_gusts_10m: z.literal('km/h').optional(),
+  relative_humidity_2m: z.literal('%').optional(),
 });
 
 const CurrentSchema = z.object({
@@ -74,6 +46,8 @@ const CurrentSchema = z.object({
   wind_speed_10m: z.number(),
   precipitation: z.number(),
   weather_code: z.number(),
+  wind_gusts_10m: z.number().nullable().optional(),
+  relative_humidity_2m: z.number().nullable().optional(),
 });
 
 const OpenMeteoResponseSchema = z.object({
@@ -88,7 +62,6 @@ const DailyUnitsSchema = z.object({
   precipitation_sum: z.literal('mm'),
 });
 
-// Open-Meteo returns the daily block as parallel arrays, one entry per day.
 const DailySchema = z.object({
   time: z.array(z.string()),
   temperature_2m_max: z.array(z.number()),
@@ -103,11 +76,20 @@ const OpenMeteoForecastResponseSchema = z.object({
   daily: DailySchema,
 });
 
-export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort {
-  // One wire path for both reads: the fetch, the 429, the non-2xx, the JSON
-  // and the schema check are identical whichever block is being asked for,
-  // and duplicating ~45 lines of them is how two subtly different error
-  // behaviours get born.
+const OpenMeteoHourlyResponseSchema = z.object({
+  hourly_units: CurrentUnitsSchema,
+  hourly: z.object({
+    time: z.array(z.string()),
+    temperature_2m: z.array(z.number()),
+    wind_speed_10m: z.array(z.number()),
+    precipitation: z.array(z.number()),
+    weather_code: z.array(z.number()),
+    wind_gusts_10m: z.array(z.number().nullable()).optional(),
+    relative_humidity_2m: z.array(z.number().nullable()).optional(),
+  }),
+});
+
+export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort, HourlyForecastPort {
   private async request<T>(
     latitude: number,
     longitude: number,
@@ -153,9 +135,6 @@ export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort {
       );
     }
 
-    // Fail loud on a malformed/partial body or an unexpected unit rather
-    // than let a missing field fall through as undefined -> NaN, or a
-    // mis-scaled one fall through as a plausible-looking wrong number.
     const parsed = schema.safeParse(body);
     if (!parsed.success) {
       throw new WeatherObservationError('malformed_response', `open-meteo response failed validation: ${parsed.error.message}`);
@@ -170,12 +149,14 @@ export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort {
       { current: CURRENT_FIELDS },
       OpenMeteoResponseSchema,
     );
-    const { temperature_2m, wind_speed_10m, precipitation, weather_code } = data.current;
+    const { temperature_2m, wind_speed_10m, precipitation, weather_code, wind_gusts_10m, relative_humidity_2m } = data.current;
     return {
       tempC: temperature_2m,
       windKph: wind_speed_10m,
       precipMm: precipitation,
       code: weather_code,
+      ...(typeof wind_gusts_10m === 'number' ? { gustKph: wind_gusts_10m } : {}),
+      ...(typeof relative_humidity_2m === 'number' ? { humidityPct: relative_humidity_2m } : {}),
     };
   }
 
@@ -187,11 +168,7 @@ export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort {
       OpenMeteoForecastResponseSchema,
     );
 
-    // Every column has to be present for every day. A short or ragged block
-    // is malformed, never padded and never truncated into a shorter week:
-    // the caller's contract says FORECAST_DAYS entries, and four days under
-    // a five-day heading is the same class of quiet lie as an all-zero
-    // observation reading as "no advisory in effect".
+    // Ragged or short is malformed, never padded or truncated.
     const columns = [
       daily.time,
       daily.temperature_2m_max,
@@ -221,5 +198,40 @@ export class OpenMeteoAdapter implements WeatherPort, WeatherForecastPort {
       precipMm: daily.precipitation_sum[i]!,
       code: daily.weather_code[i]!,
     }));
+  }
+
+  async getHourlyForecast(latitude: number, longitude: number, hours: number): Promise<HourlyForecast[]> {
+    const { hourly } = await this.request(
+      latitude,
+      longitude,
+      { hourly: CURRENT_FIELDS, forecast_hours: String(hours) },
+      OpenMeteoHourlyResponseSchema,
+    );
+    // Same rule as the daily block: ragged or short is malformed, never padded.
+    const columns = [hourly.temperature_2m, hourly.wind_speed_10m, hourly.precipitation, hourly.weather_code];
+    if (columns.some((column) => column.length !== hourly.time.length)) {
+      throw new WeatherObservationError('malformed_response', 'open-meteo hourly block had columns of differing lengths');
+    }
+    if (hourly.time.length < hours) {
+      throw new WeatherObservationError(
+        'malformed_response',
+        `open-meteo returned ${hourly.time.length} forecast hours, expected ${hours}`,
+      );
+    }
+    return hourly.time.slice(0, hours).map((time, i) => {
+      const gust = hourly.wind_gusts_10m?.[i];
+      const humidity = hourly.relative_humidity_2m?.[i];
+      return {
+        time,
+        observed: {
+          tempC: hourly.temperature_2m[i]!,
+          windKph: hourly.wind_speed_10m[i]!,
+          precipMm: hourly.precipitation[i]!,
+          code: hourly.weather_code[i]!,
+          ...(typeof gust === 'number' ? { gustKph: gust } : {}),
+          ...(typeof humidity === 'number' ? { humidityPct: humidity } : {}),
+        },
+      };
+    });
   }
 }

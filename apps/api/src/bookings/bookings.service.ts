@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, ne, or, type SQL } from 'drizzle-orm';
 import {
+  type Tx,
   addresses,
   auditLogs,
   bookingChangeRequests,
@@ -10,6 +11,7 @@ import {
   equipmentAssignments,
   getBillingSettings,
   invoices,
+  customerTier,
   negotiationMessages,
   payments,
   projectSites,
@@ -17,7 +19,6 @@ import {
   rentals,
   resolveDepositLedger,
   withTenantTx,
-  type db,
 } from '@arkilaunch/db';
 import type {
   ChangeRequestCreate,
@@ -25,6 +26,7 @@ import type {
   NegotiationMessageCreate,
   NegotiationMessageResponse,
   BookingCreateRequest,
+  BookingDeliverRequest,
   BookingListQuery,
   BookingCreateResponse,
   BookingDetailResponse,
@@ -34,9 +36,20 @@ import type {
   RequestContext,
   RescheduleSuggestion,
 } from '@arkilaunch/shared';
-import { bookingDays, minBookingHours } from '@arkilaunch/shared';
+import {
+  bookingCodeSearchPrefix,
+  bookingDays,
+  maxBookingHours,
+  minBookingHours,
+  minRentalDays,
+  selectedOptionsError,
+} from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
-import { QuotesService } from '../quotes/quotes.service.js';
+import { PaymentsService } from '../payments/payments.service.js';
+import { QuotesService, inNegotiation } from '../quotes/quotes.service.js';
+import { requireSiteProof } from '../common/site-proof.js';
+import { assignTimekeeperToSite } from '../common/timekeeper-site.js';
+import { holdDeadline, renewLapsedHold } from '../common/booking-hold.js';
 import {
   availabilityBlockers,
   findAvailableAlternatives,
@@ -44,39 +57,34 @@ import {
   overlappingAssignments,
 } from '../common/equipment-availability.js';
 import { ownCustomers, ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
+import { loadFieldLogs } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
+import { buildEdtrSheetContext, isAssignedToSite } from '../common/edtr-sheet-context.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-// Once money has moved the customer asks rather than acts: a paid booking
-// is cancelled or moved only by staff, who also handle the manual refund.
+// Once money has moved, only staff cancel or move a booking (they also handle the refund).
 const CUSTOMER_SELF_CANCEL_STATUSES = ['pending'];
 
-// The refusal `reason` per availability blocker. 'dates_taken' predates the
-// others and stays the name for another booking's hold.
+// 'dates_taken' predates the others and stays the name for another booking's hold.
 const BLOCKER_REASON: Record<AvailabilityBlocker, string> = {
   assignment: 'dates_taken',
+  hold: 'on_hold',
   maintenance: 'maintenance_window',
   closed: 'outside_business_hours',
   holiday: 'holiday',
   operator: 'operator_busy',
 };
 
-// A booking IS a `rentals` row plus one `equipment_assignments` row per
-// item -- no new table (SDD §3's 35-table catalog already models an order
-// as a rental; cr-arkilaunch-f2-f8-bookings-payments.md).
 @Injectable()
 export class BookingsService {
   constructor(
     private readonly events: EventsService,
     private readonly quotes: QuotesService,
+    private readonly payments: PaymentsService,
   ) {}
 
-  // POST /api/v1/bookings (SDD §4, PRD-F8 US-09). Never overbooks: the
-  // candidate equipment rows are locked with FOR UPDATE before the overlap
-  // check, so a concurrent booking attempt on the same unit/window is
-  // serialized rather than racing past this check (QAD-T21).
+  // Never overbooks: candidate equipment rows are locked FOR UPDATE before the overlap check.
   async create(ctx: RequestContext, body: BookingCreateRequest): Promise<BookingCreateResponse> {
     const booked = await withTenantTx(ctx, async (tx) => {
       let customerId = body.customerId;
@@ -84,13 +92,16 @@ export class BookingsService {
         const own = await ownCustomers(tx, ctx);
         if (own.length === 0) throw new ForbiddenException({ error: 'customer_profile_not_found' });
         if (body.customerId && !own.some((row) => row.id === body.customerId)) {
-          await tx.insert(auditLogs).values({
-            tenantId: ctx.tenantId,
-            actorId: ctx.userId,
-            action: 'CREATE',
-            entity: 'booking_customer_scope_denied',
-            entityId: own[0]!.id,
-          });
+          // Own transaction: the throw below rolls back tx, and the denial must stay on the audit trail.
+          await withTenantTx(ctx, (t) =>
+            t.insert(auditLogs).values({
+              tenantId: ctx.tenantId,
+              actorId: ctx.userId,
+              action: 'CREATE',
+              entity: 'booking_customer_scope_denied',
+              entityId: own[0]!.id,
+            }),
+          );
           await this.events.emit(ctx, 'booking_customer_scope_denied', { customer_id: body.customerId });
           throw new ForbiddenException({ error: 'customer_scope_denied' });
         }
@@ -101,20 +112,43 @@ export class BookingsService {
 
       const [site] = await tx.select().from(projectSites).where(eq(projectSites.id, body.projectSiteId)).limit(1);
       if (!site) throw new NotFoundException({ error: 'project_site_not_found' });
-      // A site a customer added belongs to that company; nobody else books
-      // onto it. The yard's own sites (customer_id null) stay open.
+      // A customer's site is booked only by that company; yard sites (customer_id null) stay open.
       if (site.customerId && site.customerId !== customerId) {
         throw new NotFoundException({ error: 'project_site_not_found' });
       }
       await requireVerifiedCompany(tx, customerId);
+      await requireSiteProof(tx, site.id);
 
-      const { dailyHours, minHours } = await getBillingSettings(tx, ctx.tenantId);
+      const { dailyHours, minHours, holdHours } = await getBillingSettings(tx, ctx.tenantId);
+      const minDays = minRentalDays(dailyHours, minHours);
       const bookedHours = body.items.map((item) => {
-        const min = minBookingHours(bookingDays(item.start, item.end), dailyHours, minHours);
+        const days = bookingDays(item.start, item.end);
+        if (days < minDays) {
+          throw new UnprocessableEntityException({ error: 'rental_too_short', equipmentId: item.equipmentId, minDays, minHours, dailyHours });
+        }
+        const min = minBookingHours(days, dailyHours);
+        const max = maxBookingHours(days);
         if (item.hours !== undefined && item.hours < min) {
           throw new UnprocessableEntityException({ error: 'hours_below_minimum', equipmentId: item.equipmentId, minHours: min });
         }
+        if (item.hours !== undefined && item.hours > max) {
+          throw new UnprocessableEntityException({ error: 'hours_above_maximum', equipmentId: item.equipmentId, maxHours: max });
+        }
         return item.hours ?? min;
+      });
+
+      // The overlap check below sees only other bookings, so two lines of one unit here must not overlap.
+      body.items.forEach((item, i) => {
+        const clash = body.items.some(
+          (other, j) =>
+            j < i &&
+            other.equipmentId === item.equipmentId &&
+            new Date(other.start) < new Date(item.end) &&
+            new Date(item.start) < new Date(other.end),
+        );
+        if (clash) {
+          throw new ConflictException({ error: 'equipment_unavailable', reason: 'overlaps_in_cart', equipmentId: item.equipmentId, alternatives: [] });
+        }
       });
 
       const equipmentIds = body.items.map((item) => item.equipmentId);
@@ -129,12 +163,13 @@ export class BookingsService {
         const equipmentRow = equipmentById.get(item.equipmentId);
         if (!equipmentRow) throw new NotFoundException({ error: 'equipment_not_found', equipmentId: item.equipmentId });
 
-        // Both refusals below are 'equipment_unavailable', which left the
-        // customer unable to tell "this machine is off the road" from "those
-        // particular dates are taken" -- the second is fixed by picking other
-        // dates, the first is not. `reason` separates them. A unit that is
-        // merely deployed today is NOT off the road: a later window that
-        // does not overlap its current job is bookable.
+        // The unit is the authority on its option groups, never the client's copy.
+        const optionsError = selectedOptionsError(equipmentRow.optionGroups, item.selectedOptions ?? {});
+        if (optionsError) {
+          throw new UnprocessableEntityException({ error: 'invalid_options', equipmentId: item.equipmentId, detail: optionsError });
+        }
+
+        // `reason` separates "off the road" from "dates taken". A unit deployed today is still bookable for a later window.
         if (equipmentRow.availabilityStatus === 'maintenance' || equipmentRow.retiredAt) {
           const alternatives = await findAvailableAlternatives(tx, equipmentRow.equipmentTypeId, item, equipmentIds);
           throw new ConflictException({
@@ -168,10 +203,13 @@ export class BookingsService {
           customerId,
           projectSiteId: body.projectSiteId,
           siteContact: body.siteContact || null,
+          siteContactMobile: body.siteContactMobile || null,
           siteNotes: body.siteNotes || null,
           status: 'pending',
           startDate,
           endDate,
+          // The dates are held this long unpaid.
+          holdExpiresAt: new Date(Date.now() + holdHours * 3_600_000),
         })
         .returning();
       if (!rental) throw new Error('rentals insert returned no row');
@@ -184,6 +222,7 @@ export class BookingsService {
           start: new Date(item.start),
           end: new Date(item.end),
           bookedHours: String(bookedHours[index]),
+          selectedOptions: item.selectedOptions ?? {},
           status: 'scheduled',
         });
       }
@@ -200,12 +239,10 @@ export class BookingsService {
         await notifyStaff(tx, ctx.tenantId, 'booking_requested', { rental_id: rental.id, item_count: body.items.length });
       }
 
-      return { id: rental.id, status: rental.status, trackerUrl: `/orders/${rental.id}` };
+      return { id: rental.id, code: rental.code, status: rental.status, trackerUrl: `/orders/${rental.id}` };
     });
 
-    // Priced straight off the rate cards once the booking is committed, so
-    // the customer sees a total now. Never fails the booking: without a rate
-    // card or pricing set up, staff quote it by hand as before.
+    // Never fails the booking: without a rate card, staff quote it by hand.
     try {
       await this.quotes.autoQuoteBooking(ctx, booked.id);
     } catch (err) {
@@ -214,98 +251,145 @@ export class BookingsService {
     return booked;
   }
 
-  // GET /api/v1/bookings (PRD-F8 US-09). A `customer` sees only their own
-  // bookings; staff see the whole tenant (RLS is the tenant boundary,
-  // matching reference/* and fleet's read posture).
+  // A `customer` sees only their own bookings; staff see the whole tenant.
   async list(ctx: RequestContext, query: BookingListQuery): Promise<BookingListResponse> {
     return withTenantTx(ctx, async (tx) => {
-      // The role branch was always correct; it was the BOUND that was
-      // missing, on both branches (audit-api-surface.md #5).
-      let where;
+      const conditions: SQL[] = [];
       if (ctx.role === 'customer') {
         const own = await ownCustomers(tx, ctx);
         if (own.length === 0) return { items: [], total: 0 };
-        where = inArray(rentals.customerId, own.map((row) => row.id));
+        conditions.push(inArray(rentals.customerId, own.map((row) => row.id)));
       }
+      // bookingCodeSearchPrefix keeps only letters, digits and hyphens, so no caller-chosen LIKE wildcard; company names are escaped.
+      const codePrefix = query.q ? bookingCodeSearchPrefix(query.q) : null;
+      const byCustomer = query.q
+        ? inArray(
+            rentals.customerId,
+            tx
+              .select({ id: customers.id })
+              .from(customers)
+              .where(ilike(customers.companyName, `%${query.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)),
+          )
+        : null;
+      if (codePrefix && byCustomer) conditions.push(or(like(rentals.code, `${codePrefix}%`), byCustomer)!);
+      else if (byCustomer) conditions.push(byCustomer);
+      // A booking whose dates touch [from, to], Manila days.
+      if (query.from) conditions.push(or(isNull(rentals.endDate), gte(rentals.endDate, new Date(`${query.from}T00:00:00+08:00`)))!);
+      if (query.to) conditions.push(lt(rentals.startDate, new Date(new Date(`${query.to}T00:00:00+08:00`).getTime() + 86_400_000)));
+      const unfiltered = conditions.length ? and(...conditions) : undefined;
+      if (query.status?.length) conditions.push(inArray(rentals.status, query.status));
+      const where = conditions.length ? and(...conditions) : undefined;
       const rows = await tx
         .select()
         .from(rentals)
         .where(where)
-        .orderBy(desc(rentals.createdAt))
+        .orderBy(...(query.sort === 'start' ? [asc(rentals.startDate), desc(rentals.createdAt)] : [desc(rentals.createdAt)]))
         .limit(query.limit)
         .offset(query.offset);
       const total = await countRows(tx, rentals, where);
-      if (rows.length === 0) return { items: [], total };
+      const statusCounts = Object.fromEntries(
+        (
+          await tx
+            .select({ status: rentals.status, n: count() })
+            .from(rentals)
+            .where(unfiltered)
+            .groupBy(rentals.status)
+        ).map((row) => [row.status, row.n]),
+      );
+      if (rows.length === 0) return { items: [], total, statusCounts };
 
-      // Human-readable location (a booking is never shown as a bare
-      // project_site_id UUID) -- same address-via-site join sites.service.ts
-      // uses for GET /sites.
       const siteRows = await tx
         .select({ id: projectSites.id, city: addresses.city, province: addresses.province })
         .from(projectSites)
         .leftJoin(addresses, eq(addresses.id, projectSites.addressId))
         .where(inArray(projectSites.id, rows.map((row) => row.projectSiteId)));
       const siteById = new Map(siteRows.map((site) => [site.id, site]));
+      const customerRows = await tx
+        .select({ id: customers.id, name: customers.companyName })
+        .from(customers)
+        .where(inArray(customers.id, [...new Set(rows.map((row) => row.customerId))]));
+      const customerById = new Map(customerRows.map((c) => [c.id, c.name]));
+      const unitRows = await tx
+        .select({
+          rentalId: equipmentAssignments.rentalId,
+          typeName: equipmentTypes.name,
+          model: equipment.model,
+          start: equipmentAssignments.start,
+          end: equipmentAssignments.end,
+        })
+        .from(equipmentAssignments)
+        .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+        .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+        .where(
+          and(
+            inArray(equipmentAssignments.rentalId, rows.map((row) => row.id)),
+            ne(equipmentAssignments.status, 'cancelled'),
+          ),
+        )
+        .orderBy(asc(equipmentAssignments.start));
+      const unitsByRental = new Map<string, { equipmentName: string; start: Date; end: Date | null }[]>();
+      for (const unit of unitRows) {
+        const list = unitsByRental.get(unit.rentalId) ?? [];
+        list.push({ equipmentName: `${unit.typeName} · ${unit.model}`, start: unit.start, end: unit.end });
+        unitsByRental.set(unit.rentalId, list);
+      }
 
       return {
         items: rows.map((row) => {
           const site = siteById.get(row.projectSiteId);
           return {
             id: row.id,
+            code: row.code,
             status: row.status,
             projectSiteId: row.projectSiteId,
             siteCity: site?.city ?? null,
             siteProvince: site?.province ?? null,
+            customerName: customerById.get(row.customerId) ?? null,
+            startDate: row.startDate,
+            endDate: row.endDate,
+            holdExpiresAt: row.status === 'pending' ? row.holdExpiresAt : null,
+            items: unitsByRental.get(row.id) ?? [],
           };
         }),
         total,
+        statusCounts,
       };
     });
   }
 
-  // GET /bookings/:id/edtr-sheet: the pre-printed header of the EDTR v2
-  // sheet (docs/cr-arkilaunch-edtr-v2-weather.md), one per machine on the
-  // booking. Staff only (edtr:create); the web renders the PDF/PNG.
   async edtrSheet(ctx: RequestContext, id: string): Promise<EdtrSheetContext> {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
+      // A timekeeper sees only the sheets of sites they are assigned to.
+      if (ctx.role === 'timekeeper' && !(await isAssignedToSite(tx, ctx, rental.projectSiteId))) {
+        throw new NotFoundException({ error: 'booking_not_found' });
+      }
+      return buildEdtrSheetContext(tx, ctx.tenantId, rental);
+    });
+  }
+
+  // Never returns card/account data, only provider_ref + status.
+  async get(ctx: RequestContext, id: string): Promise<BookingDetailResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const rental = await this.visibleRental(tx, ctx, id);
+
+      const assignmentRows = await tx
+        .select({
+          assignment: equipmentAssignments,
+          typeName: equipmentTypes.name,
+          model: equipment.model,
+          serialNo: equipment.serialNo,
+        })
+        .from(equipmentAssignments)
+        .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+        .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+        .where(eq(equipmentAssignments.rentalId, id))
+        .orderBy(asc(equipmentAssignments.start));
       const [customer] = await tx
         .select({ companyName: customers.companyName })
         .from(customers)
         .where(eq(customers.id, rental.customerId))
         .limit(1);
-      const [site] = await tx
-        .select({ line: addresses.line1, city: addresses.city, province: addresses.province })
-        .from(projectSites)
-        .leftJoin(addresses, eq(addresses.id, projectSites.addressId))
-        .where(eq(projectSites.id, rental.projectSiteId))
-        .limit(1);
-      const machines = await tx
-        .select({ id: equipment.id, type: equipmentTypes.name, model: equipment.model, serialNo: equipment.serialNo })
-        .from(equipmentAssignments)
-        .innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
-        .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
-        .where(eq(equipmentAssignments.rentalId, id));
-      return {
-        rentalId: id,
-        chargeTo: customer?.companyName ?? '',
-        projectLocation: [site?.line, site?.city, site?.province].filter(Boolean).join(', '),
-        equipment: machines,
-      };
-    });
-  }
-
-  // GET /api/v1/bookings/:id (SDD §4 transaction tracker, US-09 AC1). Never
-  // stores or returns card/account data (US-08 AC1) -- only provider_ref +
-  // status from `payments`.
-  async get(ctx: RequestContext, id: string): Promise<BookingDetailResponse> {
-    return withTenantTx(ctx, async (tx) => {
-      const rental = await this.visibleRental(tx, ctx, id);
-
-      const assignments = await tx
-        .select()
-        .from(equipmentAssignments)
-        .where(eq(equipmentAssignments.rentalId, id));
       const [quotation] = await tx
         .select()
         .from(quotations)
@@ -331,6 +415,15 @@ export class BookingsService {
         .where(eq(projectSites.id, rental.projectSiteId))
         .limit(1);
       const ledger = await resolveDepositLedger(tx, id, ctx.tenantId);
+      const logs = await loadFieldLogs(tx, [id]);
+      const unitName = new Map(logs.units.map((u) => [u.equipmentId, `${u.name} (SN ${u.serialNo})`]));
+      const fieldLogs = {
+        ...logs.totals,
+        pending: ctx.role === 'customer' ? 0 : logs.totals.pending,
+        days: logs.days
+          .filter((d) => d.status === 'approved' && d.hours)
+          .map((d) => ({ date: d.date, equipmentName: unitName.get(d.equipmentId) ?? 'Machine', hours: d.hours! })),
+      };
       const changeRows = await tx
         .select()
         .from(bookingChangeRequests)
@@ -339,17 +432,21 @@ export class BookingsService {
 
       return {
         id: rental.id,
+        code: rental.code,
         status: rental.status,
         projectSiteId: rental.projectSiteId,
         siteCity: site?.city ?? null,
         siteProvince: site?.province ?? null,
         trackerUrl: `/orders/${rental.id}`,
         customerId: rental.customerId,
+        customerName: customer?.companyName ?? null,
         siteContact: rental.siteContact,
+        siteContactMobile: rental.siteContactMobile,
         siteNotes: rental.siteNotes,
         callRequestedAt: rental.callRequestedAt,
         callConfirmedAt: rental.callConfirmedAt,
         createdAt: rental.createdAt,
+        holdExpiresAt: rental.status === 'pending' ? rental.holdExpiresAt : null,
         deposit: {
           required: ledger.depositRequired,
           totalDeducted: ledger.totalDeducted,
@@ -358,16 +455,20 @@ export class BookingsService {
         changeRequests: changeRows.map((row) => ({
           id: row.id,
           kind: row.kind,
+          assignmentId: row.assignmentId,
           requestedEnd: row.requestedEnd,
           reason: row.reason,
           status: row.status,
           createdAt: row.createdAt,
         })),
-        items: assignments.map((assignment) => ({
+        items: assignmentRows.map(({ assignment, typeName, model, serialNo }) => ({
+          id: assignment.id,
           equipmentId: assignment.equipmentId,
+          equipmentName: `${typeName} · ${model} · SN ${serialNo}`,
           start: assignment.start,
           end: assignment.end,
           status: assignment.status,
+          selectedOptions: assignment.selectedOptions,
         })),
         quotation: quotation
           ? {
@@ -375,7 +476,11 @@ export class BookingsService {
               revision: quotation.revision,
               status: quotation.status,
               totalPhp: quotation.totalPhp !== null ? Number(quotation.totalPhp) : null,
+              mobilizationPhp: Number(quotation.mobilizationPhp),
+              demobilizationPhp: Number(quotation.demobilizationPhp),
               createdAt: quotation.createdAt,
+              inNegotiation: await inNegotiation(tx, quotation),
+              capStatus: quotation.capStatus as 'within' | 'pending_owner' | 'owner_approved' | 'owner_rejected' | null,
             }
           : null,
         invoices: invoiceRows.map((invoice) => ({
@@ -391,14 +496,12 @@ export class BookingsService {
           status: payment.status,
           providerRef: payment.providerRef,
         })),
+        fieldLogs,
       };
     });
   }
 
-  // PATCH /api/v1/bookings/:id/cancel ("modify orders", US-09). Frees the
-  // unit's assignments so a later booking can use the same window. A
-  // customer can only do this before paying; after that it is a change
-  // request (requestChange) that staff resolve.
+  // A customer can cancel only before paying; after that it is a change request staff resolve.
   async cancel(ctx: RequestContext, id: string) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
@@ -415,8 +518,26 @@ export class BookingsService {
     });
   }
 
-  // Callback before payment: the customer asks for a call, staff call and
-  // mark it confirmed; checkout refuses until then.
+  // A hold that already lapsed renews only while its dates are still free.
+  async extendHold(ctx: RequestContext, id: string) {
+    return withTenantTx(ctx, async (tx) => {
+      const rental = await this.visibleRental(tx, ctx, id);
+      if (rental.status !== 'pending') throw new ConflictException({ error: 'not_on_hold', status: rental.status });
+      await renewLapsedHold(tx, ctx.tenantId, id);
+      const holdExpiresAt = await holdDeadline(tx, ctx.tenantId);
+      await tx.update(rentals).set({ holdExpiresAt }).where(eq(rentals.id, id));
+      await tx.insert(auditLogs).values({
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        action: 'UPDATE',
+        entity: 'rental_hold',
+        entityId: id,
+      });
+      return { id, holdExpiresAt };
+    });
+  }
+
+  // Checkout refuses until staff have called and confirmed.
   async requestCall(ctx: RequestContext, id: string) {
     return withTenantTx(ctx, async (tx) => {
       await this.visibleRental(tx, ctx, id);
@@ -437,7 +558,6 @@ export class BookingsService {
     });
   }
 
-  // GET /bookings/:id/messages: the negotiation thread, oldest first.
   async listMessages(ctx: RequestContext, id: string): Promise<NegotiationMessageResponse[]> {
     return withTenantTx(ctx, async (tx) => {
       await this.visibleRental(tx, ctx, id);
@@ -458,13 +578,39 @@ export class BookingsService {
     });
   }
 
-  // POST /bookings/:id/messages. authorRole comes from the JWT role, never
-  // from the body.
+  // Tier rules on a customer price offer: none while overdue, one per quote revision.
+  private async requireOfferAllowed(tx: Tx, ctx: RequestContext, rental: { id: string; customerId: string }) {
+    if ((await customerTier(tx, ctx.tenantId, rental.customerId)).hasOverdue) {
+      throw new ConflictException({ error: 'negotiation_unavailable_overdue' });
+    }
+    const [latest] = await tx
+      .select({ createdAt: quotations.createdAt })
+      .from(quotations)
+      .where(eq(quotations.rentalId, rental.id))
+      .orderBy(desc(quotations.createdAt))
+      .limit(1);
+    const [pending] = await tx
+      .select({ id: negotiationMessages.id })
+      .from(negotiationMessages)
+      .where(
+        and(
+          eq(negotiationMessages.rentalId, rental.id),
+          eq(negotiationMessages.authorRole, 'customer'),
+          isNotNull(negotiationMessages.offerPhp),
+          ...(latest ? [gt(negotiationMessages.createdAt, latest.createdAt)] : []),
+        ),
+      )
+      .limit(1);
+    if (pending) throw new ConflictException({ error: 'offer_pending_staff_reply' });
+  }
+
+  // authorRole comes from the JWT role, never from the body.
   async postMessage(ctx: RequestContext, id: string, body: NegotiationMessageCreate) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       if (rental.status === 'cancelled') throw new ConflictException({ error: 'booking_cancelled' });
       const authorRole = ctx.role === 'customer' ? 'customer' : 'staff';
+      if (authorRole === 'customer' && body.offerPhp !== undefined) await this.requireOfferAllowed(tx, ctx, rental);
       const [row] = await tx
         .insert(negotiationMessages)
         .values({
@@ -492,13 +638,8 @@ export class BookingsService {
     });
   }
 
-  // POST /bookings/:id/deliver (staff, site:manage). The machines on a paid
-  // booking reach the site: its own scheduled assignments go active and
-  // the units flip to deployed. It reuses the booking's reservation rather
-  // than creating a second assignment, which is why the generic deployment
-  // endpoint could never deliver a booked unit (its overlap check collided
-  // with the booking's own hold).
-  async deliver(ctx: RequestContext, id: string) {
+  // Reuses the booking's own reservation rather than creating a second assignment (which would collide with its hold).
+  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       if (rental.status !== 'confirmed') throw new ConflictException({ error: 'booking_not_ready', status: rental.status });
@@ -520,8 +661,12 @@ export class BookingsService {
 
       await tx
         .update(equipmentAssignments)
-        .set({ status: 'active' })
+        .set({ status: 'active', ...(body.operatorName ? { operatorName: body.operatorName } : {}) })
         .where(inArray(equipmentAssignments.id, assignments.map((a) => a.id)));
+      if (body.timekeeperUserId) {
+        if (!rental.projectSiteId) throw new ConflictException({ error: 'booking_has_no_site' });
+        await assignTimekeeperToSite(tx, ctx.tenantId, body.timekeeperUserId, rental.projectSiteId);
+      }
       await tx
         .update(equipment)
         .set({ availabilityStatus: 'deployed' })
@@ -534,10 +679,7 @@ export class BookingsService {
     });
   }
 
-  // POST /bookings/:id/return (staff, site:manage). Every unit is back:
-  // the hire ends now (freeing any unused days), units go available, the
-  // booking completes. The deposit refund stays a manual PayMongo step,
-  // after any field-log deductions are settled.
+  // The deposit refund stays a manual PayMongo step, after field-log deductions settle.
   async markReturned(ctx: RequestContext, id: string) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
@@ -560,13 +702,15 @@ export class BookingsService {
       await tx.update(rentals).set({ status: 'completed', endDate: now }).where(eq(rentals.id, id));
       await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rentals', entityId: id });
       await notifyBookingCustomer(tx, ctx.tenantId, id, 'equipment_returned', { item_count: assignments.length });
+      // The whole-span Statement of Account is ready to view (in-app only; the office emails the PDF).
+      await notifyBookingCustomer(tx, ctx.tenantId, id, 'statement_ready', { booking_code: rental.code });
+      await notifyStaff(tx, ctx.tenantId, 'statement_ready', { rental_id: id, booking_code: rental.code });
       await this.events.emit(ctx, 'booking_returned', { rental_id: id, item_count: assignments.length });
       return { id, status: 'completed' };
     });
   }
 
-  // POST /bookings/:id/change-requests (customer). One open request at a
-  // time, so staff never resolve two contradicting asks.
+  // One open request at a time, so staff never resolve two contradicting asks.
   async requestChange(ctx: RequestContext, id: string, body: ChangeRequestCreate) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
@@ -577,8 +721,21 @@ export class BookingsService {
         throw new ConflictException({ error: 'already_on_site' });
       }
       const requestedEnd = body.requestedEnd ? new Date(body.requestedEnd) : null;
-      if (body.kind === 'extend' && requestedEnd && rental.endDate && requestedEnd <= rental.endDate) {
-        throw new ConflictException({ error: 'extend_must_be_later' });
+      let assignmentId: string | null = null;
+      if (body.kind === 'extend' && body.assignmentId) {
+        // One unit at a time: each keeps its own return date.
+        const [unit] = await tx
+          .select()
+          .from(equipmentAssignments)
+          .where(and(eq(equipmentAssignments.id, body.assignmentId), eq(equipmentAssignments.rentalId, id)))
+          .limit(1);
+        if (!unit || unit.status === 'cancelled' || unit.status === 'completed') {
+          throw new NotFoundException({ error: 'booking_unit_not_found' });
+        }
+        if (requestedEnd && unit.end && requestedEnd <= unit.end) {
+          throw new ConflictException({ error: 'extend_must_be_later' });
+        }
+        assignmentId = unit.id;
       }
       const [open] = await tx
         .select()
@@ -593,6 +750,7 @@ export class BookingsService {
           tenantId: ctx.tenantId,
           rentalId: id,
           kind: body.kind,
+          assignmentId,
           requestedEnd,
           reason: body.reason || null,
           requestedBy: ctx.userId,
@@ -605,9 +763,7 @@ export class BookingsService {
     });
   }
 
-  // PATCH /bookings/:id/change-requests/:requestId (staff). Approving an
-  // extension re-runs the double-booking check on the added days;
-  // approving a cancel frees the units. Refunds stay manual in PayMongo.
+  // Approving an extension re-runs the double-booking check on the added days; refunds stay manual.
   async resolveChange(ctx: RequestContext, id: string, requestId: string, body: ChangeRequestResolve) {
     return withTenantTx(ctx, async (tx) => {
       const [request] = await tx
@@ -622,7 +778,7 @@ export class BookingsService {
         if (request.kind === 'cancel') {
           await this.cancelRental(tx, ctx, id);
         } else if (request.requestedEnd) {
-          await this.extendRental(tx, id, request.requestedEnd);
+          await this.extendRental(tx, id, request.requestedEnd, request.assignmentId);
         }
       }
 
@@ -645,9 +801,6 @@ export class BookingsService {
     });
   }
 
-  // GET /bookings/:id/reschedule-suggestion (staff). When a confirmed
-  // booking must move: the nearest free same-length window on each unit,
-  // then other free units of the same type for the original window.
   async rescheduleSuggestion(ctx: RequestContext, id: string): Promise<RescheduleSuggestion> {
     return withTenantTx(ctx, async (tx) => {
       await this.visibleRental(tx, ctx, id);
@@ -669,13 +822,16 @@ export class BookingsService {
     });
   }
 
-  private async extendRental(tx: Tx, id: string, newEnd: Date) {
-    const assignments = await tx
+  // Pre-pick requests have no assignmentId and extend every unit; end_date follows the latest unit.
+  private async extendRental(tx: Tx, id: string, newEnd: Date, assignmentId: string | null) {
+    // Rental before units, the order checkout takes, so an extension racing a checkout can't deadlock.
+    await tx.select({ id: rentals.id }).from(rentals).where(eq(rentals.id, id)).for('update');
+    const live = await tx
       .select()
       .from(equipmentAssignments)
       .where(and(eq(equipmentAssignments.rentalId, id), ne(equipmentAssignments.status, 'cancelled')));
-    // Lock the units first, same as create(), so a concurrent booking of
-    // the added days serializes behind this check.
+    const assignments = assignmentId ? live.filter((a) => a.id === assignmentId) : live;
+    // Lock the units first, same as create(), so a concurrent booking of the added days serializes.
     if (assignments.length > 0) {
       await tx
         .select()
@@ -700,11 +856,20 @@ export class BookingsService {
         });
       }
       await tx.update(equipmentAssignments).set({ end: newEnd }).where(eq(equipmentAssignments.id, assignment.id));
+      assignment.end = newEnd;
     }
-    await tx.update(rentals).set({ endDate: newEnd }).where(eq(rentals.id, id));
+    const ends = live.map((a) => a.end).filter((e): e is Date => e !== null);
+    if (ends.length > 0) {
+      await tx.update(rentals).set({ endDate: new Date(Math.max(...ends.map((e) => e.getTime()))) }).where(eq(rentals.id, id));
+    }
   }
 
+  // Also voids unpaid invoices and open PayMongo sessions, so nothing stays payable.
   private async cancelRental(tx: Tx, ctx: RequestContext, id: string) {
+    const [rental] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+    if (rental?.status === 'active') throw new ConflictException({ error: 'already_on_site' });
+    if (rental?.status === 'completed') throw new ConflictException({ error: 'booking_closed', status: rental.status });
+    await this.payments.voidUnpaid(tx, { rentalId: id });
     await tx.update(rentals).set({ status: 'cancelled' }).where(eq(rentals.id, id));
     await tx.update(equipmentAssignments).set({ status: 'cancelled' }).where(eq(equipmentAssignments.rentalId, id));
     await tx.insert(auditLogs).values({
@@ -715,11 +880,10 @@ export class BookingsService {
       entityId: id,
     });
     await this.events.emit(ctx, 'booking_cancelled', { rental_id: id });
+    if (ctx.role === 'customer') await notifyStaff(tx, ctx.tenantId, 'booking_cancelled', { rental_id: id });
   }
 
-  // Every per-booking endpoint starts here: RLS bounds the tenant, this
-  // bounds a customer to their own bookings (404, never 403, so an id is
-  // not confirmed to exist).
+  // RLS bounds the tenant; this bounds a customer to their own bookings (404, never 403).
   private async visibleRental(tx: Tx, ctx: RequestContext, id: string) {
     const [rental] = await tx.select().from(rentals).where(eq(rentals.id, id)).limit(1);
     if (!rental) throw new NotFoundException({ error: 'booking_not_found' });

@@ -1,82 +1,167 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { EdtrCaptureResponse, EdtrDetailResponse } from '@arkilaunch/shared';
-import { apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
-import type { EquipmentRef, RentalRef } from '../lib/reference-client.js';
-import { explainEdtrError } from '../lib/edtr-error.js';
-import { formatDate, formatHours, formatStatus, shortCode } from '../lib/format.js';
+import {
+  parseEdtrSheetQr,
+  type EdtrCaptureResponse,
+  type EdtrSheetContext,
+  type FieldSheetDownloadResponse,
+  type EdtrDetailResponse,
+  type ScanTarget,
+} from '@arkilaunch/shared';
+import { ApiError, apiErrorText, apiGet, apiPost, apiPostForm } from '../lib/api-client.js';
+import { useTenant } from '../lib/tenant.js';
+import { explainEdtrError, failureText } from '../lib/edtr-error.js';
+import { announceQueueChange, isRetryable, uploadQueue } from '../lib/upload-queue.js';
+import { addDaysIso, formatDate, formatStatus, shortCode, weekStart } from '../lib/format.js';
+import { manilaDate } from '@arkilaunch/shared';
+import { EMPTY_HOURS, HourFields, toLineItems, type HourFieldValues } from './hour-fields.js';
 import { Button } from './button.js';
 import { CaptureField } from './capture-field.js';
 import { Input } from './input.js';
 import { Select } from './select.js';
 import { Surface } from './surface.js';
 import { Modal } from './modal.js';
-import { ScanReview } from './scan-review.js';
-import { referenceQueries } from '../lib/queries.js';
+import { ParsedColumns, ScanReview } from './scan-review.js';
+import { bookingsQueries, edtrQueries, referenceQueries, usersQueries } from '../lib/queries.js';
+import { LIMIT_REACHED } from './field-sheets-panel.js';
+import { readSheetQr } from '../lib/sheet-qr.js';
+import { PAGE_MM } from '../lib/sheet-marks.js';
 import { useToast } from './toast.js';
 
-// Lifted out of routes/edtr.tsx so the timekeeper console can open the same
-// modal. Recording a field log is the timekeeper's whole job (PRD US-02,
-// S21), and until this moved there was no route in the app that let that
-// role do it: /app/ocr is guarded to admin/owner/platform_admin, so a
-// timekeeper was redirected away from the only screen that could open this.
-// The server was never the constraint -- POST /edtr requires `edtr:create`,
-// which the timekeeper role has held all along.
-
-// Statuses the capture poll stops on: past these, nothing more arrives
-// without a human.
 const TERMINAL_STATUSES = new Set(['review', 'reconciled', 'hard_failed']);
+// Letter and Legal, as the sheet is printed.
+const SHEET_RATIOS = Object.values(PAGE_MM).map((page) => page.w / page.h);
 
-// Shown beside the viewfinder. Worth saying because every one of them is a
-// reason a sheet comes back unreadable and the day has to be transcribed by
-// hand instead.
 const SCANNING_TIPS = [
   {
     title: 'Good light',
     detail: 'Light the sheet evenly and keep overhead glare off the glossy parts.',
   },
-  { title: 'Flat and square', detail: 'Lay the sheet flat and fit its edges inside the frame.' },
-  { title: 'Hold still', detail: 'A steady shot is what keeps the handwritten totals readable.' },
+  {
+    title: 'Flat, on a plain surface',
+    detail: 'Lay the sheet flat on a table, not held in your hand, so the lines stay straight.',
+  },
+  {
+    title: 'All four black corner squares',
+    detail: 'Keep the four small black squares in view and your fingers off them: they let the app crop and turn the sheet for you.',
+  },
+  { title: 'No shadow, hold still', detail: 'Stand so your shadow is off the sheet, and hold steady so the numbers stay sharp.' },
 ];
+
+export const targetLabel = (t: ScanTarget) =>
+  [t.siteName, t.bookingCode, t.customerName].filter(Boolean).join(' · ');
 
 export interface CaptureModalProps {
   open: boolean;
   onClose: () => void;
-  rentals: RentalRef[];
-  equipmentList: EquipmentRef[];
-  rentalLabel: (rental: RentalRef) => string;
   onCaptured: () => void;
-  toast: ReturnType<typeof useToast>;
-  /** Pre-scope the log to one rental, as "Scan DTR" on a deployment does. */
+  /** Only this site's bookings (the site hub). */
+  siteId?: string;
   initialRentalId?: string;
-  /** Open straight on the scanner rather than the typed-entry form. */
   initialSource?: 'digital_entry' | 'paper_ocr';
+  submitOnly?: boolean;
+}
+
+// Mondays of every printed week in the rental, up to this week: a sheet covers Mon to Sun.
+export function sheetWeeks(start: string, end: string, today = manilaDate(new Date())): string[] {
+  const last = end < today ? end : today;
+  const weeks: string[] = [];
+  for (let d = weekStart(start); d <= last; d = addDaysIso(d, 7)) weeks.push(d);
+  return weeks;
+}
+
+// The printed sheet's header for this machine and week, so the timekeeper checks it against the paper before sending.
+function SheetHeader({ context, equipmentId, day }: { context: EdtrSheetContext; equipmentId: string; day: string }) {
+  const unit = context.equipment.find((u) => u.id === equipmentId);
+  const start = unit ? unit.start : context.rentalStart;
+  const end = unit ? unit.end : context.rentalEnd;
+  const week = day ? weekStart(day) : '';
+  const rows: [string, string][] = [
+    ['Booking code', context.bookingCode || '--'],
+    ['Charge to', context.chargeTo || '--'],
+    ['Equipment', unit ? `${unit.type} · ${unit.model} · SN ${unit.serialNo}` : 'Choose the machine'],
+    ['Project location', context.projectLocation || '--'],
+    ['Operator', unit?.operatorName || 'Not assigned'],
+    ['Client site rep', context.siteRep || '--'],
+    ['Rental period', start ? `${formatDate(start)} to ${end ? formatDate(end) : 'open'}` : '--'],
+    ['Date covered', week ? `${formatDate(week)} to ${formatDate(addDaysIso(week, 6))}` : 'Choose the week'],
+    ['Hour meter at start of week', unit?.lastHourMeter != null ? unit.lastHourMeter.toFixed(1) : '--'],
+  ];
+  return (
+    <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-3">
+      <h3 className="text-sm font-medium text-text-muted">On the sheet</h3>
+      <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="contents">
+            <dt className="text-xs font-semibold text-text-muted">{label}</dt>
+            <dd className="text-text">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </Surface>
+  );
 }
 
 export function CaptureModal({
   open,
   onClose,
-  rentals,
-  equipmentList,
-  rentalLabel,
+  siteId,
   onCaptured,
-  toast,
   initialRentalId,
   initialSource = 'digital_entry',
+  submitOnly = false,
 }: CaptureModalProps) {
+  const toast = useToast();
   const [source, setSource] = useState<'digital_entry' | 'paper_ocr'>(initialSource);
   const [rentalId, setRentalId] = useState(initialRentalId ?? '');
   const [equipmentId, setEquipmentId] = useState('');
   const [reportDate, setReportDate] = useState('');
-  const [hoursActive, setHoursActive] = useState('8');
-  const [hoursIdle, setHoursIdle] = useState('0');
+  const [hours, setHours] = useState<HourFieldValues>({ ...EMPTY_HOURS, running: '8' });
   const [scanFile, setScanFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Set when the photographed sheet's QR picked the booking and machine; the pickers then stay locked to it.
+  const [fromQr, setFromQr] = useState(false);
+  // The QR names a machine outside this user's scope: the photo is of the wrong sheet, so it is not sent.
+  const [qrBlocked, setQrBlocked] = useState(false);
+  // One id per attempt: a retry after a lost response (or from the offline queue) returns the same log.
+  const [captureId, setCaptureId] = useState(() => crypto.randomUUID());
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const me = useQuery({ ...usersQueries.me(), enabled: open && submitOnly });
+  const tenant = useTenant();
 
-  // The server decides whether a paper scan may carry typed hours. With the
-  // OCR pipeline on it may not (422 line_items_not_accepted), and until this
-  // was asked the client sent them anyway and every scan failed.
+  // The timekeeper prints the chosen week's sheet right here; same limit as the sheets panel.
+  async function downloadSheet() {
+    setSheetBusy(true);
+    try {
+      const res = await apiPost<FieldSheetDownloadResponse>('/field/edtr-sheets', { rentalId, equipmentId, weekStart: reportDate });
+      const sheet = await import('../lib/edtr-sheet.js');
+      const input = {
+        context: res.context,
+        equipmentId,
+        weekStart: res.weekStart,
+        page: res.page,
+        companyName: me.data?.tenantName ?? '',
+        logoDataUri: await sheet.logoDataUri(res.context.tenant?.logoUrl),
+        accent: tenant?.primaryColor ?? null,
+        tin: me.data?.tenantTin ?? null,
+      };
+      const png = await sheet.svgToPng(sheet.buildEdtrSheetSvg(input), res.page);
+      sheet.downloadBlob(await sheet.pngToPdf(png, res.page), sheet.edtrSheetFilename(input, 'pdf'));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 429) toast.error('Download limit', LIMIT_REACHED);
+      else toast.error('Could not download the sheet', apiErrorText(e));
+    } finally {
+      setSheetBusy(false);
+    }
+  }
+
+  // QA 32: only bookings and machines the server will accept: on site now (and, for staff, just returned).
+  const scanTargets = useQuery({ ...edtrQueries.scanTargets(), enabled: open });
+  const sheetContext = useQuery({ ...bookingsQueries.edtrSheet(rentalId), enabled: open && submitOnly && !!rentalId });
+  const targets = (scanTargets.data?.items ?? []).filter((t) => !siteId || t.siteId === siteId);
+
+  // With the OCR pipeline on, a paper scan must not carry typed hours (422 line_items_not_accepted).
   const capabilities = useQuery(referenceQueries.capabilities());
   const ocrPipeline = capabilities.data?.ocrPipeline ?? false;
 
@@ -84,8 +169,6 @@ export function CaptureModal({
   const [detail, setDetail] = useState<EdtrDetailResponse | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // A rental chosen on the deployment list wins over the first-in-the-list
-  // default, including when the same modal is reopened for another row.
   useEffect(() => {
     if (initialRentalId) setRentalId(initialRentalId);
   }, [initialRentalId]);
@@ -94,10 +177,46 @@ export function CaptureModal({
     setSource(initialSource);
   }, [initialSource]);
 
+  // A day picked for one source or booking is not valid for another.
+  useEffect(() => setReportDate(''), [source, rentalId]);
+
+  // One booking or one machine to choose from: choose it.
+  const onlyRental = targets.length === 1 ? targets[0]!.rentalId : null;
   useEffect(() => {
-    if (rentals[0] && !rentalId) setRentalId(rentals[0].id);
-    if (equipmentList[0] && !equipmentId) setEquipmentId(equipmentList[0].id);
-  }, [rentals, equipmentList, rentalId, equipmentId]);
+    if (onlyRental && !rentalId) setRentalId(onlyRental);
+  }, [onlyRental, rentalId]);
+  const target = targets.find((t) => t.rentalId === rentalId);
+  const onlyUnit = target?.units.length === 1 ? target.units[0]!.equipmentId : null;
+  useEffect(() => {
+    if (onlyUnit) setEquipmentId(onlyUnit);
+    else if (target && !target.units.some((u) => u.equipmentId === equipmentId)) setEquipmentId('');
+  }, [onlyUnit, target, equipmentId]);
+
+  // The printed sheet's QR names its booking and machine: match it before upload so nobody picks by hand.
+  async function onScanFile(file: File | null) {
+    setScanFile(file);
+    setFromQr(false);
+    setQrBlocked(false);
+    if (!file) return;
+    // No QR read (older sheet, or a browser without a reader): the booking and machine are picked by hand,
+    // and the worker flags an unidentified sheet for the office.
+    const raw = await readSheetQr(file);
+    const qr = raw ? parseEdtrSheetQr(raw) : null;
+    if (!qr) return;
+    const match = targets.find((t) => t.rentalId === qr.rentalId && t.units.some((u) => u.equipmentId === qr.equipmentId));
+    if (!match) {
+      setError({ payload: { error: 'sheet_unit_out_of_scope' } });
+      setQrBlocked(true);
+      return;
+    }
+    setError(null);
+    setRentalId(match.rentalId);
+    setEquipmentId(qr.equipmentId);
+    setFromQr(true);
+  }
+
+  const capturedRef = useRef(onCaptured);
+  capturedRef.current = onCaptured;
 
   function stopPolling() {
     if (pollTimer.current) {
@@ -114,7 +233,7 @@ export function CaptureModal({
         setDetail(res);
         if (TERMINAL_STATUSES.has(res.status)) {
           stopPolling();
-          onCaptured();
+          capturedRef.current();
         }
       } catch (err) {
         setError(err);
@@ -124,7 +243,7 @@ export function CaptureModal({
     void tick();
     pollTimer.current = setInterval(tick, 3000);
     return stopPolling;
-  }, [pollUrl, onCaptured]);
+  }, [pollUrl]);
 
   function reset() {
     stopPolling();
@@ -132,6 +251,9 @@ export function CaptureModal({
     setDetail(null);
     setError(null);
     setScanFile(null);
+    setFromQr(false);
+    setQrBlocked(false);
+    setCaptureId(crypto.randomUUID());
     setSubmitting(false);
   }
 
@@ -142,37 +264,58 @@ export function CaptureModal({
 
   async function capture(event: FormEvent) {
     event.preventDefault();
+    // Enter in the date field still submits the form after the button is disabled.
+    if (pollUrl) return;
     setError(null);
     setSubmitting(true);
     try {
       let res: EdtrCaptureResponse;
+      const lineItems = toLineItems(hours);
+      if (!lineItems && !(source === 'paper_ocr' && ocrPipeline)) {
+        throw new Error('Enter the running hours, and only numbers of zero or more.');
+      }
       if (source === 'digital_entry') {
         res = await apiPost<EdtrCaptureResponse>('/edtr', {
           source: 'digital_entry',
           rentalId,
           equipmentId,
           reportDate,
-          lineItems: { hoursActive: Number(hoursActive), hoursIdle: Number(hoursIdle) },
+          lineItems,
+          captureId,
         });
       } else {
-        // Multipart carries strings only, so transcribed hours travel as a
-        // JSON-encoded field the API decodes back into an object.
-        const transcribed =
-          !ocrPipeline && hoursActive !== '' && hoursIdle !== ''
-            ? {
-                lineItems: JSON.stringify({
-                  hoursActive: Number(hoursActive),
-                  hoursIdle: Number(hoursIdle),
-                }),
-              }
-            : {};
-        res = await apiPostForm<EdtrCaptureResponse>(
-          '/edtr',
-          { source: 'paper_ocr', rentalId, equipmentId, reportDate, ...transcribed },
-          scanFile ?? undefined,
-        );
+        // Multipart carries strings only: hours travel JSON-encoded.
+        const transcribed = !ocrPipeline && lineItems ? { lineItems: JSON.stringify(lineItems) } : {};
+        // The picker holds the week's Monday; a rental starting mid-week begins after it.
+        const start = target?.startDate ? manilaDate(target.startDate) : reportDate;
+        const day = reportDate < start ? start : reportDate;
+        const fields = { source: 'paper_ocr', rentalId, equipmentId, reportDate: day, captureId, ...transcribed };
+        try {
+          res = await apiPostForm<EdtrCaptureResponse>('/edtr', fields, scanFile ?? undefined);
+        } catch (err) {
+          // Weak signal on site: keep the photo on the phone rather than lose the day.
+          if (!scanFile || !isRetryable(err)) throw err;
+          await uploadQueue.enqueue({ id: captureId, fields, file: scanFile, fileName: scanFile.name, createdAt: Date.now() });
+          announceQueueChange();
+          toast.success('Saved on this phone', `${formatDate(reportDate)} will upload by itself when the signal is back.`);
+          handleClose();
+          return;
+        }
       }
-      setPollUrl(res.pollUrl);
+      // A timekeeper only submits: reading, matching and approval happen in the office, out of their view.
+      if (submitOnly) {
+        toast.success(
+          'Sent to the office',
+          source === 'digital_entry'
+            ? `${formatDate(reportDate)} is pending approval.`
+            : `The sheet for the week of ${formatDate(reportDate)} is with the office.`,
+        );
+        onCaptured();
+        handleClose();
+        return;
+      }
+      // res.pollUrl carries the /api/v1 prefix apiGet adds itself.
+      setPollUrl(`/edtr/${res.id}`);
       toast.success(
         'Field log recorded',
         `${formatDate(reportDate)} - waiting for its matching log.`,
@@ -189,12 +332,9 @@ export function CaptureModal({
 
   const explained = error != null ? explainEdtrError(error) : null;
 
-  // The session panel names what this scan will be attached to, so a
-  // mis-picked machine is caught before the shutter rather than at review.
-  const equipment = equipmentList.find((eq) => eq.id === equipmentId);
-  const equipmentLabel = equipment ? `${equipment.model} (${equipment.serialNo})` : 'Not set';
-  const rental = rentals.find((r) => r.id === rentalId);
-  const rentalSessionLabel = rental ? rentalLabel(rental) : 'Not set';
+  const unit = target?.units.find((u) => u.equipmentId === equipmentId);
+  const equipmentLabel = unit ? `${unit.name} (${unit.serialNo})` : 'Not set';
+  const rentalSessionLabel = target ? targetLabel(target) : 'Not set';
 
   return (
     <Modal
@@ -205,17 +345,27 @@ export function CaptureModal({
       size="lg"
       footer={
         <>
-          <Button variant="secondary" onClick={handleClose}>
-            {detail ? 'Done' : 'Cancel'}
+          <Button variant="ghost" onClick={handleClose}>
+            {pollUrl ? 'Done' : 'Cancel'}
           </Button>
-          <Button variant="primary" onClick={capture} loading={submitting} disabled={!reportDate}>
+          <Button
+            variant="primary"
+            onClick={capture}
+            loading={submitting}
+            disabled={
+              !reportDate ||
+              !equipmentId ||
+              pollUrl !== null ||
+              qrBlocked
+            }
+          >
             Record log
           </Button>
         </>
       }
     >
       <form onSubmit={capture} className="flex flex-col gap-4">
-        <fieldset className="flex flex-col gap-2">
+        <fieldset className={submitOnly ?'hidden' : 'flex flex-col gap-2'}>
           <legend className="mb-1 text-sm font-medium text-text">How was it recorded?</legend>
           <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
             <label className="flex min-h-11 items-center gap-2 text-text">
@@ -243,36 +393,76 @@ export function CaptureModal({
           </div>
         </fieldset>
 
+        {fromQr && (
+          <p role="status" className="rounded-sm border border-success/40 bg-success/10 px-3 py-2 text-sm text-text">
+            Matched from the sheet&apos;s QR code: {equipmentLabel} at {rentalSessionLabel}.
+          </p>
+        )}
         <Select
           id="rentalId"
-          label="Rental"
+          label="Site and booking"
           value={rentalId}
           onChange={(e) => setRentalId(e.target.value)}
+          disabled={fromQr}
           required
         >
-          {rentals.length === 0 && <option value="">No rentals available</option>}
-          {rentals.map((r) => (
-            <option key={r.id} value={r.id}>
-              {rentalLabel(r)} ({shortCode('rental', r.id)})
+          <option value="">
+            {scanTargets.isPending ? 'Loading your sites…' : targets.length === 0 ? 'No machine is on site at your sites' : 'Choose the site'}
+          </option>
+          {targets.map((t) => (
+            <option key={t.rentalId} value={t.rentalId}>
+              {targetLabel(t)}
             </option>
           ))}
         </Select>
 
         <Select
           id="equipmentId"
-          label="Machine"
+          label="Machine on site"
           value={equipmentId}
           onChange={(e) => setEquipmentId(e.target.value)}
+          disabled={fromQr || !target}
           required
         >
-          {equipmentList.length === 0 && <option value="">No machines available</option>}
-          {equipmentList.map((eq) => (
-            <option key={eq.id} value={eq.id}>
-              {eq.model} ({eq.serialNo})
+          <option value="">{target ? 'Choose the machine' : 'Choose the site first'}</option>
+          {target?.units.map((u) => (
+            <option key={u.equipmentId} value={u.equipmentId}>
+              {u.name} ({u.serialNo}){u.onSite ? '' : ' - returned'}
             </option>
           ))}
         </Select>
 
+        {source === 'paper_ocr' ? (
+          <>
+          <Select
+            id="reportDate"
+            label="Week of the sheet"
+            value={reportDate}
+            onChange={(e) => setReportDate(e.target.value)}
+            disabled={!target?.startDate}
+            required
+          >
+            <option value="">{target ? 'Choose the week' : 'Choose the site first'}</option>
+            {target?.startDate &&
+              sheetWeeks(manilaDate(target.startDate), manilaDate(target.endDate ?? new Date())).map((d) => (
+                <option key={d} value={d}>
+                  {formatDate(d)} to {formatDate(addDaysIso(d, 6))}
+                </option>
+              ))}
+          </Select>
+          {submitOnly && (
+            <Button
+              variant="secondary"
+              className="self-start"
+              loading={sheetBusy}
+              disabled={!reportDate || !equipmentId}
+              onClick={() => void downloadSheet()}
+            >
+              Download this week&apos;s sheet (PDF)
+            </Button>
+          )}
+          </>
+        ) : (
         <Input
           id="reportDate"
           label="Day worked"
@@ -280,7 +470,17 @@ export function CaptureModal({
           value={reportDate}
           onChange={(e) => setReportDate(e.target.value)}
           required
+          {...(target?.startDate ? { min: manilaDate(target.startDate) } : {})}
+          {...(target?.endDate ? { max: manilaDate(target.endDate) } : {})}
+          hint={
+            target?.startDate
+              ? `Within the rental: ${formatDate(target.startDate)} to ${target.endDate ? formatDate(target.endDate) : 'open'}`
+              : undefined
+          }
         />
+        )}
+
+        {submitOnly && sheetContext.data && <SheetHeader context={sheetContext.data} equipmentId={equipmentId} day={reportDate} />}
 
         {source === 'paper_ocr' && (
           <CaptureField
@@ -288,8 +488,11 @@ export function CaptureModal({
             label="Photo of the sheet"
             accept="image/*"
             size="field"
+            scanner
+            sheetMarks
+            snapAspect={SHEET_RATIOS}
             value={scanFile}
-            onChange={setScanFile}
+            onChange={(file) => void onScanFile(file)}
             tips={SCANNING_TIPS}
             sessionData={[
               { label: 'Machine', value: equipmentLabel },
@@ -299,28 +502,7 @@ export function CaptureModal({
           />
         )}
 
-        {!(source === 'paper_ocr' && ocrPipeline) && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Input
-            numeric
-            id="hoursActive"
-            label="Hours working"
-            type="number"
-            step="0.25"
-            value={hoursActive}
-            onChange={(e) => setHoursActive(e.target.value)}
-          />
-          <Input
-            numeric
-            id="hoursIdle"
-            label="Hours idle"
-            type="number"
-            step="0.25"
-            value={hoursIdle}
-            onChange={(e) => setHoursIdle(e.target.value)}
-          />
-        </div>
-        )}
+        {!(source === 'paper_ocr' && ocrPipeline) && <HourFields value={hours} onChange={setHours} idPrefix="capture" />}
         {source === 'paper_ocr' && !ocrPipeline && (
           <p className="-mt-2 text-sm text-text-muted">
             Type the hours exactly as written on the sheet. The photo is kept either way, so the
@@ -341,24 +523,29 @@ export function CaptureModal({
           </Surface>
         )}
 
-        {detail && (
+        {detail && !submitOnly && (
           <Surface radius="md" elevation="sm" className="flex flex-col gap-2 p-3">
             <p className="text-sm text-text">
               Recorded as <span className="font-mono text-xs">{shortCode('log', detail.id)}</span> -{' '}
               {formatStatus(detail.status)}.
             </p>
-            {detail.lineItems[0] && (
-              <p className="text-sm text-text-muted">
-                {formatHours(detail.lineItems[0].hoursActive)} working
-                {/* A paper sheet has no idle column, so idle is genuinely
-                    unrecorded rather than zero. Saying "0.0 idle" would
-                    report a reading nobody took. */}
-                {detail.lineItems[0].hoursIdle === null
-                  ? '. Idle hours not recorded on this sheet.'
-                  : `, ${formatHours(detail.lineItems[0].hoursIdle)} idle.`}
-              </p>
+            {detail.status === 'hard_failed' && (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-text">{failureText(detail.failureReason)}</p>
+                <div>
+                  {/* reset() keeps booking, machine and day: only the photo needs redoing. */}
+                  <Button variant="primary" onClick={reset}>
+                    Retake the photo
+                  </Button>
+                </div>
+              </div>
             )}
-            {detail.fields.length > 0 && <ScanReview detail={detail} />}
+            {!TERMINAL_STATUSES.has(detail.status) && (
+              <p className="text-sm text-text-muted">Reading the sheet... this usually takes under a minute.</p>
+            )}
+            {/* What was read, column by column, so a misread is caught on site rather than at billing. */}
+            {detail.lineItems[0] && <ParsedColumns item={detail.lineItems[0]} />}
+            {detail.source === 'paper_ocr' && detail.fields.length > 0 && <ScanReview detail={detail} />}
             {detail.reconciliation?.status === 'single_source' && (
               <p className="text-sm text-text-muted">
                 Waiting for the second record of this machine-day before anything can be billed.

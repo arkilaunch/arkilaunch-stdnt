@@ -11,9 +11,12 @@
     "test": "vitest run",
     "worker:edtr": "tsx src/edtr-ocr-worker.ts",
     "worker:weather": "tsx src/weather-poll.ts",
+    "worker:weather-briefing": "tsx src/weather-briefing.ts",
     "worker:diesel": "tsx src/diesel.ts",
     "worker:pm-notify": "tsx src/maintenance-notify.ts",
     "worker:weekly-billing": "tsx src/weekly-billing.ts",
+    "worker:hold-expiry": "tsx src/hold-expiry.ts",
+    "worker:tier-recompute": "tsx src/tier-recompute.ts",
     "ocr:fixtures:pull": "tsx src/ocr-fixtures-pull.ts"
   },
   "dependencies": {
