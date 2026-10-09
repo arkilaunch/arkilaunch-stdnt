@@ -1,40 +1,86 @@
-# ArkiLaunch
+<p align="center">
+  <img src="apps/web/public/icons/mark.svg" alt="ArkiLaunch logo" width="120" height="120">
+</p>
 
-[![License](https://img.shields.io/badge/License-Proprietary%20(pending)-lightgrey.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-F1--F8%20backends%20built%20%7C%20pilot%20not%20yet%20deployed-orange)](docs/index.md)
-[![Stack](https://img.shields.io/badge/Stack-React%20%2B%20NestJS%20%2B%20Postgres-black)](docs/build-arkilaunch.md)
-[![Docs: FMD](https://img.shields.io/badge/Docs-FMD-333)](docs/index.md)
+<p align="center">
+  <img src="docs/assets/readme/wordmark.svg" alt="ArkiLaunch" width="420">
+</p>
 
-The operating system for Philippine heavy-equipment rental MSMEs: scan the handwritten field logs your crew already keeps, price every rental against live diesel in under a minute, and flag weather risk on site, so paper-based rental firms stop leaking revenue. Multi-tenant SaaS; Almara Construction (Quezon City) is the pilot tenant.
+<p align="center">
+  <b>The operating system for Philippine heavy-equipment rental MSMEs.</b>
+  <br><br>
+  Scan handwritten field logs, quote against live diesel in under a minute,
+  <br>
+  and flag weather risk on site.
+</p>
 
-Built with the Foundational Matrix Documents (FMD) workflow: IDEA to build to pitch to wrap.
+<br>
 
-## Status
+<p align="center">
+  <img src="docs/assets/readme/divider.svg" alt="" width="600">
+</p>
 
-Read this before trusting any other status claim in the repo; [docs/index.md](docs/index.md) §4 is the authoritative Health Check.
+<h3 align="center">Tech stack</h3>
 
-- **Backends for all eight PRD features (F1..F8) are built and tested**, including their read surfaces. See index.md §5 "Backend completion" and "Backend read-surface completion" (both 2026-08-02).
-- **Database:** 35 tables against a real Supabase project, RLS forced on all 28 tenant-owned tables, RS256 JWT with refresh rotation.
-- **Frontend:** a working shell, not a finished product. Storefront landing, auth flow, and role-aware route groups are live on the Yardboard design system; several routes are still thin and some query hooks return `unknown`.
-- **Deployment: not yet proven.** `cr-arkilaunch-deploy-unblock.md` (2026-09-13) put every prerequisite in place, but no `Deploy` run has yet gone green, so the pipeline is unproven rather than fixed. PRD §9 M5 (anchor pilot deployment) has not started.
-- **The OCR path has never analyzed a real *filled* document.** EDTR extraction now runs end to end against live Azure DI via `prebuilt-layout` tables, and one capture of the real Almara multi-day form fans out into one row per dated line (`docs/cr-arkilaunch-edtr-real-form.md`). But everything measured so far used machine-generated sheets: handwriting is entirely unexercised, no labeled corpus exists, and the QAD-T39 >= 90.06% accuracy gate is still unmeasured. `ENABLE_OCR_PIPELINE` is on in dev only; AIA-R7 stays Open (escalated) and CLR gap E1 is uncleared. See [docs/runbook-ocr-fixtures.md](docs/runbook-ocr-fixtures.md).
+<h6 align="center">FRONTEND</h6>
 
-Two Change Records remain open on their own terms: `cr-arkilaunch-pilot-honesty.md` and `cr-arkilaunch-azure-di-provisioning.md`.
+<p align="center">
+  <img alt="React 19" src="https://img.shields.io/badge/React_19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB">
+  <img alt="Vite 8" src="https://img.shields.io/badge/Vite_8-646CFF?style=for-the-badge&logo=vite&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white">
+</p>
 
-- **A full-system audit ran 2026-09-19** ([docs/audit-api-surface.md](docs/audit-api-surface.md), [docs/audit-db-tenant-isolation.md](docs/audit-db-tenant-isolation.md), [docs/audit-ocr-money-path.md](docs/audit-ocr-money-path.md), [docs/audit-docs-drift.md](docs/audit-docs-drift.md)) and raised 17 HIGH findings. Most are now closed in code -- the customer-readable-quote and unguarded-reference authorization holes, the drizzle snapshot drift that would have dropped the `tenants` RLS policy, the complete absence of indexes, the money-path constraints, and the OCR accuracy gate. Each audit document carries its own per-finding disposition. Still open and recorded there: the EDTR equipment-day UNIQUE (blocked on a test-fixture cleanup), composite tenant-scoped FKs, `payments.provider_ref` NOT NULL, and the unbuilt-client backlog.
+<h6 align="center">BACKEND</h6>
 
-## Quick start
+<p align="center">
+  <img alt="NestJS 11" src="https://img.shields.io/badge/NestJS_11-E0234E?style=for-the-badge&logo=nestjs&logoColor=white">
+  <img alt="Node 24" src="https://img.shields.io/badge/Node_24-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white">
+</p>
 
-PRD, SDD, DSD, QAD, and RFC-1/2/3 are Locked. Read the docs first:
+<h6 align="center">DATA &amp; AI</h6>
 
-1. Start at [docs/index.md](docs/index.md) for the manifest and current Health Check status.
-2. Read in the order [BUILD §1](docs/build-arkilaunch.md) sets out (index -> SCRUTINY -> BRD -> PRD -> SDD -> RFCs -> DSD -> QAD -> CLR -> AIA -> OPS -> BUILD).
+<p align="center">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
+  <img alt="Supabase" src="https://img.shields.io/badge/Supabase-3FCF8E?style=for-the-badge&logo=supabase&logoColor=white">
+  <img alt="Drizzle ORM" src="https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=for-the-badge&logo=drizzle&logoColor=black">
+  <img alt="Azure Document Intelligence" src="https://img.shields.io/badge/Azure_Document_Intelligence-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white">
+</p>
 
-To run the code: copy `.env.example` to `.env` (Supabase pooler connection strings and an RS256 keypair; see the comments in that file for the Supavisor-without-IPv4-addon connection shape), then `pnpm install`, `pnpm db:migrate`, `pnpm db:seed`, `pnpm build`, `pnpm test`. [docs/runbook-local-dev.md](docs/runbook-local-dev.md) covers local setup in full.
+<h6 align="center">SERVICES</h6>
 
-This repo does not vendor the FMD engine's own tooling (`fmd/scripts/*.py`); doc validation and materialization here are done by hand, per [docs/index.md](docs/index.md) §4.
+<p align="center">
+  <img alt="PayMongo" src="https://img.shields.io/badge/PayMongo-0E7C4A?style=for-the-badge">
+  <img alt="Open-Meteo" src="https://img.shields.io/badge/Open--Meteo-FF8C00?style=for-the-badge">
+</p>
 
-**Stack (pinned, verified 2026-07-25):** React 19.2 + Vite 8, NestJS 11.1 on Node 24 LTS, Drizzle ORM + Supabase Postgres, Azure AI Document Intelligence (OCR), PayMongo (payments), Open-Meteo (weather, **free tier** since 2026-08-20), Azure Container Apps + Cloudflare (Workers static frontend at arkilaunch.app, DNS, edge). See [BUILD §3](docs/build-arkilaunch.md), including the divergence table.
+<h6 align="center">HOSTING</h6>
+
+<p align="center">
+  <img alt="Azure Container Apps" src="https://img.shields.io/badge/Azure_Container_Apps-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white">
+  <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare_Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white">
+</p>
+
+<br>
+
+<p align="center">
+  <sub>API and jobs run on <b>Azure Container Apps</b> &nbsp;·&nbsp; web served from <b>Cloudflare Workers</b> at arkilaunch.app</sub>
+</p>
+
+<br>
+
+<p align="center">
+  <a href="docs/index.md"><b>Docs</b></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="docs/runbook-local-dev.md"><b>Local dev</b></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="docs/pitch-arkilaunch.md"><b>Demo</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/divider.svg" alt="" width="600">
+</p>
+
+<br>
 
 ## What it does
 
@@ -43,38 +89,21 @@ This repo does not vendor the FMD engine's own tooling (`fmd/scripts/*.py`); doc
 - Manages a multi-tenant fleet with maintenance timers, weather-aware liability logging, and OCR-assisted KYC (PRD-F4, F5, F6).
 - Takes bookings and payments through an authenticated customer portal (PRD-F2, F8).
 
-## Documentation
+## Quick start
 
-54 documents live in [docs/](docs/); [docs/index.md](docs/index.md) is the manifest and the only complete list. The ones you are most likely to want:
+```bash
+cp .env.example .env   # Supabase pooler URLs + RS256 keypair; see comments in the file
+pnpm install
+pnpm db:migrate && pnpm db:seed
+pnpm build && pnpm test
+```
 
-| Doc | Purpose |
-|-----|---------|
-| [Index](docs/index.md) | Full doc manifest, Change Log, Health Check |
-| [PRD](docs/prd-arkilaunch.md) | Product scope and features (PRD-F1..F8) · Locked |
-| [SDD](docs/sdd-arkilaunch.md) | System architecture and data model · Locked |
-| [QAD](docs/qad-arkilaunch.md) | QA and test plan · Locked |
-| [RFC-1](docs/rfc-arkilaunch-tenancy-rls-auth.md) | Multi-tenant isolation + identity/auth · Locked |
-| [RFC-2](docs/rfc-arkilaunch-ocr-edtr-reconciliation.md) | OCR EDTR + double-entry reconciliation · Locked |
-| [RFC-3](docs/rfc-arkilaunch-quotation-pricing-engine.md) | Diesel-indexed quotation engine · Locked |
-| [DSD](docs/dsd-arkilaunch.md) | Yardboard design system (canonical) · Locked |
-| [BUILD](docs/build-arkilaunch.md) | Build guide, pinned stack, golden paths |
-| [OPS](docs/ops-arkilaunch.md) | SLOs, alerts, incident runbooks |
-| [AIA](docs/aia-arkilaunch.md) | AI assurance dossier |
-| [CLR](docs/clr-arkilaunch.md) | Compliance and legal register |
-| [IDEA](docs/idea-arkilaunch.md) | The spark and scope |
+Full setup is in [docs/runbook-local-dev.md](docs/runbook-local-dev.md). Read [docs/index.md](docs/index.md) first: it is the doc manifest and lists which specs are Locked.
 
-Root `IDEA.md` is the original capstone thesis and remains the source of record for the literature review, diagrams, and the 29-entity data dictionary the SDD schema derives from. It is not a generated artifact and is deliberately exempt from the FMD voice checks.
+## Status
 
-**Materialized from the DSD:** [BRAND.md](BRAND.md), [DESIGN.md](DESIGN.md). **Materialized from BUILD:** [AGENTS.md](AGENTS.md). **Materialized from AIA §1:** [MODEL_CARD.md](MODEL_CARD.md). These four are build artifacts; edit the canonical doc and re-materialize. This README is **not** one of them -- it is maintained by hand.
-
-## Demo
-
-See [docs/pitch-arkilaunch.md](docs/pitch-arkilaunch.md) for the defense and demo script.
-
-## Team
-
-ArkiLaunch Team, Almara Construction capstone.
+Backends for all eight features (F1..F8) are built and tested. The pilot is not yet deployed, and OCR has not yet been validated on real handwriting. [docs/index.md](docs/index.md) §4 is the authoritative Health Check.
 
 ## License
 
-All rights reserved pending resolution of capstone IP ownership (CLR escalation flag E10); see [LICENSE](LICENSE) and [docs/clr-arkilaunch.md](docs/clr-arkilaunch.md).
+All rights reserved pending resolution of capstone IP ownership (CLR E10). See [LICENSE](LICENSE).
