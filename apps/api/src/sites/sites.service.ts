@@ -44,6 +44,7 @@ import {
 } from '../common/equipment-availability.js';
 import { countRows } from '../common/count-rows.js';
 import { requireCompleteReturnLogs } from '../common/field-logs.js';
+import { notifyStaff } from '../common/notify-customer.js';
 import { latestEquipmentWeather } from '../common/equipment-weather.js';
 
 // Caps the active-alert rows scanned before the per-site dedupe.
@@ -481,7 +482,7 @@ export class SitesService {
     body: DeploymentReturnRequest = {},
   ) {
     return withTenantTx(ctx, async (tx) => {
-      const [assignment] = await tx
+      let [assignment] = await tx
         .select()
         .from(equipmentAssignments)
         .where(eq(equipmentAssignments.id, assignmentId))
@@ -492,24 +493,36 @@ export class SitesService {
         .select()
         .from(rentals)
         .where(eq(rentals.id, assignment.rentalId))
-        .limit(1);
+        .limit(1)
+        .for('update');
       if (!rental || rental.projectSiteId !== siteId) {
         throw new NotFoundException({ error: 'deployment_not_found' });
       }
+      [assignment] = await tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, assignmentId)).for('update');
+      if (!assignment) throw new NotFoundException({ error: 'deployment_not_found' });
       if (assignment.status === 'completed' || assignment.status === 'cancelled') {
         throw new ConflictException({ error: 'already_returned' });
       }
 
       await requireCompleteReturnLogs(tx, ctx, rental.id, [assignment.equipmentId], assignmentId, body);
 
+      await tx.select({ id: equipment.id }).from(equipment).where(eq(equipment.id, assignment.equipmentId)).for('update');
+
       await tx
         .update(equipmentAssignments)
-        .set({ end: new Date(), status: 'completed' })
+        .set({ end: new Date(), status: 'completed', returnConditionNotes: body.conditionNotes?.trim() || null, returnNeedsRepair: body.needsRepair ?? false })
         .where(eq(equipmentAssignments.id, assignmentId));
       await tx
         .update(equipment)
-        .set({ availabilityStatus: 'available' })
+        .set({ availabilityStatus: body.needsRepair ? 'maintenance' : 'available' })
         .where(eq(equipment.id, assignment.equipmentId));
+      if (body.needsRepair) {
+        await tx.insert(auditLogs).values({
+          tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
+          entityId: assignment.equipmentId, reason: 'flagged for repair on return',
+        });
+        await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: rental.id, equipment_ids: [assignment.equipmentId] });
+      }
 
       await tx.insert(auditLogs).values({
         tenantId: ctx.tenantId,

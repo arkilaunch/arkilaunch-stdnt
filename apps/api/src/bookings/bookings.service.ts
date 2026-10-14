@@ -692,26 +692,45 @@ export class BookingsService {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
-      rental.status = locked!.status;
+      if (!locked) throw new NotFoundException({ error: 'booking_not_found' });
+      rental.status = locked.status;
       if (rental.status !== 'active') throw new ConflictException({ error: 'booking_not_on_site', status: rental.status });
       const assignments = await tx
         .select()
         .from(equipmentAssignments)
         .where(and(eq(equipmentAssignments.rentalId, id), eq(equipmentAssignments.status, 'active')));
+      const details = new Map((body.units ?? []).map((unit) => [unit.assignmentId, unit]));
+      if (details.size !== (body.units?.length ?? 0) || (body.units ?? []).some((unit) => !assignments.some((a) => a.id === unit.assignmentId))) {
+        throw new UnprocessableEntityException({ error: 'booking_unit_not_found' });
+      }
       await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, {
         confirmIncompleteLogs: body.confirmIncompleteLogs,
         reason: body.incompleteLogsReason,
       });
       const now = new Date();
       if (assignments.length > 0) {
-        await tx
-          .update(equipmentAssignments)
-          .set({ status: 'completed', end: now })
-          .where(inArray(equipmentAssignments.id, assignments.map((a) => a.id)));
-        await tx
-          .update(equipment)
-          .set({ availabilityStatus: 'available' })
-          .where(inArray(equipment.id, assignments.map((a) => a.equipmentId)));
+        await tx.select({ id: equipment.id }).from(equipment)
+          .where(inArray(equipment.id, assignments.map((a) => a.equipmentId))).for('update');
+        for (const assignment of assignments) {
+          const unit = details.get(assignment.id);
+          await tx.update(equipmentAssignments).set({
+            status: 'completed', end: now,
+            returnConditionNotes: unit?.conditionNotes?.trim() || null,
+            returnNeedsRepair: unit?.needsRepair ?? false,
+          }).where(eq(equipmentAssignments.id, assignment.id));
+          await tx.update(equipment).set({ availabilityStatus: unit?.needsRepair ? 'maintenance' : 'available' })
+            .where(eq(equipment.id, assignment.equipmentId));
+          if (unit?.needsRepair) {
+            await tx.insert(auditLogs).values({
+              tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
+              entityId: assignment.equipmentId, reason: 'flagged for repair on return',
+            });
+          }
+        }
+        const repairIds = assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId);
+        if (repairIds.length > 0) {
+          await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: id, equipment_ids: repairIds });
+        }
       }
       await tx.update(rentals).set({ status: 'completed', endDate: now }).where(eq(rentals.id, id));
       await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rentals', entityId: id });
