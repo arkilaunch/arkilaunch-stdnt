@@ -459,6 +459,9 @@ export class BookingsService {
           requestedEnd: row.requestedEnd,
           reason: row.reason,
           status: row.status,
+          suggestedChargePhp: null,
+          chargePhp: row.chargePhp !== null ? Number(row.chargePhp) : null,
+          invoiceId: row.invoiceId,
           createdAt: row.createdAt,
         })),
         items: assignmentRows.map(({ assignment, typeName, model, serialNo }) => ({
@@ -469,6 +472,8 @@ export class BookingsService {
           end: assignment.end,
           status: assignment.status,
           selectedOptions: assignment.selectedOptions,
+          returnConditionNotes: assignment.returnConditionNotes,
+          returnNeedsRepair: assignment.returnNeedsRepair,
         })),
         quotation: quotation
           ? {

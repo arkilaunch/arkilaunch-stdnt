@@ -218,6 +218,8 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       end: z.coerce.date().nullable(),
       status: z.string(),
       selectedOptions: SelectedOptionsSchema.optional(),
+      returnConditionNotes: z.string().nullable(),
+      returnNeedsRepair: z.boolean(),
     }),
   ),
   siteContact: z.string().nullable(),
@@ -254,6 +256,9 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       requestedEnd: z.coerce.date().nullable(),
       reason: z.string().nullable(),
       status: z.string(),
+      suggestedChargePhp: z.number().nullable(),
+      chargePhp: z.number().nullable(),
+      invoiceId: z.string().uuid().nullable(),
       createdAt: z.coerce.date(),
     }),
   ),
@@ -342,8 +347,25 @@ export type ChangeRequestCreate = z.infer<typeof ChangeRequestCreateSchema>;
 
 export const ChangeRequestResolveSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
+  chargePhp: z.number().finite().nonnegative().multipleOf(0.01).optional(),
+  chargeReason: z.string().trim().min(1).max(500).optional(),
 });
 export type ChangeRequestResolve = z.infer<typeof ChangeRequestResolveSchema>;
+
+export const BookingReturnRequestSchema = z
+  .object({
+    units: z.array(z.object({
+      assignmentId: z.string().uuid(),
+      conditionNotes: z.string().trim().max(2000).optional(),
+      needsRepair: z.boolean().optional(),
+    })).optional(),
+    confirmIncompleteLogs: z.boolean().optional(),
+    incompleteLogsReason: z.string().trim().min(3).max(500).optional(),
+  })
+  .refine((b) => !b.confirmIncompleteLogs || !!b.incompleteLogsReason, {
+    message: 'a reason is required', path: ['incompleteLogsReason'],
+  });
+export type BookingReturnRequest = z.infer<typeof BookingReturnRequestSchema>;
 
 // Asia/Manila wall-clock HH:MM; openDays 0 = Sunday; blackouts are Manila dates.
 const HhMm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);

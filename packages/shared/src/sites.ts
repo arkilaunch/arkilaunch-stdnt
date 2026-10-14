@@ -154,6 +154,8 @@ export type IncidentListResponse = z.infer<typeof IncidentListResponseSchema>;
 // Refused (409) while field-log days are unapproved or missing, unless the admin confirms with an audit-logged reason.
 export const DeploymentReturnSchema = z
   .object({
+    conditionNotes: z.string().trim().max(2000).optional(),
+    needsRepair: z.boolean().optional(),
     confirmIncompleteLogs: z.boolean().optional(),
     reason: z.string().trim().min(3).max(500).optional(),
   })

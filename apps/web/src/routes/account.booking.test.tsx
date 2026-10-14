@@ -56,6 +56,8 @@ function booking(overrides: Partial<BookingDetailResponse> = {}): BookingDetailR
         start: new Date('2026-10-01T08:00:00Z'),
         end: new Date('2026-10-05T17:00:00Z'),
         status: 'scheduled',
+        returnConditionNotes: null,
+        returnNeedsRepair: false,
       },
     ],
     quotation: null,
