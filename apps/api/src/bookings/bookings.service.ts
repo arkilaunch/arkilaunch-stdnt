@@ -950,8 +950,8 @@ export class BookingsService {
     const { dailyHours } = await getBillingSettings(tx, tenantId);
     const units = extended.map((unit) => ({ ...unit, extraHours: minBookingHours(bookingDays(unit.fromEnd, unit.newEnd), dailyHours) }));
     const [quotation] = await tx.select({ id: quotations.id }).from(quotations)
-      .where(and(eq(quotations.rentalId, rentalId), inArray(quotations.status, ['approved', 'sent'])))
-      .orderBy(desc(quotations.createdAt), desc(quotations.revision)).limit(1);
+      .where(and(eq(quotations.rentalId, rentalId), inArray(quotations.status, ['approved', 'sent', 'accepted'])))
+      .orderBy(desc(quotations.revision), desc(quotations.createdAt), desc(quotations.id)).limit(1);
     if (!quotation || units.length === 0) return { suggestion: null, units };
     const rates = await tx.select({ equipmentTypeId: quotationItems.equipmentTypeId, hourlyRatePhp: quotationItems.hourlyRatePhp })
       .from(quotationItems).where(eq(quotationItems.quotationId, quotation.id));

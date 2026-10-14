@@ -266,6 +266,39 @@ describe('Delivery, return and staff alerts', () => {
     await bookings.cancel(customerCtx, booking.id);
   });
 
+  it('suggests the saved hourly charge after the customer accepts, pays and deploys the booking', async () => {
+    const booking = await book(2);
+    const quote = await priceBookQuote(booking.id, booking.customerId);
+    await quotes.accept(customerCtx, quote.id);
+    const checkout = await payments.checkout(customerCtx, booking.id);
+    const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
+    await payments.handleWebhook(rawBody, header, webhookSecret);
+    try {
+      await bookings.deliver(adminCtx, booking.id);
+      const before = await bookings.get(adminCtx, booking.id);
+      expect(before.quotation?.status).toBe('accepted');
+      const assignment = before.items[0]!;
+      const request = await bookings.requestChange(customerCtx, booking.id, {
+        kind: 'extend', assignmentId: assignment.id, requestedEnd: day(3, 17),
+      });
+      const expected = await withTenantTx(adminCtx, async (tx) => {
+        const { dailyHours } = await getBillingSettings(tx, adminCtx.tenantId);
+        const [unit] = await tx.select().from(equipment).where(eq(equipment.id, equipmentId));
+        const [rate] = await tx.select().from(quotationItems).where(and(
+          eq(quotationItems.quotationId, quote.id), eq(quotationItems.equipmentTypeId, unit!.equipmentTypeId),
+        ));
+        return round2HalfUp(Number(rate!.hourlyRatePhp) * minBookingHours(bookingDays(assignment.end!, day(3, 17)), dailyHours));
+      });
+      expect(expected).toBeGreaterThan(0);
+      expect((await bookings.get(adminCtx, booking.id)).changeRequests[0]?.suggestedChargePhp).toBe(expected);
+      await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' });
+      expect((await bookings.get(customerCtx, booking.id)).changeRequests[0]?.chargePhp).toBe(expected);
+      await bookings.markReturned(adminCtx, booking.id);
+    } finally {
+      await withTenantTx(adminCtx, (tx) => tx.update(equipment).set({ availabilityStatus: 'available' }).where(eq(equipment.id, equipmentId)));
+    }
+  });
+
   it('requires an override reason and records the agreed charge and reason without changing dates on refusal', async () => {
     const booking = await book(13);
     const before = await bookings.get(adminCtx, booking.id);
