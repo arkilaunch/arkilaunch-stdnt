@@ -66,4 +66,15 @@ Checks run on 2026-10-15 after the review fixes:
 
 The initial default-concurrency web run passed 555/556 tests and timed out on an existing cart case at five seconds; the complete retry above passed, including the changed booking-actions tests. DB-backed specs add assertions for overdue eligibility immediately after issuing an extension invoice and extra booked hours on a free extension, alongside the extension, return, repair and cross-tenant cases.
 
-Pre-merge reviews: tenant isolation PASS; migration/RLS PASS; restraint PASS, with the shared `reason` field and redundant guard removal applied. The prior DB-backed run passed 388/390 tests and identified the immediate-overdue invoice defect. DB-backed suites will be re-run in pre-merge review after these fixes; they were not run in this task.
+Pre-merge DB-backed verification at `003d252` used a fresh local PostgreSQL 17 database, applying migrations and `db:seed:test` through the same steps as the CI `api-integration-suite` job:
+
+| Suite | Result |
+|---|---|
+| `pnpm --filter @arkilaunch/api test` | 58 files, 390/390 tests passed |
+| `pnpm --filter @arkilaunch/jobs test` | 7 files, 50/50 tests passed |
+| `@arkilaunch/db` pooler-independent suites | 7 files, 60/60 tests passed: tenant-isolation, rls-enumeration, audit-log-immutability, after-commit, seed-identities, equipment-type-cleanup and deposit-ledger |
+| Migration 0090 | Applied cleanly after migrations 0001-0089 |
+
+Commit `003d252` made the adversarial fixture's rental/unit selection deterministic and valid for its report dates; every assertion stayed unchanged.
+
+Pre-merge reviews: tenant isolation PASS; migration/RLS PASS; restraint PASS, with the shared `reason` field and redundant guard removal applied; abuse review PASS after the fixture correction. Extraction/reconciliation review is not applicable because those production paths were unchanged.
