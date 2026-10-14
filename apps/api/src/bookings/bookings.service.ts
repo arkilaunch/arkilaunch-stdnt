@@ -432,6 +432,17 @@ export class BookingsService {
         .from(bookingChangeRequests)
         .where(eq(bookingChangeRequests.rentalId, id))
         .orderBy(desc(bookingChangeRequests.createdAt));
+      const suggestions = new Map<string, number | null>();
+      for (const request of changeRows) {
+        if (request.status !== 'pending' || request.kind !== 'extend' || !request.requestedEnd) continue;
+        const newEnd = request.requestedEnd;
+        const extended = assignmentRows.map(({ assignment }) => assignment)
+          .filter((assignment) => ['scheduled', 'active'].includes(assignment.status) &&
+            (!request.assignmentId || assignment.id === request.assignmentId) && newEnd > (assignment.end ?? assignment.start))
+          .map((assignment) => ({ assignmentId: assignment.id, equipmentId: assignment.equipmentId, fromEnd: assignment.end ?? assignment.start, newEnd }));
+        const charge = await this.extensionCharge(tx, ctx.tenantId, id, extended);
+        suggestions.set(request.id, charge.suggestion);
+      }
 
       return {
         id: rental.id,
@@ -462,7 +473,7 @@ export class BookingsService {
           requestedEnd: row.requestedEnd,
           reason: row.reason,
           status: row.status,
-          suggestedChargePhp: null,
+          suggestedChargePhp: suggestions.get(row.id) ?? null,
           chargePhp: row.chargePhp !== null ? Number(row.chargePhp) : null,
           invoiceId: row.invoiceId,
           createdAt: row.createdAt,
