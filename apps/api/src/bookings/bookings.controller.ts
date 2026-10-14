@@ -5,6 +5,7 @@ import { BookingsService } from './bookings.service.js';
 import {
   BookingCreateDto,
   BookingDeliverDto,
+  BookingReturnDto,
   BookingListQueryDto,
   ChangeRequestCreateDto,
   ChangeRequestResolveDto,
@@ -60,8 +61,8 @@ export class BookingsController {
 
   @Post(':id/return')
   @RequirePermission('site:manage')
-  markReturned(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.bookings.markReturned(req.ctx, id);
+  markReturned(@Param('id') id: string, @Body() body: BookingReturnDto, @Req() req: CtxRequest) {
+    return this.bookings.markReturned(req.ctx, id, body);
   }
 
   @Get(':id/reschedule-suggestion')

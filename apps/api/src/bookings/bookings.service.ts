@@ -28,6 +28,7 @@ import type {
   NegotiationMessageResponse,
   BookingCreateRequest,
   BookingDeliverRequest,
+  BookingReturnRequest,
   BookingListQuery,
   BookingCreateResponse,
   BookingDetailResponse,
@@ -59,7 +60,7 @@ import {
   overlappingAssignments,
 } from '../common/equipment-availability.js';
 import { ownCustomers, ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
-import { loadFieldLogs } from '../common/field-logs.js';
+import { loadFieldLogs, requireCompleteReturnLogs } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
 import { buildEdtrSheetContext, isAssignedToSite } from '../common/edtr-sheet-context.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
@@ -687,14 +688,20 @@ export class BookingsService {
   }
 
   // The deposit refund stays a manual PayMongo step, after field-log deductions settle.
-  async markReturned(ctx: RequestContext, id: string) {
+  async markReturned(ctx: RequestContext, id: string, body: BookingReturnRequest = {}) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
+      const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+      rental.status = locked!.status;
       if (rental.status !== 'active') throw new ConflictException({ error: 'booking_not_on_site', status: rental.status });
       const assignments = await tx
         .select()
         .from(equipmentAssignments)
         .where(and(eq(equipmentAssignments.rentalId, id), eq(equipmentAssignments.status, 'active')));
+      await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, {
+        confirmIncompleteLogs: body.confirmIncompleteLogs,
+        reason: body.incompleteLogsReason,
+      });
       const now = new Date();
       if (assignments.length > 0) {
         await tx

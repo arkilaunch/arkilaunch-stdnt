@@ -1,6 +1,8 @@
+import { ConflictException } from '@nestjs/common';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
   type Tx,
+  auditLogs,
   depositAccruals,
   edtr,
   edtrLineItems,
@@ -28,6 +30,7 @@ import {
   type FieldLogTotals,
   type FieldLogUnit,
   type ReportSpan,
+  type RequestContext,
 } from '@arkilaunch/shared';
 
 
@@ -97,6 +100,39 @@ export interface LoadedFieldLogs {
   days: FieldLogDay[];
   totals: FieldLogTotals;
   billedPhp: number;
+}
+
+// Both return paths require the same complete record before closing the assignment.
+export async function requireCompleteReturnLogs(
+  tx: Tx,
+  ctx: RequestContext,
+  rentalId: string,
+  equipmentIds: string[],
+  entityId: string,
+  body: { confirmIncompleteLogs?: boolean | undefined; reason?: string | undefined },
+) {
+  if (equipmentIds.length === 0) return;
+  const today = manilaDate(new Date());
+  const logs = await loadFieldLogs(tx, [rentalId], today);
+  const open = logs.days.filter((day) => equipmentIds.includes(day.equipmentId) && day.date < today &&
+    ['missing', 'pending', 'needs_correction'].includes(day.status));
+  if (open.length > 0 && (!body.confirmIncompleteLogs || !body.reason?.trim())) {
+    throw new ConflictException({
+      error: 'field_logs_incomplete',
+      missing: open.filter((day) => day.status === 'missing').map((day) => day.date),
+      pending: open.filter((day) => day.status !== 'missing').map((day) => day.date),
+    });
+  }
+  if (open.length > 0) {
+    await tx.insert(auditLogs).values({
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      action: 'UPDATE',
+      entity: 'return_with_incomplete_field_logs',
+      entityId,
+      reason: `${body.reason!.trim()} (open days: ${open.map((day) => day.date).join(', ')})`.slice(0, 2000),
+    });
+  }
 }
 
 export async function loadFieldLogs(tx: Tx, rentalIds: string[], today = manilaDate(new Date())): Promise<LoadedFieldLogs> {

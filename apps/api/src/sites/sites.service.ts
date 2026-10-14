@@ -14,7 +14,6 @@ import {
   withTenantTx,
 } from '@arkilaunch/db';
 import {
-  manilaDate,
   onLuzonMainland,
   severityMessage,
   WEATHER_STALE_AFTER_MINUTES,
@@ -44,7 +43,7 @@ import {
   findAvailableAlternatives,
 } from '../common/equipment-availability.js';
 import { countRows } from '../common/count-rows.js';
-import { loadFieldLogs } from '../common/field-logs.js';
+import { requireCompleteReturnLogs } from '../common/field-logs.js';
 import { latestEquipmentWeather } from '../common/equipment-weather.js';
 
 // Caps the active-alert rows scanned before the per-site dedupe.
@@ -501,32 +500,7 @@ export class SitesService {
         throw new ConflictException({ error: 'already_returned' });
       }
 
-      // Unapproved days before today would close billing on an incomplete record; today's sheet may not be in yet.
-      const today = manilaDate(new Date());
-      const logs = await loadFieldLogs(tx, [rental.id], today);
-      const open = logs.days.filter(
-        (d) =>
-          d.equipmentId === assignment.equipmentId &&
-          d.date < today &&
-          ['missing', 'pending', 'needs_correction'].includes(d.status),
-      );
-      if (open.length > 0 && !body.confirmIncompleteLogs) {
-        throw new ConflictException({
-          error: 'field_logs_incomplete',
-          missing: open.filter((d) => d.status === 'missing').map((d) => d.date),
-          pending: open.filter((d) => d.status !== 'missing').map((d) => d.date),
-        });
-      }
-      if (open.length > 0) {
-        await tx.insert(auditLogs).values({
-          tenantId: ctx.tenantId,
-          actorId: ctx.userId,
-          action: 'UPDATE',
-          entity: 'return_with_incomplete_field_logs',
-          entityId: assignmentId,
-          reason: `${body.reason ?? ''} (open days: ${open.map((d) => d.date).join(', ')})`.slice(0, 2000),
-        });
-      }
+      await requireCompleteReturnLogs(tx, ctx, rental.id, [assignment.equipmentId], assignmentId, body);
 
       await tx
         .update(equipmentAssignments)
