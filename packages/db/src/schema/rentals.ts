@@ -1,4 +1,5 @@
 import {
+  boolean,
   check,
   index,
   integer,
@@ -18,6 +19,7 @@ import { addresses, customers } from './customers.js';
 import { equipment, equipmentTypes, rateCards } from './fleet.js';
 import { dieselPriceReadings, pricingParameters } from './pricing.js';
 import { truckRequests } from './trucks.js';
+import { invoices } from './billing.js';
 
 export const projectSites = pgTable(
   'project_sites',
@@ -220,10 +222,13 @@ export const equipmentAssignments = pgTable(
     operatorName: text('operator_name'),
     selectedOptions: jsonb('selected_options').$type<Record<string, string>>().notNull().default({}),
     bookedHours: numeric('booked_hours', { precision: 10, scale: 2 }),
+    returnConditionNotes: text('return_condition_notes'),
+    returnNeedsRepair: boolean('return_needs_repair').notNull().default(false),
   },
   (table) => [tenantIsolationPolicy(),
     index('equipment_assignments_tenant_id_idx').on(table.tenantId),
     index('equipment_assignments_operator_user_id_idx').on(table.operatorUserId),
+    check('equipment_assignments_return_condition_notes_len_chk', sql`${table.returnConditionNotes} IS NULL OR char_length(${table.returnConditionNotes}) <= 2000`),
   ],
 );
 
@@ -290,6 +295,8 @@ export const bookingChangeRequests = pgTable(
       .notNull()
       .references(() => users.id),
     resolvedBy: uuid('resolved_by').references(() => users.id),
+    chargePhp: numeric('charge_php', { precision: 14, scale: 2 }),
+    invoiceId: uuid('invoice_id').references((): AnyPgColumn => invoices.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   },
@@ -300,6 +307,7 @@ export const bookingChangeRequests = pgTable(
     check('booking_change_requests_kind_chk', sql`${t.kind} IN ('extend', 'cancel')`),
     check('booking_change_requests_status_chk', sql`${t.status} IN ('pending', 'approved', 'rejected')`),
     check('booking_change_requests_extend_end_chk', sql`${t.kind} <> 'extend' OR ${t.requestedEnd} IS NOT NULL`),
+    check('booking_change_requests_charge_nonneg_chk', sql`${t.chargePhp} IS NULL OR ${t.chargePhp} >= 0`),
   ],
 );
 
