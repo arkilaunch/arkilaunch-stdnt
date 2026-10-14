@@ -30,12 +30,24 @@ describe('AI / OCR adversarial evals (SDD §8.1 AI-01..AI-06)', () => {
     const [tenant] = await sql`select id from tenants where slug = 'test-tenant-a'`;
     const tenantId = (tenant as { id: string }).id;
     const [admin] = await sql`select id from users where tenant_id = ${tenantId} and email = 'admin@test-tenant-a.test'`;
-    const [rental] = await sql`select id from rentals where tenant_id = ${tenantId} limit 1`;
-    const [equipment] = await sql`select id from equipment where tenant_id = ${tenantId} limit 1`;
-    const [customer] = await sql`select id from customers where tenant_id = ${tenantId} and company_name like 'test-tenant-% Customer Co.' order by created_at limit 1`;
+    // The seeded open rental has no assignments; assigned rentals need a linked unit covering the fixed report dates.
+    const [pair] = await sql`
+      select r.id as rental_id, e.id as equipment_id
+      from rentals r
+      left join equipment_assignments ea on ea.rental_id = r.id and ea.tenant_id = r.tenant_id and ea.status <> 'cancelled'
+      join equipment e on e.tenant_id = r.tenant_id and (e.id = ea.equipment_id or ea.id is null)
+      where r.tenant_id = ${tenantId}
+        and (coalesce(ea.start, r.start_date) at time zone 'Asia/Manila')::date <= '2021-04-01'::date
+        and (case when ea.id is null then r.end_date else ea."end" end is null or
+          (case when ea.id is null then r.end_date else ea."end" end at time zone 'Asia/Manila')::date >= '2021-04-03'::date)
+      order by r.created_at, r.id, e.id, ea.id
+      limit 1
+    `;
+    if (!pair) throw new Error('A rental and unit covering the fixture report dates are required');
+    const [customer] = await sql`select id from customers where tenant_id = ${tenantId} and company_name like 'test-tenant-% Customer Co.' order by created_at, id limit 1`;
     ctx = { tenantId, userId: (admin as { id: string }).id, role: 'admin' };
-    rentalId = (rental as { id: string }).id;
-    equipmentId = (equipment as { id: string }).id;
+    rentalId = (pair as { rental_id: string; equipment_id: string }).rental_id;
+    equipmentId = (pair as { rental_id: string; equipment_id: string }).equipment_id;
     customerId = (customer as { id: string }).id;
     await sql.end();
     await ensurePaidDeposit(ctx, rentalId);
