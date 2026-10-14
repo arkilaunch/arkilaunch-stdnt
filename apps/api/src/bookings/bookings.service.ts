@@ -720,6 +720,7 @@ export class BookingsService {
       });
       const now = new Date();
       if (assignments.length > 0) {
+        const repairIds = [...new Set(assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId))];
         await tx.select({ id: equipment.id }).from(equipment)
           .where(inArray(equipment.id, assignments.map((a) => a.equipmentId))).for('update');
         for (const assignment of assignments) {
@@ -729,7 +730,7 @@ export class BookingsService {
             returnConditionNotes: unit?.conditionNotes?.trim() || null,
             returnNeedsRepair: unit?.needsRepair ?? false,
           }).where(eq(equipmentAssignments.id, assignment.id));
-          await tx.update(equipment).set({ availabilityStatus: unit?.needsRepair ? 'maintenance' : 'available' })
+          await tx.update(equipment).set({ availabilityStatus: repairIds.includes(assignment.equipmentId) ? 'maintenance' : 'available' })
             .where(eq(equipment.id, assignment.equipmentId));
           if (unit?.needsRepair) {
             await tx.insert(auditLogs).values({
@@ -738,7 +739,6 @@ export class BookingsService {
             });
           }
         }
-        const repairIds = assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId);
         if (repairIds.length > 0) {
           await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: id, equipment_ids: repairIds });
         }
