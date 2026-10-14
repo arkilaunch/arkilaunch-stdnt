@@ -1,10 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BookingDetailResponse, RescheduleSuggestion } from '@arkilaunch/shared';
-import { localPhMobile } from '@arkilaunch/shared';
+import type { BookingDetailResponse, ChangeRequestResolve, RescheduleSuggestion } from '@arkilaunch/shared';
+import { ChangeRequestResolveSchema, localPhMobile } from '@arkilaunch/shared';
 import { bookingsQueries, sitesQueries } from '../lib/queries.js';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { apiErrorText, apiGet, apiPatch, apiPost, payloadField } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatPeso, formatStatus } from '../lib/format.js';
 import { Container } from './container.js';
 import { Alert } from './alert.js';
@@ -19,23 +19,42 @@ import { OfficePaymentButton } from './office-payment.js';
 import { useToast } from './toast.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
-function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
+export function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const [charge, setCharge] = useState('');
+  const [chargeReason, setChargeReason] = useState('');
+  const [chargeError, setChargeError] = useState<string>();
+  const [reasonError, setReasonError] = useState<string>();
   const resolve = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
-      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, { decision }),
-    onSuccess: async (_data, { decision }) => {
+    mutationFn: ({ id, body }: { id: string; body: ChangeRequestResolve }) =>
+      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
+    onSuccess: async (_data, { body: { decision } }) => {
       setAsk(null);
       await queryClient.invalidateQueries({ queryKey: ['booking', booking.id] });
       toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
     },
     onError: (err) => {
-      setAsk(null);
+      if (payloadField(err, 'error') === 'extension_charge_required') {
+        setChargeError('Enter the extra charge.');
+        return;
+      }
+      if (payloadField(err, 'error') === 'charge_reason_required') {
+        setReasonError('Explain why the charge differs from the suggestion.');
+        return;
+      }
       toast.error('Could not resolve the request', apiErrorText(err));
     },
   });
   const [ask, setAsk] = useState<{ request: BookingDetailResponse['changeRequests'][number]; decision: 'approved' | 'rejected' } | null>(null);
+  const needsReason = ask?.request.kind === 'extend' && Number(charge) !== ask.request.suggestedChargePhp;
+  function openRequest(request: BookingDetailResponse['changeRequests'][number], decision: 'approved' | 'rejected') {
+    setCharge(request.suggestedChargePhp === null ? '' : String(request.suggestedChargePhp));
+    setChargeReason('');
+    setChargeError(undefined);
+    setReasonError(undefined);
+    setAsk({ request, decision });
+  }
 
   return (
     <Container header={{ title: 'Change requests' }}>
@@ -52,10 +71,10 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
           {request.reason && <p className="text-sm text-text-muted">{request.reason}</p>}
           {request.status === 'pending' && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="approve" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'approved' })}>
+              <Button variant="approve" disabled={resolve.isPending} onClick={() => openRequest(request, 'approved')}>
                 Approve
               </Button>
-              <Button variant="secondary" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'rejected' })}>
+              <Button variant="secondary" disabled={resolve.isPending} onClick={() => openRequest(request, 'rejected')}>
                 Decline
               </Button>
             </div>
@@ -78,14 +97,35 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
         body={
           ask?.decision === 'approved'
             ? ask.request.kind === 'extend'
-              ? `${booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to ${formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.`
+              ? <div className="flex flex-col gap-4">
+                  <p>{booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to {formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.</p>
+                  <Input label="Extra charge (PHP)" type="number" numeric min={0} step="0.01" required value={charge}
+                    hint={ask.request.suggestedChargePhp === null ? 'No suggested charge is available. Enter an amount.' : `Suggested: ${formatPeso(ask.request.suggestedChargePhp)}`}
+                    error={chargeError} onChange={(e) => { setCharge(e.target.value); setChargeError(undefined); }} />
+                  {(needsReason || reasonError) && <Input label="Reason for change" required maxLength={500} value={chargeReason} error={reasonError}
+                    onChange={(e) => { setChargeReason(e.target.value); setReasonError(undefined); }} />}
+                </div>
               : 'The booking is cancelled for good. The customer is notified.'
             : 'The booking stays as it is. The customer is notified that you declined.'
         }
         confirmLabel={ask?.decision === 'approved' ? 'Approve' : 'Decline'}
         pending={resolve.isPending}
         onConfirm={() => {
-          if (ask) resolve.mutate({ id: ask.request.id, decision: ask.decision });
+          if (!ask) return;
+          const extension = ask.decision === 'approved' && ask.request.kind === 'extend';
+          const body = ChangeRequestResolveSchema.safeParse({ decision: ask.decision,
+            ...(extension ? { chargePhp: charge.trim() ? Number(charge) : NaN } : {}),
+            ...(extension && chargeReason.trim() ? { chargeReason: chargeReason.trim() } : {}),
+          });
+          if (!body.success) {
+            setChargeError('Enter a non-negative amount with at most two decimal places.');
+            return;
+          }
+          if (extension && needsReason && !chargeReason.trim()) {
+            setReasonError('Explain why the charge differs from the suggestion.');
+            return;
+          }
+          resolve.mutate({ id: ask.request.id, body: body.data });
         }}
         onCancel={() => setAsk(null)}
       />
