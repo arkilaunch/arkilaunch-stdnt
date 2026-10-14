@@ -54,29 +54,36 @@ The customer receives the existing `change_request_resolved` notification with t
 
 ## 5. Verification
 
-Checks run on 2026-10-15 after the review fixes, before the browser QA follow-up below:
+Final pre-merge evidence recorded on 2026-10-15 for code head `89c3b2e`:
 
 | Check | Result |
 |---|---|
 | `pnpm lint` | Passed; two existing unused-variable warnings in `app.inventory.tsx` |
-| `pnpm typecheck` | Passed; API typecheck also passed after the redundant guard removal |
-| `pnpm build` | Passed across the workspace, including API build with zero TSC issues |
-| `pnpm --filter @arkilaunch/shared test` | 34 files, 395 tests passed |
-| `pnpm --filter @arkilaunch/web test --maxWorkers=2 --testTimeout=15000` | 90 files, 556 tests passed |
+| `pnpm typecheck` | Passed after the final web fixes |
+| Build checks | Workspace build passed during implementation; API build passed after the charge fixes with zero TSC issues |
+| `pnpm --filter @arkilaunch/shared test` | 34 files, 395/395 tests passed after the charge fixes |
+| `pnpm --filter @arkilaunch/web test --maxWorkers=2 --testTimeout=15000` | 90 files, 559/559 tests passed after the final web fixes |
 
-The initial default-concurrency web run passed 555/556 tests and timed out on an existing cart case at five seconds; the complete retry above passed, including the changed booking-actions tests. DB-backed specs add assertions for overdue eligibility immediately after issuing an extension invoice and extra booked hours on a free extension, alongside the extension, return, repair and cross-tenant cases.
-
-Pre-merge DB-backed verification at `003d252` used a fresh local PostgreSQL 17 database, applying migrations and `db:seed:test` through the same steps as the CI `api-integration-suite` job:
+DB-backed verification at `e19cd01` used a fresh local PostgreSQL 17 database with migrations and `db:seed:test`, following the CI `api-integration-suite` steps. The subsequent commits `6fb2521` and `89c3b2e` changed only the web application.
 
 | Suite | Result |
 |---|---|
-| `pnpm --filter @arkilaunch/api test` | 58 files, 390/390 tests passed |
+| `pnpm --filter @arkilaunch/api test` | 58 files, 391/391 tests passed |
 | `pnpm --filter @arkilaunch/jobs test` | 7 files, 50/50 tests passed |
 | `@arkilaunch/db` pooler-independent suites | 7 files, 60/60 tests passed: tenant-isolation, rls-enumeration, audit-log-immutability, after-commit, seed-identities, equipment-type-cleanup and deposit-ledger |
 | Migration 0090 | Applied cleanly after migrations 0001-0089 |
 
+Browser QA used the local API and web application against a seeded local database with all external services disabled, exercising customer and admin roles:
+
+- The customer booked, accepted the quote, paid and received deployment, then requested a three-day extension for one unit.
+- The approval dialog suggested PHP 20,400 (PHP 850/hour × 8 hours × 3 days). An override to PHP 18,000 required a reason stored in the approval audit. An issued extension invoice for PHP 18,000 was due in seven days. The extended unit's end date and booked hours changed from 24 to 48; the other unit stayed unchanged. The balance refreshed without a reload.
+- Returning the booking stored per-unit condition notes and completed the booking. The flagged unit used `maintenance`, displayed as Unavailable (repair), and the other unit became available. The repair audit and Equipment sent for repair staff notification appeared; no `deposit_deduction` invoice was created.
+- The customer catalog hid the repaired unit, and the customer ledger displayed Rental extension · Issued PHP 18,000.
+
+The charge QA fixes include accepted quotations in deterministic suggestion selection and require a reason only when overriding an existing suggestion; no suggestion requires an amount but permits an optional reason.
+
+The web QA fixes refresh both staff/customer statement caches after request resolution and put inventory names and status badges on separate rows; desktop and mobile header checks passed.
+
 Commit `003d252` made the adversarial fixture's rental/unit selection deterministic and valid for its report dates; every assertion stayed unchanged.
 
-Pre-merge reviews: tenant isolation PASS; migration/RLS PASS; restraint PASS, with the shared `reason` field and redundant guard removal applied; abuse review PASS after the fixture correction. Extraction/reconciliation review is not applicable because those production paths were unchanged.
-
-Browser QA follow-up on 2026-10-15 includes accepted quotations in extension pricing and makes the reason optional when there is no suggestion. Regression specs now cover quote acceptance, payment and deployment before the extension, and explicit zero/positive amounts without a suggestion or reason. Follow-up checks passed: repository lint and typecheck, 395 shared tests, 557 web tests across 90 files with two workers and a 15-second timeout, and API build with zero TSC issues. DB-backed re-verification of this follow-up remains pending.
+Pre-merge reviews: tenant isolation PASS; migration/RLS PASS; restraint PASS with notes applied; abuse review PASS. Extraction/reconciliation review is not applicable because those production paths were unchanged.
