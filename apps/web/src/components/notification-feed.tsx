@@ -82,6 +82,12 @@ function describeForStaff(type: string, p: Record<string, unknown>): Described |
   const ref = typeof p.booking_code === 'string' ? p.booking_code : 'a booking';
   const trip = typeof p.truck_request_id === 'string';
   switch (type) {
+    case 'equipment_needs_repair':
+      return {
+        title: 'Equipment sent for repair',
+        body: 'Returned equipment was marked unavailable for repair. Check its condition notes in the booking.',
+        action: staffBooking(p),
+      };
     case 'support_ticket_created':
       return { title: 'New support ticket', body: `Ticket #${String(p.ticket_code ?? '')} was submitted.`, action: { label: 'Open tickets', to: '/app/tickets', params: {} } };
     case 'booking_requested':
