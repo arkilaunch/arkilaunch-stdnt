@@ -18,7 +18,7 @@ import { ConfirmDialog } from '../components/confirm-dialog.js';
 import { useToast } from '../components/toast.js';
 import { MyEquipmentWeather } from '../components/equipment-weather.js';
 import { apiErrorText, apiPatch, apiPost } from '../lib/api-client.js';
-import { formatDate, formatDateTime, formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { formatDate, formatDateTime, formatInvoiceType, formatPeso, formatStatus, shortCode } from '../lib/format.js';
 
 const STATUS_TONES: Record<string, StatusTone> = {
   confirmed: 'recon-approved',
@@ -364,7 +364,7 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
             className="flex items-center justify-between gap-3 text-sm underline"
           >
             <span className="text-text-muted">
-              {formatStatus(invoice.invoiceType)} &middot; {formatStatus(invoice.status)}
+              {formatInvoiceType(invoice.invoiceType)} &middot; {formatStatus(invoice.status)}
             </span>
             <span className="font-mono text-text">{formatPeso(invoice.amount)}</span>
           </Link>

@@ -111,7 +111,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             />
             <SummaryRow label="Due" value={formatDate(invoice.dueDate)} />
           </div>
-          {invoice.invoiceType === 'weekly' && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
+          {['weekly', 'extension'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
         </Surface>
 
         <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
