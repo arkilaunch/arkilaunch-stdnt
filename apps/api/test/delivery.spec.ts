@@ -5,6 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   equipment,
   auditLogs,
+  customerTier,
   equipmentAssignments,
   notifications,
   getBillingSettings,
@@ -249,6 +250,9 @@ describe('Delivery, return and staff alerts', () => {
     const balanceBefore = (await billing.statement(customerCtx, booking.id)).totals.balanceDue;
     expect((await bookings.get(adminCtx, booking.id)).changeRequests[0]?.suggestedChargePhp).toBe(expected);
     await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' });
+    const tier = await withTenantTx(adminCtx, (tx) => customerTier(tx, adminCtx.tenantId, booking.customerId));
+    expect(tier.hasOverdue).toBe(false);
+    expect(tier.eligible).toBe(true);
     const after = await bookings.get(customerCtx, booking.id);
     const charge = after.changeRequests.find((row) => row.id === request.id)!;
     expect(charge).toMatchObject({ chargePhp: expected, status: 'approved', suggestedChargePhp: null });

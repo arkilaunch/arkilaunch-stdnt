@@ -841,7 +841,7 @@ export class BookingsService {
               invoiceType: 'extension',
               amount: chargePhp.toFixed(2),
               status: 'issued',
-              dueDate: new Date(),
+              dueDate: new Date(Date.now() + 7 * 86_400_000),
             }).returning({ id: invoices.id });
             if (!invoice) throw new Error('extension invoice insert returned no row');
             invoiceId = invoice.id;
