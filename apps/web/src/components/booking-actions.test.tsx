@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BookingDetailResponse } from '@arkilaunch/shared';
 import { ToastProvider } from './toast.js';
-import { PendingRequests } from './booking-actions.js';
+import { DeliveryCard, PendingRequests } from './booking-actions.js';
 
 const assignmentId = '66666666-6666-4666-8666-666666666666';
 const booking: BookingDetailResponse = {
@@ -62,5 +62,39 @@ describe('extension approval', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
     expect(await within(dialog).findByText('Enter the extra charge.')).toBeInTheDocument();
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+});
+
+describe('booking return', () => {
+  it('keeps per-unit conditions through the incomplete-log gate and requires confirmation with a reason', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('{"error":"field_logs_incomplete"}', { status: 409 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetcher);
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <ToastProvider><DeliveryCard booking={{ ...booking, items: [...booking.items, {
+        ...booking.items[0]!, id: '77777777-7777-4777-8777-777777777777', equipmentName: 'Returned unit', status: 'completed',
+      }] }} /></ToastProvider>
+    </QueryClientProvider>);
+    await userEvent.click(screen.getByRole('button', { name: 'Mark returned' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).queryByText('Returned unit')).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText('Condition notes'), ' Track needs inspection ');
+    await userEvent.click(within(dialog).getByLabelText('Needs repair (mark unavailable)'));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
+    await within(dialog).findByText(/Field logs are incomplete/);
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1].body))).toEqual({
+      units: [{ assignmentId, conditionNotes: 'Track needs inspection', needsRepair: true }],
+    });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await userEvent.click(within(dialog).getByLabelText('Confirm return with incomplete field logs'));
+    await userEvent.type(within(dialog).getByLabelText(/Reason for returning/), 'Paper logs will follow');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1].body))).toEqual({
+      units: [{ assignmentId, conditionNotes: 'Track needs inspection', needsRepair: true }],
+      confirmIncompleteLogs: true, incompleteLogsReason: 'Paper logs will follow',
+    });
   });
 });
