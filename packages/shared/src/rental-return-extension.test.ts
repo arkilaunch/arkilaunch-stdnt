@@ -31,11 +31,11 @@ describe('rental return requests', () => {
   });
   it('requires a meaningful reason when incomplete logs are confirmed in either return path', () => {
     for (const reason of [undefined, '', '  ', 'ab']) {
-      expect(BookingReturnRequestSchema.safeParse({ confirmIncompleteLogs: true, incompleteLogsReason: reason }).success).toBe(false);
+      expect(BookingReturnRequestSchema.safeParse({ confirmIncompleteLogs: true, reason: reason }).success).toBe(false);
       expect(DeploymentReturnSchema.safeParse({ confirmIncompleteLogs: true, reason }).success).toBe(false);
     }
-    expect(BookingReturnRequestSchema.parse({ confirmIncompleteLogs: true, incompleteLogsReason: ' Missing paper ' }))
-      .toMatchObject({ incompleteLogsReason: 'Missing paper' });
+    expect(BookingReturnRequestSchema.parse({ confirmIncompleteLogs: true, reason: ' Missing paper ' }))
+      .toMatchObject({ reason: 'Missing paper' });
     expect(DeploymentReturnSchema.parse({ confirmIncompleteLogs: true, reason: ' Missing paper ' }))
       .toMatchObject({ reason: 'Missing paper' });
   });

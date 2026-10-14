@@ -277,7 +277,7 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const [units, setUnits] = useState<Record<string, { conditionNotes: string; needsRepair: boolean }>>({});
   const [incomplete, setIncomplete] = useState(false);
   const [confirmIncompleteLogs, setConfirmIncompleteLogs] = useState(false);
-  const [incompleteLogsReason, setIncompleteLogsReason] = useState('');
+  const [reason, setReason] = useState('');
   const [returnError, setReturnError] = useState<string>();
   const activeUnits = booking.items.filter((item) => item.status === 'active');
   const move = useMutation({
@@ -291,7 +291,7 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
             }
           : BookingReturnRequestSchema.parse({
               units: activeUnits.map((item) => ({ assignmentId: item.id, ...units[item.id] })),
-              ...(incomplete ? { confirmIncompleteLogs, incompleteLogsReason } : {}),
+              ...(incomplete ? { confirmIncompleteLogs, reason } : {}),
             }),
       ),
     onSuccess: (_data, step) => {
@@ -323,7 +323,7 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
         {deliver ? 'Paid. Deploy once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
       </p>
       <Button variant="primary" onClick={() => {
-        setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setIncompleteLogsReason('');
+        setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setReason('');
         setReturnError(undefined); setAsking(true);
       }}>
         {deliver ? 'Deploy now' : 'Mark returned'}
@@ -386,9 +386,9 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
                     onChange={(e) => { setConfirmIncompleteLogs(e.target.checked); setReturnError(undefined); }} />
                   Confirm return with incomplete field logs
                 </label>
-                <Input label="Reason for returning with incomplete logs" required maxLength={500} value={incompleteLogsReason}
+                <Input label="Reason for returning with incomplete logs" required maxLength={500} value={reason}
                   error={returnError} id={`return-reason-${booking.id}`}
-                  onChange={(e) => { setIncompleteLogsReason(e.target.value); setReturnError(undefined); }} />
+                  onChange={(e) => { setReason(e.target.value); setReturnError(undefined); }} />
               </div>}
             </div>
           )
@@ -396,7 +396,7 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
         confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
         onConfirm={() => {
-          if (!deliver && incomplete && (!confirmIncompleteLogs || incompleteLogsReason.trim().length < 3)) {
+          if (!deliver && incomplete && (!confirmIncompleteLogs || reason.trim().length < 3)) {
             setReturnError('Confirm the return and enter a reason of at least 3 characters.');
             return;
           }

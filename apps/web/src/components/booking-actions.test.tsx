@@ -112,7 +112,7 @@ describe('booking return', () => {
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
     expect(JSON.parse(String(fetcher.mock.calls[1]![1].body))).toEqual({
       units: [{ assignmentId, conditionNotes: 'Track needs inspection', needsRepair: true }],
-      confirmIncompleteLogs: true, incompleteLogsReason: 'Paper logs will follow',
+      confirmIncompleteLogs: true, reason: 'Paper logs will follow',
     });
   });
 });

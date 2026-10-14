@@ -714,10 +714,7 @@ export class BookingsService {
       if (details.size !== (body.units?.length ?? 0) || (body.units ?? []).some((unit) => !assignments.some((a) => a.id === unit.assignmentId))) {
         throw new UnprocessableEntityException({ error: 'booking_unit_not_found' });
       }
-      await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, {
-        confirmIncompleteLogs: body.confirmIncompleteLogs,
-        reason: body.incompleteLogsReason,
-      });
+      await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, body);
       const now = new Date();
       if (assignments.length > 0) {
         const repairIds = [...new Set(assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId))];

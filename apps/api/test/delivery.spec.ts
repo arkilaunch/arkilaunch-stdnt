@@ -342,7 +342,7 @@ describe('Delivery, return and staff alerts', () => {
       expect((await bookings.get(adminCtx, booking.id)).status).toBe('active');
       await bookings.markReturned(adminCtx, booking.id, {
         units: [{ assignmentId: assignment.id, conditionNotes: 'Hydraulic leak', needsRepair: true }],
-        confirmIncompleteLogs: true, incompleteLogsReason: 'Paper logs still at site',
+        confirmIncompleteLogs: true, reason: 'Paper logs still at site',
       });
       const after = await bookings.get(adminCtx, booking.id);
       expect(after.status).toBe('completed');

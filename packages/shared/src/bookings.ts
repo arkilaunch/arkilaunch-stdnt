@@ -360,10 +360,10 @@ export const BookingReturnRequestSchema = z
       needsRepair: z.boolean().optional(),
     })).optional(),
     confirmIncompleteLogs: z.boolean().optional(),
-    incompleteLogsReason: z.string().trim().min(3).max(500).optional(),
+    reason: z.string().trim().min(3).max(500).optional(),
   })
-  .refine((b) => !b.confirmIncompleteLogs || !!b.incompleteLogsReason, {
-    message: 'a reason is required', path: ['incompleteLogsReason'],
+  .refine((b) => !b.confirmIncompleteLogs || !!b.reason, {
+    message: 'a reason is required', path: ['reason'],
   });
 export type BookingReturnRequest = z.infer<typeof BookingReturnRequestSchema>;
 
