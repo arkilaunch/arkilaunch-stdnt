@@ -22,13 +22,29 @@ const booking: BookingDetailResponse = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function renderRequests(data = booking) {
-  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+function renderRequests(data = booking, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  render(<QueryClientProvider client={client}>
     <ToastProvider><PendingRequests booking={data} /></ToastProvider>
   </QueryClientProvider>);
 }
 
 describe('extension approval', () => {
+  it.each(['Approve', 'Decline'])('refreshes both booking ledgers after %s without invalidating another rental', async (decision) => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('{}', { status: 200 }))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const keys = [['booking', booking.id], ['statement', 'staff', booking.id], ['statement', 'me', booking.id]];
+    for (const key of keys) client.setQueryData(key, { balanceDue: 0 });
+    const unrelated = ['statement', 'staff', 'another-rental'];
+    client.setQueryData(unrelated, { balanceDue: 0 });
+    renderRequests(booking, client);
+    await userEvent.click(screen.getByRole('button', { name: decision }));
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: decision }));
+    await waitFor(() => {
+      for (const key of keys) expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    });
+    expect(client.getQueryState(unrelated)?.isInvalidated).toBe(false);
+  });
+
   it('keeps the reason field usable when the API requires a reason for an unchanged suggestion', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response('{"error":"charge_reason_required"}', { status: 422 }))

@@ -33,7 +33,11 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
       apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
     onSuccess: async (_data, { body: { decision } }) => {
       setAsk(null);
-      await queryClient.invalidateQueries({ queryKey: ['booking', booking.id] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['booking', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'staff', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'me', booking.id] }),
+      ]);
       toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
     },
     onError: (err) => {
