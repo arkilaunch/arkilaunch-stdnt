@@ -908,13 +908,11 @@ export class BookingsService {
     if (assignments.length === 0) throw new ConflictException({ error: 'nothing_to_extend' });
     const extended: { assignmentId: string; equipmentId: string; fromEnd: Date; newEnd: Date }[] = [];
     // Lock the units first, same as create(), so a concurrent booking of the added days serializes.
-    if (assignments.length > 0) {
-      await tx
-        .select()
-        .from(equipment)
-        .where(inArray(equipment.id, assignments.map((assignment) => assignment.equipmentId)))
-        .for('update');
-    }
+    await tx
+      .select()
+      .from(equipment)
+      .where(inArray(equipment.id, assignments.map((assignment) => assignment.equipmentId)))
+      .for('update');
     for (const assignment of assignments) {
       const from = assignment.end ?? assignment.start;
       if (newEnd <= from) continue;
