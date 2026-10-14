@@ -14,7 +14,6 @@ import {
   withTenantTx,
 } from '@arkilaunch/db';
 import {
-  manilaDate,
   onLuzonMainland,
   severityMessage,
   WEATHER_STALE_AFTER_MINUTES,
@@ -44,7 +43,8 @@ import {
   findAvailableAlternatives,
 } from '../common/equipment-availability.js';
 import { countRows } from '../common/count-rows.js';
-import { loadFieldLogs } from '../common/field-logs.js';
+import { requireCompleteReturnLogs } from '../common/field-logs.js';
+import { notifyStaff } from '../common/notify-customer.js';
 import { latestEquipmentWeather } from '../common/equipment-weather.js';
 
 // Caps the active-alert rows scanned before the per-site dedupe.
@@ -482,7 +482,7 @@ export class SitesService {
     body: DeploymentReturnRequest = {},
   ) {
     return withTenantTx(ctx, async (tx) => {
-      const [assignment] = await tx
+      let [assignment] = await tx
         .select()
         .from(equipmentAssignments)
         .where(eq(equipmentAssignments.id, assignmentId))
@@ -493,49 +493,36 @@ export class SitesService {
         .select()
         .from(rentals)
         .where(eq(rentals.id, assignment.rentalId))
-        .limit(1);
+        .limit(1)
+        .for('update');
       if (!rental || rental.projectSiteId !== siteId) {
         throw new NotFoundException({ error: 'deployment_not_found' });
       }
+      [assignment] = await tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, assignmentId)).for('update');
+      if (!assignment) throw new NotFoundException({ error: 'deployment_not_found' });
       if (assignment.status === 'completed' || assignment.status === 'cancelled') {
         throw new ConflictException({ error: 'already_returned' });
       }
 
-      // Unapproved days before today would close billing on an incomplete record; today's sheet may not be in yet.
-      const today = manilaDate(new Date());
-      const logs = await loadFieldLogs(tx, [rental.id], today);
-      const open = logs.days.filter(
-        (d) =>
-          d.equipmentId === assignment.equipmentId &&
-          d.date < today &&
-          ['missing', 'pending', 'needs_correction'].includes(d.status),
-      );
-      if (open.length > 0 && !body.confirmIncompleteLogs) {
-        throw new ConflictException({
-          error: 'field_logs_incomplete',
-          missing: open.filter((d) => d.status === 'missing').map((d) => d.date),
-          pending: open.filter((d) => d.status !== 'missing').map((d) => d.date),
-        });
-      }
-      if (open.length > 0) {
-        await tx.insert(auditLogs).values({
-          tenantId: ctx.tenantId,
-          actorId: ctx.userId,
-          action: 'UPDATE',
-          entity: 'return_with_incomplete_field_logs',
-          entityId: assignmentId,
-          reason: `${body.reason ?? ''} (open days: ${open.map((d) => d.date).join(', ')})`.slice(0, 2000),
-        });
-      }
+      await requireCompleteReturnLogs(tx, ctx, rental.id, [assignment.equipmentId], assignmentId, body);
+
+      await tx.select({ id: equipment.id }).from(equipment).where(eq(equipment.id, assignment.equipmentId)).for('update');
 
       await tx
         .update(equipmentAssignments)
-        .set({ end: new Date(), status: 'completed' })
+        .set({ end: new Date(), status: 'completed', returnConditionNotes: body.conditionNotes?.trim() || null, returnNeedsRepair: body.needsRepair ?? false })
         .where(eq(equipmentAssignments.id, assignmentId));
       await tx
         .update(equipment)
-        .set({ availabilityStatus: 'available' })
+        .set({ availabilityStatus: body.needsRepair ? 'maintenance' : 'available' })
         .where(eq(equipment.id, assignment.equipmentId));
+      if (body.needsRepair) {
+        await tx.insert(auditLogs).values({
+          tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
+          entityId: assignment.equipmentId, reason: 'flagged for repair on return',
+        });
+        await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: rental.id, equipment_ids: [assignment.equipmentId] });
+      }
 
       await tx.insert(auditLogs).values({
         tenantId: ctx.tenantId,

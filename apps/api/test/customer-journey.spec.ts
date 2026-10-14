@@ -228,6 +228,8 @@ describe('Customer journey', () => {
       response: { error: 'cancel_needs_request' },
     });
     const request = await bookings.requestChange(customerCtx, booking.id, { kind: 'cancel' });
+    await expect(bookings.resolveChange(otherTenantCtx, booking.id, request.id, { decision: 'approved' }))
+      .rejects.toMatchObject({ response: { error: 'change_request_not_found' } });
     await expect(bookings.requestChange(customerCtx, booking.id, { kind: 'cancel' })).rejects.toBeInstanceOf(ConflictException);
     await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' });
     const [cancelled] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, booking.id)));

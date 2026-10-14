@@ -30,7 +30,7 @@ import { CalendarX, Check, Truck, Wrench } from 'lucide-react';
 const STATUS_META: Record<string, { tone: StatusTone; label: string; icon: ReactElement }> = {
   available: { tone: 'fleet-available', label: 'Available', icon: <Check className="size-full" /> },
   deployed: { tone: 'fleet-deployed', label: 'Deployed', icon: <Truck className="size-full" /> },
-  maintenance: { tone: 'fleet-maintenance', label: 'In maintenance', icon: <Wrench className="size-full" /> },
+  maintenance: { tone: 'fleet-maintenance', label: 'Unavailable (repair)', icon: <Wrench className="size-full" /> },
 };
 
 // The API orders by category, so a page splits into runs of one category.
@@ -318,8 +318,8 @@ function InventoryPage() {
                     aria-label={eq.serialNo}
                   >
                     <InventoryImage equipment={eq} photo={photo} />
-                    <div className="flex min-w-0 items-start justify-between gap-2 px-5 pt-4">
-                      <div className="min-w-0">
+                    <div className="flex min-w-0 flex-col items-start gap-2 px-5 pt-4">
+                      <div className="min-w-0 w-full">
                         <p className="text-heading-md text-text">{eq.model}</p>
                         <p className="font-mono text-xs tabular-nums text-text-muted">
                           {eq.serialNo}

@@ -90,6 +90,8 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className="text-text-muted">
                 {formatDate(item.start)} – {item.end ? formatDate(item.end) : 'open'}
               </span>
+              {item.returnConditionNotes && <p className="w-full whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
+              {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
             </li>
           ))}
           {booking.items.length === 0 && <li className="text-text-muted">No machines assigned.</li>}

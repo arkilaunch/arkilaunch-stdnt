@@ -16,6 +16,7 @@ const INVOICE_TYPES: Record<string, string> = {
   penalty: 'Penalty',
   adjustment: 'Adjustment',
   booking: 'Rental and deposit',
+  extension: 'Rental extension',
 };
 
 const W = 612;

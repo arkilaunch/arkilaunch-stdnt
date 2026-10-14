@@ -9,6 +9,7 @@ const TRUCK = { truck_request_id: '22222222-2222-4222-8222-222222222222', bookin
 
 const WRITTEN: Record<FeedArea, [string, Record<string, unknown>][]> = {
   app: [
+    ['equipment_needs_repair', { rental_id: RENTAL.rental_id, equipment_ids: ['e1'] }],
     ['booking_requested', RENTAL],
     ['truck_requested', TRUCK],
     ['call_requested', RENTAL],
@@ -80,6 +81,13 @@ function registeredPaths(route: { fullPath?: string; children?: unknown }): stri
   return [...(typeof route.fullPath === 'string' ? [route.fullPath] : []), ...children.flatMap(registeredPaths)];
 }
 const ROUTES = new Set(registeredPaths(routeTree as never));
+
+it('names a repair notification and opens the returned booking', () => {
+  expect(describeNotification('equipment_needs_repair', { rental_id: RENTAL.rental_id, equipment_ids: ['e1'] }, 'app'))
+    .toMatchObject({ title: 'Equipment sent for repair', action: {
+      to: '/app/bookings/$bookingId', params: { bookingId: RENTAL.rental_id },
+    } });
+});
 
 describe('describeNotification: every written type has a destination', () => {
   for (const [area, cases] of Object.entries(WRITTEN) as [FeedArea, [string, Record<string, unknown>][]][]) {

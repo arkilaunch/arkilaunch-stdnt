@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, ne, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
   type Tx,
   addresses,
@@ -16,6 +16,7 @@ import {
   payments,
   projectSites,
   quotations,
+  quotationItems,
   rentals,
   resolveDepositLedger,
   withTenantTx,
@@ -27,6 +28,7 @@ import type {
   NegotiationMessageResponse,
   BookingCreateRequest,
   BookingDeliverRequest,
+  BookingReturnRequest,
   BookingListQuery,
   BookingCreateResponse,
   BookingDetailResponse,
@@ -43,6 +45,7 @@ import {
   minBookingHours,
   minRentalDays,
   selectedOptionsError,
+  round2HalfUp,
 } from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
 import { PaymentsService } from '../payments/payments.service.js';
@@ -57,7 +60,7 @@ import {
   overlappingAssignments,
 } from '../common/equipment-availability.js';
 import { ownCustomers, ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
-import { loadFieldLogs } from '../common/field-logs.js';
+import { loadFieldLogs, requireCompleteReturnLogs } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
 import { buildEdtrSheetContext, isAssignedToSite } from '../common/edtr-sheet-context.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
@@ -429,6 +432,17 @@ export class BookingsService {
         .from(bookingChangeRequests)
         .where(eq(bookingChangeRequests.rentalId, id))
         .orderBy(desc(bookingChangeRequests.createdAt));
+      const suggestions = new Map<string, number | null>();
+      for (const request of changeRows) {
+        if (request.status !== 'pending' || request.kind !== 'extend' || !request.requestedEnd) continue;
+        const newEnd = request.requestedEnd;
+        const extended = assignmentRows.map(({ assignment }) => assignment)
+          .filter((assignment) => ['scheduled', 'active'].includes(assignment.status) &&
+            (!request.assignmentId || assignment.id === request.assignmentId) && newEnd > (assignment.end ?? assignment.start))
+          .map((assignment) => ({ assignmentId: assignment.id, equipmentId: assignment.equipmentId, fromEnd: assignment.end ?? assignment.start, newEnd }));
+        const charge = await this.extensionCharge(tx, ctx.tenantId, id, extended);
+        suggestions.set(request.id, charge.suggestion);
+      }
 
       return {
         id: rental.id,
@@ -459,6 +473,9 @@ export class BookingsService {
           requestedEnd: row.requestedEnd,
           reason: row.reason,
           status: row.status,
+          suggestedChargePhp: suggestions.get(row.id) ?? null,
+          chargePhp: row.chargePhp !== null ? Number(row.chargePhp) : null,
+          invoiceId: row.invoiceId,
           createdAt: row.createdAt,
         })),
         items: assignmentRows.map(({ assignment, typeName, model, serialNo }) => ({
@@ -469,6 +486,8 @@ export class BookingsService {
           end: assignment.end,
           status: assignment.status,
           selectedOptions: assignment.selectedOptions,
+          returnConditionNotes: assignment.returnConditionNotes,
+          returnNeedsRepair: assignment.returnNeedsRepair,
         })),
         quotation: quotation
           ? {
@@ -680,24 +699,46 @@ export class BookingsService {
   }
 
   // The deposit refund stays a manual PayMongo step, after field-log deductions settle.
-  async markReturned(ctx: RequestContext, id: string) {
+  async markReturned(ctx: RequestContext, id: string, body: BookingReturnRequest = {}) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
+      const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+      if (!locked) throw new NotFoundException({ error: 'booking_not_found' });
+      rental.status = locked.status;
       if (rental.status !== 'active') throw new ConflictException({ error: 'booking_not_on_site', status: rental.status });
       const assignments = await tx
         .select()
         .from(equipmentAssignments)
         .where(and(eq(equipmentAssignments.rentalId, id), eq(equipmentAssignments.status, 'active')));
+      const details = new Map((body.units ?? []).map((unit) => [unit.assignmentId, unit]));
+      if (details.size !== (body.units?.length ?? 0) || (body.units ?? []).some((unit) => !assignments.some((a) => a.id === unit.assignmentId))) {
+        throw new UnprocessableEntityException({ error: 'booking_unit_not_found' });
+      }
+      await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, body);
       const now = new Date();
       if (assignments.length > 0) {
-        await tx
-          .update(equipmentAssignments)
-          .set({ status: 'completed', end: now })
-          .where(inArray(equipmentAssignments.id, assignments.map((a) => a.id)));
-        await tx
-          .update(equipment)
-          .set({ availabilityStatus: 'available' })
-          .where(inArray(equipment.id, assignments.map((a) => a.equipmentId)));
+        const repairIds = [...new Set(assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId))];
+        await tx.select({ id: equipment.id }).from(equipment)
+          .where(inArray(equipment.id, assignments.map((a) => a.equipmentId))).for('update');
+        for (const assignment of assignments) {
+          const unit = details.get(assignment.id);
+          await tx.update(equipmentAssignments).set({
+            status: 'completed', end: now,
+            returnConditionNotes: unit?.conditionNotes?.trim() || null,
+            returnNeedsRepair: unit?.needsRepair ?? false,
+          }).where(eq(equipmentAssignments.id, assignment.id));
+          await tx.update(equipment).set({ availabilityStatus: repairIds.includes(assignment.equipmentId) ? 'maintenance' : 'available' })
+            .where(eq(equipment.id, assignment.equipmentId));
+          if (unit?.needsRepair) {
+            await tx.insert(auditLogs).values({
+              tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
+              entityId: assignment.equipmentId, reason: 'flagged for repair on return',
+            });
+          }
+        }
+        if (repairIds.length > 0) {
+          await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: id, equipment_ids: repairIds });
+        }
       }
       await tx.update(rentals).set({ status: 'completed', endDate: now }).where(eq(rentals.id, id));
       await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rentals', entityId: id });
@@ -770,21 +811,49 @@ export class BookingsService {
         .select()
         .from(bookingChangeRequests)
         .where(and(eq(bookingChangeRequests.id, requestId), eq(bookingChangeRequests.rentalId, id)))
-        .limit(1);
+        .limit(1)
+        .for('update');
       if (!request) throw new NotFoundException({ error: 'change_request_not_found' });
       if (request.status !== 'pending') throw new ConflictException({ error: 'change_request_resolved' });
 
+      let chargePhp: number | null = null;
+      let invoiceId: string | null = null;
+      let chargeReason: string | null = null;
       if (body.decision === 'approved') {
         if (request.kind === 'cancel') {
           await this.cancelRental(tx, ctx, id);
         } else if (request.requestedEnd) {
-          await this.extendRental(tx, id, request.requestedEnd, request.assignmentId);
+          const extended = await this.extendRental(tx, id, request.requestedEnd, request.assignmentId);
+          const charge = await this.extensionCharge(tx, ctx.tenantId, id, extended);
+          chargePhp = body.chargePhp ?? charge.suggestion;
+          if (chargePhp === null) throw new UnprocessableEntityException({ error: 'extension_charge_required' });
+          if (body.chargePhp !== undefined && body.chargePhp !== charge.suggestion) {
+            chargeReason = body.chargeReason?.trim() || null;
+            if (charge.suggestion !== null && !chargeReason) throw new UnprocessableEntityException({ error: 'charge_reason_required' });
+          }
+          if (chargePhp > 0) {
+            const [invoice] = await tx.insert(invoices).values({
+              tenantId: ctx.tenantId,
+              rentalId: id,
+              invoiceType: 'extension',
+              amount: chargePhp.toFixed(2),
+              status: 'issued',
+              dueDate: new Date(Date.now() + 7 * 86_400_000),
+            }).returning({ id: invoices.id });
+            if (!invoice) throw new Error('extension invoice insert returned no row');
+            invoiceId = invoice.id;
+          }
+          for (const unit of charge.units) {
+            await tx.update(equipmentAssignments).set({
+              bookedHours: sql`coalesce(${equipmentAssignments.bookedHours}, 0) + ${unit.extraHours}`,
+            }).where(eq(equipmentAssignments.id, unit.assignmentId));
+          }
         }
       }
 
       await tx
         .update(bookingChangeRequests)
-        .set({ status: body.decision, resolvedBy: ctx.userId, resolvedAt: new Date() })
+        .set({ status: body.decision, resolvedBy: ctx.userId, resolvedAt: new Date(), chargePhp: chargePhp === null ? null : chargePhp.toFixed(2), invoiceId })
         .where(eq(bookingChangeRequests.id, requestId));
       await tx.insert(auditLogs).values({
         tenantId: ctx.tenantId,
@@ -792,10 +861,13 @@ export class BookingsService {
         action: body.decision === 'approved' ? 'APPROVE' : 'REJECT',
         entity: 'booking_change_requests',
         entityId: requestId,
+        reason: chargeReason,
       });
       await notifyBookingCustomer(tx, ctx.tenantId, id, 'change_request_resolved', {
         kind: request.kind,
         decision: body.decision,
+        charge_php: chargePhp,
+        invoice_id: invoiceId,
       });
       return { id: requestId, status: body.decision };
     });
@@ -825,20 +897,22 @@ export class BookingsService {
   // Pre-pick requests have no assignmentId and extend every unit; end_date follows the latest unit.
   private async extendRental(tx: Tx, id: string, newEnd: Date, assignmentId: string | null) {
     // Rental before units, the order checkout takes, so an extension racing a checkout can't deadlock.
-    await tx.select({ id: rentals.id }).from(rentals).where(eq(rentals.id, id)).for('update');
+    const [rental] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+    if (!rental) throw new NotFoundException({ error: 'booking_not_found' });
+    if (rental.status === 'cancelled' || rental.status === 'completed') throw new ConflictException({ error: 'booking_closed', status: rental.status });
     const live = await tx
       .select()
       .from(equipmentAssignments)
-      .where(and(eq(equipmentAssignments.rentalId, id), ne(equipmentAssignments.status, 'cancelled')));
+      .where(and(eq(equipmentAssignments.rentalId, id), inArray(equipmentAssignments.status, ['scheduled', 'active'])));
     const assignments = assignmentId ? live.filter((a) => a.id === assignmentId) : live;
+    if (assignments.length === 0) throw new ConflictException({ error: 'nothing_to_extend' });
+    const extended: { assignmentId: string; equipmentId: string; fromEnd: Date; newEnd: Date }[] = [];
     // Lock the units first, same as create(), so a concurrent booking of the added days serializes.
-    if (assignments.length > 0) {
-      await tx
-        .select()
-        .from(equipment)
-        .where(inArray(equipment.id, assignments.map((assignment) => assignment.equipmentId)))
-        .for('update');
-    }
+    await tx
+      .select()
+      .from(equipment)
+      .where(inArray(equipment.id, assignments.map((assignment) => assignment.equipmentId)))
+      .for('update');
     for (const assignment of assignments) {
       const from = assignment.end ?? assignment.start;
       if (newEnd <= from) continue;
@@ -856,12 +930,41 @@ export class BookingsService {
         });
       }
       await tx.update(equipmentAssignments).set({ end: newEnd }).where(eq(equipmentAssignments.id, assignment.id));
+      extended.push({ assignmentId: assignment.id, equipmentId: assignment.equipmentId, fromEnd: from, newEnd });
       assignment.end = newEnd;
     }
     const ends = live.map((a) => a.end).filter((e): e is Date => e !== null);
     if (ends.length > 0) {
       await tx.update(rentals).set({ endDate: new Date(Math.max(...ends.map((e) => e.getTime()))) }).where(eq(rentals.id, id));
     }
+    if (extended.length === 0) throw new ConflictException({ error: 'extend_must_be_later' });
+    return extended;
+  }
+
+  private async extensionCharge(
+    tx: Tx,
+    tenantId: string,
+    rentalId: string,
+    extended: { assignmentId: string; equipmentId: string; fromEnd: Date; newEnd: Date }[],
+  ) {
+    const { dailyHours } = await getBillingSettings(tx, tenantId);
+    const units = extended.map((unit) => ({ ...unit, extraHours: minBookingHours(bookingDays(unit.fromEnd, unit.newEnd), dailyHours) }));
+    const [quotation] = await tx.select({ id: quotations.id }).from(quotations)
+      .where(and(eq(quotations.rentalId, rentalId), inArray(quotations.status, ['approved', 'sent', 'accepted'])))
+      .orderBy(desc(quotations.revision), desc(quotations.createdAt), desc(quotations.id)).limit(1);
+    if (!quotation || units.length === 0) return { suggestion: null, units };
+    const rates = await tx.select({ equipmentTypeId: quotationItems.equipmentTypeId, hourlyRatePhp: quotationItems.hourlyRatePhp })
+      .from(quotationItems).where(eq(quotationItems.quotationId, quotation.id));
+    const equipmentRows = await tx.select({ id: equipment.id, equipmentTypeId: equipment.equipmentTypeId })
+      .from(equipment).where(inArray(equipment.id, units.map((unit) => unit.equipmentId)));
+    let total = 0;
+    for (const unit of units) {
+      const typeId = equipmentRows.find((row) => row.id === unit.equipmentId)?.equipmentTypeId;
+      const rate = rates.find((row) => row.equipmentTypeId === typeId);
+      if (!rate) return { suggestion: null, units };
+      total += Number(rate.hourlyRatePhp) * unit.extraHours;
+    }
+    return { suggestion: round2HalfUp(total), units };
   }
 
   // Also voids unpaid invoices and open PayMongo sessions, so nothing stays payable.

@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
-import { addresses, equipment as equipmentTable, events, projectSites, rentals, weatherAlerts, withTenantTx } from '@arkilaunch/db';
+import { addresses, auditLogs, equipment as equipmentTable, equipmentAssignments, events, projectSites, rentals, weatherAlerts, withTenantTx } from '@arkilaunch/db';
 import { eq } from 'drizzle-orm';
 import type { RequestContext } from '@arkilaunch/shared';
 import { SitesService } from '../src/sites/sites.service.js';
@@ -132,6 +132,27 @@ describe('SitesService (PRD-F4/F5)', () => {
 
     // A returned deployment cannot be returned twice.
     await expect(sites.returnDeployment(adminCtxA, siteIdA, deployment.id)).rejects.toThrow(ConflictException);
+  });
+
+  it('stores condition notes on a per-unit return and keeps a repair-flagged machine unavailable', async () => {
+    const [unit] = await withTenantTx(adminCtxA, (tx) => tx.insert(equipmentTable).values({
+      tenantId: adminCtxA.tenantId, equipmentTypeId: equipmentTypeIdA, model: 'Return Repair Test Unit',
+      serialNo: `test-tenant-a-sites-return-repair-${Date.now()}`,
+    }).returning());
+    const deployment = await sites.createDeployment(adminCtxA, siteIdA, {
+      equipmentId: unit!.id, rentalId: dedicatedRentalId, start: '2031-06-01T00:00:00.000Z', end: '2031-06-05T00:00:00.000Z',
+    });
+    await sites.returnDeployment(adminCtxA, siteIdA, deployment.id, { conditionNotes: 'Damaged track', needsRepair: true });
+    const [returned] = await withTenantTx(adminCtxA, (tx) => tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, deployment.id)));
+    expect(returned).toMatchObject({ returnConditionNotes: 'Damaged track', returnNeedsRepair: true, status: 'completed' });
+    const [after] = await withTenantTx(adminCtxA, (tx) => tx.select().from(equipmentTable).where(eq(equipmentTable.id, unit!.id)));
+    expect(after?.availabilityStatus).toBe('maintenance');
+    const [audit] = await withTenantTx(adminCtxA, (tx) => tx.select().from(auditLogs).where(eq(auditLogs.entityId, unit!.id)));
+    expect(audit).toMatchObject({ action: 'UPDATE', entity: 'equipment', reason: 'flagged for repair on return' });
+    await expect(sites.returnDeployment(adminCtxA, siteIdA, deployment.id)).rejects.toThrow(ConflictException);
+    await expect(sites.createDeployment(adminCtxA, siteIdA, {
+      equipmentId: unit!.id, rentalId: dedicatedRentalId, start: '2031-07-01T00:00:00.000Z', end: '2031-07-05T00:00:00.000Z',
+    })).rejects.toMatchObject({ response: { error: 'equipment_unavailable' } });
   });
 
   // QAD-T16: a maintenance-flagged unit cannot be deployed either.

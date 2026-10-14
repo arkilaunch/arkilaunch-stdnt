@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-07
+**Last updated:** 2026-10-15
 **Built on FMD:** v1.28.1
 
 ---
@@ -90,6 +90,7 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-rental-return-extension | 2026-10-15 | Pro-rata extension charge with an audited override and seven-day invoice term; Returned keeps completed status and checks field logs; per-unit condition notes and Needs repair keep machines Unavailable (repair) using maintenance; no damage deduction | Stakeholder panel feedback (Dra. Domingo, Mr. Violeta) | PRD-F4/F8; SDD §3/§5; index | [cr-arkilaunch-rental-return-extension.md](cr-arkilaunch-rental-return-extension.md) |
 | cr-arkilaunch-timekeeper-sheet-context | 2026-10-07 | Timekeeper capture shows the printed sheet's full header ("On the sheet": booking, charge to, equipment, location, operator, site rep, rental period, week, start meter) via the existing `GET /bookings/:id/edtr-sheet`; after submit the modal just confirms and closes (no polling, OCR readout or status). Notifications unchanged. Amends site-hub-approval §2 #5 | Owner request 2026-10-07 | site-hub-approval CR; index | [cr-arkilaunch-timekeeper-sheet-context.md](cr-arkilaunch-timekeeper-sheet-context.md) |
 | cr-arkilaunch-edtr-demo-fixes | 2026-10-07 | Capture keeps the whole photo when sheet marks are not found (no edge crop); bigger previews; photo beside its readings (ScanReview top-aligned, site hub drawer side by side); hour meter cells cleaned like other comb cells (6 digits = 5+1); no QR-missing gate; timekeeper paper send closes the modal (no on-site retake); admin `DELETE /edtr/:id` removes an unbilled log (409 `already_billed`). Amends timekeeper-sheet-context §2 | Owner request 2026-10-07 | timekeeper-sheet-context CR; index | [cr-arkilaunch-edtr-demo-fixes.md](cr-arkilaunch-edtr-demo-fixes.md) |
 | cr-arkilaunch-truck-tier-cap | 2026-10-07 | Customer tier discount caps now gate the truck agreed price: a discount off the route price above the cap is Owner-only (`409 truck_cap_needs_owner` for others), audited; drawer shows the tier note. No migration | Owner request 2026-10-07 | index | [cr-arkilaunch-truck-tier-cap.md](cr-arkilaunch-truck-tier-cap.md) |

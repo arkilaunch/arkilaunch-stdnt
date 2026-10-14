@@ -1,10 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BookingDetailResponse, RescheduleSuggestion } from '@arkilaunch/shared';
-import { localPhMobile } from '@arkilaunch/shared';
+import type { BookingDetailResponse, ChangeRequestResolve, RescheduleSuggestion } from '@arkilaunch/shared';
+import { BookingReturnRequestSchema, ChangeRequestResolveSchema, localPhMobile } from '@arkilaunch/shared';
 import { bookingsQueries, sitesQueries } from '../lib/queries.js';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { ApiError, apiErrorText, apiGet, apiPatch, apiPost, payloadField } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatPeso, formatStatus } from '../lib/format.js';
 import { Container } from './container.js';
 import { Alert } from './alert.js';
@@ -12,6 +12,7 @@ import { Button, buttonClass } from './button.js';
 import { ConfirmDialog } from './confirm-dialog.js';
 import { Input } from './input.js';
 import { Select } from './select.js';
+import { StatusBadge } from './status-badge.js';
 import { SiteProofAdmin } from './site-proof.js';
 import { SiteEquipmentWeather } from './equipment-weather.js';
 import { EdtrSheetCard } from './edtr-sheet-card.js';
@@ -19,23 +20,49 @@ import { OfficePaymentButton } from './office-payment.js';
 import { useToast } from './toast.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
-function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
+export function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const [charge, setCharge] = useState('');
+  const [chargeReason, setChargeReason] = useState('');
+  const [chargeError, setChargeError] = useState<string>();
+  const [reasonError, setReasonError] = useState<string>();
+  const [serverNeedsReason, setServerNeedsReason] = useState(false);
   const resolve = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
-      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, { decision }),
-    onSuccess: async (_data, { decision }) => {
+    mutationFn: ({ id, body }: { id: string; body: ChangeRequestResolve }) =>
+      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
+    onSuccess: async (_data, { body: { decision } }) => {
       setAsk(null);
-      await queryClient.invalidateQueries({ queryKey: ['booking', booking.id] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['booking', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'staff', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'me', booking.id] }),
+      ]);
       toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
     },
     onError: (err) => {
-      setAsk(null);
+      if (payloadField(err, 'error') === 'extension_charge_required') {
+        setChargeError('Enter the extra charge.');
+        return;
+      }
+      if (payloadField(err, 'error') === 'charge_reason_required') {
+        setServerNeedsReason(true);
+        setReasonError('Explain why the charge differs from the suggestion.');
+        return;
+      }
       toast.error('Could not resolve the request', apiErrorText(err));
     },
   });
   const [ask, setAsk] = useState<{ request: BookingDetailResponse['changeRequests'][number]; decision: 'approved' | 'rejected' } | null>(null);
+  const needsReason = serverNeedsReason || (ask?.request.kind === 'extend' && ask.request.suggestedChargePhp !== null && Number(charge) !== ask.request.suggestedChargePhp);
+  function openRequest(request: BookingDetailResponse['changeRequests'][number], decision: 'approved' | 'rejected') {
+    setCharge(request.suggestedChargePhp === null ? '' : String(request.suggestedChargePhp));
+    setChargeReason('');
+    setChargeError(undefined);
+    setReasonError(undefined);
+    setServerNeedsReason(false);
+    setAsk({ request, decision });
+  }
 
   return (
     <Container header={{ title: 'Change requests' }}>
@@ -52,10 +79,10 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
           {request.reason && <p className="text-sm text-text-muted">{request.reason}</p>}
           {request.status === 'pending' && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="approve" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'approved' })}>
+              <Button variant="approve" disabled={resolve.isPending} onClick={() => openRequest(request, 'approved')}>
                 Approve
               </Button>
-              <Button variant="secondary" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'rejected' })}>
+              <Button variant="secondary" disabled={resolve.isPending} onClick={() => openRequest(request, 'rejected')}>
                 Decline
               </Button>
             </div>
@@ -78,14 +105,35 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
         body={
           ask?.decision === 'approved'
             ? ask.request.kind === 'extend'
-              ? `${booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to ${formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.`
+              ? <div className="flex flex-col gap-4">
+                  <p>{booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to {formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.</p>
+                  <Input label="Extra charge (PHP)" type="number" numeric min={0} step="0.01" required value={charge}
+                    hint={ask.request.suggestedChargePhp === null ? 'No suggested charge is available. Enter an amount.' : `Suggested: ${formatPeso(ask.request.suggestedChargePhp)}`}
+                    error={chargeError} onChange={(e) => { setCharge(e.target.value); setChargeError(undefined); }} />
+                  {(ask.request.suggestedChargePhp === null || needsReason || reasonError) && <Input label="Reason for change" required={needsReason || !!reasonError} maxLength={500} value={chargeReason} error={reasonError}
+                    onChange={(e) => { setChargeReason(e.target.value); setReasonError(undefined); }} />}
+                </div>
               : 'The booking is cancelled for good. The customer is notified.'
             : 'The booking stays as it is. The customer is notified that you declined.'
         }
         confirmLabel={ask?.decision === 'approved' ? 'Approve' : 'Decline'}
         pending={resolve.isPending}
         onConfirm={() => {
-          if (ask) resolve.mutate({ id: ask.request.id, decision: ask.decision });
+          if (!ask) return;
+          const extension = ask.decision === 'approved' && ask.request.kind === 'extend';
+          const body = ChangeRequestResolveSchema.safeParse({ decision: ask.decision,
+            ...(extension ? { chargePhp: charge.trim() ? Number(charge) : NaN } : {}),
+            ...(extension && chargeReason.trim() ? { chargeReason: chargeReason.trim() } : {}),
+          });
+          if (!body.success) {
+            setChargeError('Enter a non-negative amount with at most two decimal places.');
+            return;
+          }
+          if (extension && needsReason && !chargeReason.trim()) {
+            setReasonError('Explain why the charge differs from the suggestion.');
+            return;
+          }
+          resolve.mutate({ id: ask.request.id, body: body.data });
         }}
         onCancel={() => setAsk(null)}
       />
@@ -225,11 +273,17 @@ function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
-function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
+export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [operatorName, setOperatorName] = useState('');
   const [timekeeperUserId, setTimekeeperUserId] = useState('');
+  const [units, setUnits] = useState<Record<string, { conditionNotes: string; needsRepair: boolean }>>({});
+  const [incomplete, setIncomplete] = useState(false);
+  const [confirmIncompleteLogs, setConfirmIncompleteLogs] = useState(false);
+  const [reason, setReason] = useState('');
+  const [returnError, setReturnError] = useState<string>();
+  const activeUnits = booking.items.filter((item) => item.status === 'active');
   const move = useMutation({
     mutationFn: (step: 'deliver' | 'return') =>
       apiPost(
@@ -239,7 +293,10 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
               ...(operatorName.trim() ? { operatorName: operatorName.trim() } : {}),
               ...(timekeeperUserId ? { timekeeperUserId } : {}),
             }
-          : {},
+          : BookingReturnRequestSchema.parse({
+              units: activeUnits.map((item) => ({ assignmentId: item.id, ...units[item.id] })),
+              ...(incomplete ? { confirmIncompleteLogs, reason } : {}),
+            }),
       ),
     onSuccess: (_data, step) => {
       setAsking(false);
@@ -248,7 +305,12 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
       toast.success(step === 'deliver' ? 'Deployed' : 'Marked returned');
     },
     onError: (e) => {
-      setAsking(false);
+      if (e instanceof ApiError && e.status === 409 && e.message === 'field_logs_incomplete') {
+        setIncomplete(true);
+        setConfirmIncompleteLogs(false);
+        setReturnError(undefined);
+        return;
+      }
       toast.error('Not saved', apiErrorText(e));
     },
   });
@@ -264,7 +326,10 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
       <p className="text-sm text-text-muted">
         {deliver ? 'Paid. Deploy once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
       </p>
-      <Button variant="primary" onClick={() => setAsking(true)}>
+      <Button variant="primary" onClick={() => {
+        setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setReason('');
+        setReturnError(undefined); setAsking(true);
+      }}>
         {deliver ? 'Deploy now' : 'Mark returned'}
       </Button>
       <ConfirmDialog
@@ -296,12 +361,51 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
               </Select>
             </div>
           ) : (
-            'Only once every machine is back: this closes the booking.'
+            <div className="flex flex-col gap-4">
+              <p>Only once every machine is back: this closes the booking.</p>
+              {activeUnits.map((item) => (
+                <fieldset key={item.id} className="flex min-w-0 flex-col gap-2 border-t border-border pt-3">
+                  <legend className="text-sm font-semibold">{item.equipmentName ?? 'Machine'}</legend>
+                  <label htmlFor={`return-notes-${item.id}`} className="text-sm font-medium">Condition notes</label>
+                  <textarea id={`return-notes-${item.id}`} maxLength={2000} rows={3}
+                    className="w-full rounded-input border border-border bg-surface px-4 py-2.5 text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+                    value={units[item.id]?.conditionNotes ?? ''}
+                    onChange={(e) => setUnits((current) => ({ ...current, [item.id]: {
+                      conditionNotes: e.target.value, needsRepair: current[item.id]?.needsRepair ?? false,
+                    } }))} />
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={units[item.id]?.needsRepair ?? false}
+                      onChange={(e) => setUnits((current) => ({ ...current, [item.id]: {
+                        conditionNotes: current[item.id]?.conditionNotes ?? '', needsRepair: e.target.checked,
+                      } }))} />
+                    Needs repair (mark unavailable)
+                  </label>
+                </fieldset>
+              ))}
+              {incomplete && <div className="flex flex-col gap-3">
+                <Alert type="warning">Field logs are incomplete. Return anyway only once every machine is back, and record why the logs are still missing.</Alert>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={confirmIncompleteLogs}
+                    aria-describedby={returnError ? `return-reason-${booking.id}-error` : undefined}
+                    onChange={(e) => { setConfirmIncompleteLogs(e.target.checked); setReturnError(undefined); }} />
+                  Confirm return with incomplete field logs
+                </label>
+                <Input label="Reason for returning with incomplete logs" required maxLength={500} value={reason}
+                  error={returnError} id={`return-reason-${booking.id}`}
+                  onChange={(e) => { setReason(e.target.value); setReturnError(undefined); }} />
+              </div>}
+            </div>
           )
         }
         confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
-        onConfirm={() => move.mutate(deliver ? 'deliver' : 'return')}
+        onConfirm={() => {
+          if (!deliver && incomplete && (!confirmIncompleteLogs || reason.trim().length < 3)) {
+            setReturnError('Confirm the return and enter a reason of at least 3 characters.');
+            return;
+          }
+          move.mutate(deliver ? 'deliver' : 'return');
+        }}
         onCancel={() => setAsking(false)}
       />
       </div>
@@ -366,9 +470,11 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
         <SiteProofAdmin siteId={booking.projectSiteId} />
         {booking.status === 'active' && <SiteEquipmentWeather siteId={booking.projectSiteId} />}
         {booking.items.map((item) => (
-          <p key={`${item.equipmentId}-${String(item.start)}`} className="text-text-muted">
-            {item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}
-          </p>
+          <div key={item.id} className="flex flex-col gap-1">
+            <p className="text-text-muted">{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</p>
+            {item.returnConditionNotes && <p className="whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
+            {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
+          </div>
         ))}
         </div>
       </Container>
