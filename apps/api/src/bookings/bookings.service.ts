@@ -845,11 +845,11 @@ export class BookingsService {
             }).returning({ id: invoices.id });
             if (!invoice) throw new Error('extension invoice insert returned no row');
             invoiceId = invoice.id;
-            for (const unit of charge.units) {
-              await tx.update(equipmentAssignments).set({
-                bookedHours: sql`coalesce(${equipmentAssignments.bookedHours}, 0) + ${unit.extraHours}`,
-              }).where(eq(equipmentAssignments.id, unit.assignmentId));
-            }
+          }
+          for (const unit of charge.units) {
+            await tx.update(equipmentAssignments).set({
+              bookedHours: sql`coalesce(${equipmentAssignments.bookedHours}, 0) + ${unit.extraHours}`,
+            }).where(eq(equipmentAssignments.id, unit.assignmentId));
           }
         }
       }

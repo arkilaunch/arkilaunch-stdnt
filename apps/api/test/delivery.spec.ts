@@ -293,6 +293,8 @@ describe('Delivery, return and staff alerts', () => {
     await withTenantTx(adminCtx, (tx) => tx.update(quotations).set({ status: 'draft' }).where(eq(quotations.rentalId, booking.id)));
     const before = await bookings.get(adminCtx, booking.id);
     const request = await bookings.requestChange(customerCtx, booking.id, { kind: 'extend', assignmentId: before.items[0]!.id, requestedEnd: day(17, 17) });
+    const [original] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, before.items[0]!.id)));
+    const { dailyHours } = await withTenantTx(adminCtx, (tx) => getBillingSettings(tx, adminCtx.tenantId));
     expect((await bookings.get(adminCtx, booking.id)).changeRequests[0]?.suggestedChargePhp).toBeNull();
     await expect(bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' }))
       .rejects.toMatchObject({ response: { error: 'extension_charge_required' } });
@@ -301,6 +303,9 @@ describe('Delivery, return and staff alerts', () => {
     const after = await bookings.get(adminCtx, booking.id);
     expect(after.changeRequests[0]).toMatchObject({ chargePhp: 0, invoiceId: null });
     expect(after.invoices).toHaveLength(0);
+    const [extended] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, before.items[0]!.id)));
+    const extraHours = minBookingHours(bookingDays(before.items[0]!.end!, day(17, 17)), dailyHours);
+    expect(Number(extended?.bookedHours)).toBe(Number(original?.bookedHours) + extraHours);
     await bookings.cancel(customerCtx, booking.id);
   });
 
