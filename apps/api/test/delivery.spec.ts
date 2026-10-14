@@ -4,13 +4,19 @@ import postgres from 'postgres';
 import { and, eq } from 'drizzle-orm';
 import {
   equipment,
+  auditLogs,
   equipmentAssignments,
   notifications,
+  getBillingSettings,
+  quotationItems,
+  quotations,
   rentals,
   timekeeperSiteAssignments,
   withTenantTx,
 } from '@arkilaunch/db';
-import { StubPaymentsAdapter, type RequestContext } from '@arkilaunch/shared';
+import { StubPaymentsAdapter, bookingDays, minBookingHours, round2HalfUp, type RequestContext } from '@arkilaunch/shared';
+import { BillingService } from '../src/billing/billing.service.js';
+import { SitesService } from '../src/sites/sites.service.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
 import { PaymentsService } from '../src/payments/payments.service.js';
 import { QuotesService } from '../src/quotes/quotes.service.js';
@@ -188,6 +194,10 @@ describe('Delivery, return and staff alerts', () => {
       await expect(bookings.cancel(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'already_on_site' } });
 
       await bookings.markReturned(adminCtx, booking.id);
+      const [available] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
+      expect(available?.availabilityStatus).toBe('available');
+      const returned = await bookings.get(adminCtx, booking.id);
+      expect(returned.items[0]).toMatchObject({ returnConditionNotes: null, returnNeedsRepair: false });
     } finally {
       // The unit is shared with other specs; never leave it deployed.
       await withTenantTx(adminCtx, (tx) => tx.update(equipment).set({ availabilityStatus: 'available' }).where(eq(equipment.id, equipmentId)));
@@ -215,5 +225,183 @@ describe('Delivery, return and staff alerts', () => {
     const booking = await book(8);
     await bookings.cancel(adminCtx, booking.id);
     expect(await notificationTypes(booking.id)).toContain('booking_cancelled');
+  });
+
+  it('charges an approved extension from the saved hourly rate, increases balance and booked hours, and resolves once', async () => {
+    const booking = await book(10);
+    const before = await bookings.get(adminCtx, booking.id);
+    const assignment = before.items[0]!;
+    const request = await bookings.requestChange(customerCtx, booking.id, {
+      kind: 'extend', assignmentId: assignment.id, requestedEnd: day(11, 17),
+    });
+    const { expected, extraHours, bookedHours } = await withTenantTx(adminCtx, async (tx) => {
+      const { dailyHours } = await getBillingSettings(tx, adminCtx.tenantId);
+      const [unit] = await tx.select().from(equipment).where(eq(equipment.id, equipmentId));
+      const [rate] = await tx.select().from(quotationItems).where(and(
+        eq(quotationItems.quotationId, before.quotation!.id), eq(quotationItems.equipmentTypeId, unit!.equipmentTypeId),
+      ));
+      const [row] = await tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, assignment.id));
+      const hours = minBookingHours(bookingDays(assignment.end!, day(11, 17)), dailyHours);
+      return { expected: round2HalfUp(Number(rate!.hourlyRatePhp) * hours), extraHours: hours, bookedHours: Number(row!.bookedHours) };
+    });
+    expect(expected).toBeGreaterThan(0);
+    const billing = new BillingService();
+    const balanceBefore = (await billing.statement(customerCtx, booking.id)).totals.balanceDue;
+    expect((await bookings.get(adminCtx, booking.id)).changeRequests[0]?.suggestedChargePhp).toBe(expected);
+    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' });
+    const after = await bookings.get(customerCtx, booking.id);
+    const charge = after.changeRequests.find((row) => row.id === request.id)!;
+    expect(charge).toMatchObject({ chargePhp: expected, status: 'approved', suggestedChargePhp: null });
+    expect(after.invoices.find((row) => row.id === charge.invoiceId)).toMatchObject({ invoiceType: 'extension', amount: expected, status: 'issued' });
+    expect((await billing.statement(customerCtx, booking.id)).totals.balanceDue).toBeCloseTo(balanceBefore + expected, 2);
+    const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, assignment.id)));
+    expect(Number(unit?.bookedHours)).toBe(bookedHours + extraHours);
+    expect((await payments.checkoutInvoice(customerCtx, charge.invoiceId!)).invoiceId).toBe(charge.invoiceId);
+    await expect(bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' })).rejects.toMatchObject({ response: { error: 'change_request_resolved' } });
+    expect(after.invoices.filter((row) => row.invoiceType === 'deposit_deduction')).toHaveLength(0);
+    await bookings.cancel(customerCtx, booking.id);
+  });
+
+  it('requires an override reason and records the agreed charge and reason without changing dates on refusal', async () => {
+    const booking = await book(13);
+    const before = await bookings.get(adminCtx, booking.id);
+    const assignment = before.items[0]!;
+    const request = await bookings.requestChange(customerCtx, booking.id, { kind: 'extend', assignmentId: assignment.id, requestedEnd: day(14, 17) });
+    await expect(bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved', chargePhp: 123.45 }))
+      .rejects.toMatchObject({ response: { error: 'charge_reason_required' } });
+    const refused = await bookings.get(adminCtx, booking.id);
+    expect(refused.items[0]?.end).toEqual(assignment.end);
+    expect(refused.invoices.filter((row) => row.invoiceType === 'extension')).toHaveLength(0);
+    expect(refused.changeRequests[0]?.status).toBe('pending');
+    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved', chargePhp: 123.45, chargeReason: 'Agreed with customer' });
+    const after = await bookings.get(adminCtx, booking.id);
+    expect(after.changeRequests[0]?.chargePhp).toBe(123.45);
+    expect(after.invoices.find((row) => row.invoiceType === 'extension')?.amount).toBe(123.45);
+    const [audit] = await withTenantTx(adminCtx, (tx) => tx.select().from(auditLogs).where(and(
+      eq(auditLogs.entityId, request.id), eq(auditLogs.action, 'APPROVE'),
+    )));
+    expect(audit?.reason).toBe('Agreed with customer');
+    await bookings.cancel(customerCtx, booking.id);
+  });
+
+  it('requires an explicit charge when no accepted quotation rate exists and permits a reasoned free extension', async () => {
+    const booking = await book(16);
+    await withTenantTx(adminCtx, (tx) => tx.update(quotations).set({ status: 'draft' }).where(eq(quotations.rentalId, booking.id)));
+    const before = await bookings.get(adminCtx, booking.id);
+    const request = await bookings.requestChange(customerCtx, booking.id, { kind: 'extend', assignmentId: before.items[0]!.id, requestedEnd: day(17, 17) });
+    expect((await bookings.get(adminCtx, booking.id)).changeRequests[0]?.suggestedChargePhp).toBeNull();
+    await expect(bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' }))
+      .rejects.toMatchObject({ response: { error: 'extension_charge_required' } });
+    expect((await bookings.get(adminCtx, booking.id)).items[0]?.end).toEqual(before.items[0]?.end);
+    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved', chargePhp: 0, chargeReason: 'Courtesy extension' });
+    const after = await bookings.get(adminCtx, booking.id);
+    expect(after.changeRequests[0]).toMatchObject({ chargePhp: 0, invoiceId: null });
+    expect(after.invoices).toHaveLength(0);
+    await bookings.cancel(customerCtx, booking.id);
+  });
+
+  it('rejects an extension without creating an invoice or changing booked hours', async () => {
+    const booking = await book(19);
+    const before = await bookings.get(adminCtx, booking.id);
+    const request = await bookings.requestChange(customerCtx, booking.id, { kind: 'extend', assignmentId: before.items[0]!.id, requestedEnd: day(20, 17) });
+    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'rejected' });
+    const after = await bookings.get(adminCtx, booking.id);
+    expect(after.items[0]?.end).toEqual(before.items[0]?.end);
+    expect(after.changeRequests[0]).toMatchObject({ status: 'rejected', chargePhp: null, invoiceId: null });
+    expect(after.invoices).toHaveLength(0);
+    await bookings.cancel(customerCtx, booking.id);
+  });
+
+  it('requires complete logs or an audited confirmation, validates units, and stores repair condition without billing it', async () => {
+    const booking = await book(22);
+    const assignment = (await bookings.get(adminCtx, booking.id)).items[0]!;
+    const foreign = await book(25);
+    const foreignAssignment = (await bookings.get(adminCtx, foreign.id)).items[0]!;
+    const start = new Date(Date.now() - 3 * 86_400_000);
+    const end = new Date(Date.now() - 86_400_000);
+    await withTenantTx(adminCtx, async (tx) => {
+      await tx.update(rentals).set({ status: 'active', startDate: start, endDate: end }).where(eq(rentals.id, booking.id));
+      await tx.update(equipmentAssignments).set({ status: 'active', start, end }).where(eq(equipmentAssignments.id, assignment.id));
+      await tx.update(equipment).set({ availabilityStatus: 'deployed' }).where(eq(equipment.id, equipmentId));
+    });
+    try {
+      await expect(bookings.markReturned(adminCtx, booking.id, { units: [{ assignmentId: foreignAssignment.id }] }))
+        .rejects.toMatchObject({ response: { error: 'booking_unit_not_found' } });
+      await expect(bookings.markReturned(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'field_logs_incomplete' } });
+      await expect(bookings.markReturned(adminCtx, booking.id, { confirmIncompleteLogs: true }))
+        .rejects.toMatchObject({ response: { error: 'field_logs_incomplete' } });
+      expect((await bookings.get(adminCtx, booking.id)).status).toBe('active');
+      await bookings.markReturned(adminCtx, booking.id, {
+        units: [{ assignmentId: assignment.id, conditionNotes: 'Hydraulic leak', needsRepair: true }],
+        confirmIncompleteLogs: true, incompleteLogsReason: 'Paper logs still at site',
+      });
+      const after = await bookings.get(adminCtx, booking.id);
+      expect(after.status).toBe('completed');
+      expect(after.items[0]).toMatchObject({ returnConditionNotes: 'Hydraulic leak', returnNeedsRepair: true });
+      expect(after.invoices).toHaveLength(0);
+      const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
+      expect(unit?.availabilityStatus).toBe('maintenance');
+      const audits = await withTenantTx(adminCtx, (tx) => tx.select().from(auditLogs).where(eq(auditLogs.entityId, booking.id)));
+      expect(audits.find((row) => row.entity === 'return_with_incomplete_field_logs')?.reason).toContain('Paper logs still at site');
+      const [repairAudit] = await withTenantTx(adminCtx, (tx) => tx.select().from(auditLogs).where(and(eq(auditLogs.entityId, equipmentId), eq(auditLogs.reason, 'flagged for repair on return'))));
+      expect(repairAudit?.entity).toBe('equipment');
+      expect(await staffAlerts('equipment_needs_repair', booking.id)).toBeGreaterThan(0);
+      await expect(bookings.markReturned(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'booking_not_on_site' } });
+      const [stillRepair] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
+      expect(stillRepair?.availabilityStatus).toBe('maintenance');
+    } finally {
+      await withTenantTx(adminCtx, (tx) => tx.update(equipment).set({ availabilityStatus: 'available' }).where(eq(equipment.id, equipmentId)));
+      // Keep the fixture in this suite's July cleanup range after exercising past field-log days.
+      await withTenantTx(adminCtx, async (tx) => {
+        await tx.update(equipmentAssignments).set({ start: assignment.start, end: assignment.end }).where(eq(equipmentAssignments.id, assignment.id));
+        await tx.update(rentals).set({ startDate: assignment.start }).where(eq(rentals.id, booking.id));
+      });
+      await bookings.cancel(customerCtx, foreign.id);
+    }
+  });
+
+  it('preserves a per-unit repair flag when the whole booking is later marked returned', async () => {
+    const booking = await book(28);
+    const assignment = (await bookings.get(adminCtx, booking.id)).items[0]!;
+    await withTenantTx(adminCtx, async (tx) => {
+      await tx.update(rentals).set({ status: 'active' }).where(eq(rentals.id, booking.id));
+      await tx.update(equipmentAssignments).set({ status: 'active' }).where(eq(equipmentAssignments.id, assignment.id));
+      await tx.update(equipment).set({ availabilityStatus: 'deployed' }).where(eq(equipment.id, equipmentId));
+    });
+    try {
+      await new SitesService(events).returnDeployment(adminCtx, siteId, assignment.id, { needsRepair: true, conditionNotes: 'Track needs replacement' });
+      await bookings.markReturned(adminCtx, booking.id);
+      const after = await bookings.get(adminCtx, booking.id);
+      expect(after.status).toBe('completed');
+      expect(after.items[0]).toMatchObject({ returnNeedsRepair: true, returnConditionNotes: 'Track needs replacement' });
+      const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
+      expect(unit?.availabilityStatus).toBe('maintenance');
+    } finally {
+      await withTenantTx(adminCtx, (tx) => tx.update(equipment).set({ availabilityStatus: 'available' }).where(eq(equipment.id, equipmentId)));
+    }
+  });
+
+  it('keeps a machine unavailable if any of its returned assignment windows needs repair', async () => {
+    const booking = await bookings.create(customerCtx, {
+      customerId: fixtureCustomerId, projectSiteId: siteId,
+      items: [
+        { equipmentId, start: day(26, 8), end: day(26, 17) },
+        { equipmentId, start: day(27, 8), end: day(27, 17) },
+      ],
+    });
+    const assignments = (await bookings.get(adminCtx, booking.id)).items;
+    await withTenantTx(adminCtx, async (tx) => {
+      await tx.update(rentals).set({ status: 'active' }).where(eq(rentals.id, booking.id));
+      await tx.update(equipmentAssignments).set({ status: 'active' }).where(eq(equipmentAssignments.rentalId, booking.id));
+      await tx.update(equipment).set({ availabilityStatus: 'deployed' }).where(eq(equipment.id, equipmentId));
+    });
+    try {
+      await bookings.markReturned(adminCtx, booking.id, { units: [{ assignmentId: assignments[0]!.id, needsRepair: true }] });
+      const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
+      expect(unit?.availabilityStatus).toBe('maintenance');
+      expect((await bookings.get(adminCtx, booking.id)).items.map((item) => item.returnNeedsRepair)).toEqual([true, false]);
+    } finally {
+      await withTenantTx(adminCtx, (tx) => tx.update(equipment).set({ availabilityStatus: 'available' }).where(eq(equipment.id, equipmentId)));
+    }
   });
 });
