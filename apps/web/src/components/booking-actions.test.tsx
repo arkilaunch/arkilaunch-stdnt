@@ -75,11 +75,27 @@ describe('extension approval', () => {
     const dialog = screen.getByRole('alertdialog');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
     expect(fetcher).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText(/Reason for change/)).not.toBeRequired();
     await userEvent.type(within(dialog).getByLabelText(/Extra charge/), '0');
-    await userEvent.type(within(dialog).getByLabelText(/Reason for change/), 'Waived by agreement');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
     expect(await within(dialog).findByText('Enter the extra charge.')).toBeInTheDocument();
+    const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved', chargePhp: 0 });
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+
+  it('approves an explicit amount without a reason when no suggestion exists', async () => {
+    const fetcher = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
+    vi.stubGlobal('fetch', fetcher);
+    renderRequests({ ...booking, changeRequests: [{ ...booking.changeRequests[0]!, suggestedChargePhp: null }] });
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByLabelText(/Reason for change/)).not.toBeRequired();
+    await userEvent.type(within(dialog).getByLabelText(/Extra charge/), '125');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved', chargePhp: 125 });
   });
 });
 

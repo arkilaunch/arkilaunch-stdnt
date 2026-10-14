@@ -16,7 +16,7 @@ Approved rental extensions previously moved return dates without recording a cha
 
 ## 2. Approved behaviour changes
 
-- **Extension charge.** Staff see a suggested charge on pending extension requests, calculated from the latest approved or sent quotation's saved hourly rate for each extended unit's equipment type, multiplied by the extra booking days and the tenant's daily hours, then rounded to two decimal places. Any missing rate makes the suggestion unavailable. Staff may override the amount with an audit-logged reason. A positive approved amount creates an issued `extension` invoice payable within seven days, appears in the balance and statement, and can be paid through customer checkout. Every approved extension adds the extra booked hours, including a free extension. Zero amounts and rejected requests create no invoice. Approval rechecks availability and serializes request resolution.
+- **Extension charge.** Staff see a suggested charge on pending extension requests, calculated from the latest approved, sent or accepted quotation's saved hourly rate (highest revision, with creation time and ID breaking ties) for each extended unit's equipment type, multiplied by the extra booking days and the tenant's daily hours, then rounded to two decimal places. Any missing rate makes the suggestion unavailable. Staff must give an audit-logged reason only when changing an existing suggestion; with no suggestion, an explicit amount is required and the reason is optional. A positive approved amount creates an issued `extension` invoice payable within seven days, appears in the balance and statement, and can be paid through customer checkout. Every approved extension adds the extra booked hours, including a free extension. Zero amounts and rejected requests create no invoice. Approval rechecks availability and serializes request resolution.
 - **Returned.** Whole-booking return keeps the existing stored `completed` status and the displayed Returned label. Both return paths refuse missing, pending or correction-required field-log days before today unless staff confirm with a reason recorded in the audit log. Today's sheet does not block return.
 - **Per-unit condition.** The return dialog collects optional condition notes and a Needs repair checkbox for each active assignment. Notes and flags are stored per assignment and displayed on booking detail after return. A supplied assignment outside the booking, or a duplicate assignment ID, is refused.
 - **Repair availability.** A flagged machine uses the existing stored `maintenance` availability value, displayed as Unavailable (repair). It remains excluded from booking and deployment until staff restore availability through the existing inventory status change. Other returned machines become available. Each flagged unit gets an equipment UPDATE audit with reason `flagged for repair on return`; one staff notification names the affected machines. A repair flag survives a later whole-booking return and, when a machine has several returned assignment windows, any flagged window keeps it unavailable.
@@ -36,7 +36,7 @@ The migration is additive. Existing tenant RLS policies and table-level UPDATE g
 
 | Endpoint | Request/response additions |
 |---|---|
-| `PATCH /api/v1/bookings/:id/change-requests/:requestId` | `decision`; optional `chargePhp` (nonnegative, at most two decimals) and trimmed `chargeReason` (1..500 characters). A reason is required when the explicit amount differs from the suggestion, including when no suggestion exists. |
+| `PATCH /api/v1/bookings/:id/change-requests/:requestId` | `decision`; optional `chargePhp` (nonnegative, at most two decimals) and trimmed `chargeReason` (1..500 characters). A reason is required only when a suggestion exists and the explicit amount differs from it. With no suggestion, the amount is required and the reason is optional. |
 | `POST /api/v1/bookings/:id/return` | Optional `units: [{ assignmentId, conditionNotes?, needsRepair? }]`, `confirmIncompleteLogs?`, `reason?`. Assignment IDs are UUIDs; condition notes are at most 2000 characters. Confirmation requires a trimmed reason of 3..500 characters. |
 | `PATCH /api/v1/sites/:id/deployments/:assignmentId/return` | Optional `conditionNotes?`, `needsRepair?`, `confirmIncompleteLogs?`, `reason?`, with the same notes and confirmation validation. |
 | `GET /api/v1/bookings/:id` | Change requests include `suggestedChargePhp`, `chargePhp` and `invoiceId`; assignments include `returnConditionNotes` and `returnNeedsRepair`. |
@@ -54,7 +54,7 @@ The customer receives the existing `change_request_resolved` notification with t
 
 ## 5. Verification
 
-Checks run on 2026-10-15 after the review fixes:
+Checks run on 2026-10-15 after the review fixes, before the browser QA follow-up below:
 
 | Check | Result |
 |---|---|
@@ -78,3 +78,5 @@ Pre-merge DB-backed verification at `003d252` used a fresh local PostgreSQL 17 d
 Commit `003d252` made the adversarial fixture's rental/unit selection deterministic and valid for its report dates; every assertion stayed unchanged.
 
 Pre-merge reviews: tenant isolation PASS; migration/RLS PASS; restraint PASS, with the shared `reason` field and redundant guard removal applied; abuse review PASS after the fixture correction. Extraction/reconciliation review is not applicable because those production paths were unchanged.
+
+Browser QA follow-up on 2026-10-15 includes accepted quotations in extension pricing and makes the reason optional when there is no suggestion. Regression specs now cover quote acceptance, payment and deployment before the extension, and explicit zero/positive amounts without a suggestion or reason. Follow-up checks passed: repository lint and typecheck, 395 shared tests, 557 web tests across 90 files with two workers and a 15-second timeout, and API build with zero TSC issues. DB-backed re-verification of this follow-up remains pending.

@@ -332,13 +332,18 @@ describe('Delivery, return and staff alerts', () => {
     await expect(bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved' }))
       .rejects.toMatchObject({ response: { error: 'extension_charge_required' } });
     expect((await bookings.get(adminCtx, booking.id)).items[0]?.end).toEqual(before.items[0]?.end);
-    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved', chargePhp: 0, chargeReason: 'Courtesy extension' });
+    await bookings.resolveChange(adminCtx, booking.id, request.id, { decision: 'approved', chargePhp: 0 });
     const after = await bookings.get(adminCtx, booking.id);
     expect(after.changeRequests[0]).toMatchObject({ chargePhp: 0, invoiceId: null });
     expect(after.invoices).toHaveLength(0);
     const [extended] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipmentAssignments).where(eq(equipmentAssignments.id, before.items[0]!.id)));
     const extraHours = minBookingHours(bookingDays(before.items[0]!.end!, day(17, 17)), dailyHours);
     expect(Number(extended?.bookedHours)).toBe(Number(original?.bookedHours) + extraHours);
+    const chargedRequest = await bookings.requestChange(customerCtx, booking.id, { kind: 'extend', assignmentId: before.items[0]!.id, requestedEnd: day(18, 17) });
+    await bookings.resolveChange(adminCtx, booking.id, chargedRequest.id, { decision: 'approved', chargePhp: 125 });
+    const charged = await bookings.get(adminCtx, booking.id);
+    expect(charged.changeRequests.find((row) => row.id === chargedRequest.id)?.chargePhp).toBe(125);
+    expect(charged.invoices.find((row) => row.invoiceType === 'extension')?.amount).toBe(125);
     await bookings.cancel(customerCtx, booking.id);
   });
 

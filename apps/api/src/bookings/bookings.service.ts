@@ -829,7 +829,7 @@ export class BookingsService {
           if (chargePhp === null) throw new UnprocessableEntityException({ error: 'extension_charge_required' });
           if (body.chargePhp !== undefined && body.chargePhp !== charge.suggestion) {
             chargeReason = body.chargeReason?.trim() || null;
-            if (!chargeReason) throw new UnprocessableEntityException({ error: 'charge_reason_required' });
+            if (charge.suggestion !== null && !chargeReason) throw new UnprocessableEntityException({ error: 'charge_reason_required' });
           }
           if (chargePhp > 0) {
             const [invoice] = await tx.insert(invoices).values({
