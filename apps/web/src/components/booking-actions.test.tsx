@@ -29,6 +29,24 @@ function renderRequests(data = booking) {
 }
 
 describe('extension approval', () => {
+  it('keeps the reason field usable when the API requires a reason for an unchanged suggestion', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response('{"error":"charge_reason_required"}', { status: 422 }))
+      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetcher);
+    renderRequests();
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('alertdialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await within(dialog).findByText('Explain why the charge differs from the suggestion.');
+    await userEvent.type(within(dialog).getByLabelText(/Reason for change/), 'Previously agreed price');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1].body))).toEqual({
+      decision: 'approved', chargePhp: 1200, chargeReason: 'Previously agreed price',
+    });
+  });
+
   it('requires an override reason and sends the edited amount', async () => {
     const fetcher = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
     vi.stubGlobal('fetch', fetcher);

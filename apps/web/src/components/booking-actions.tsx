@@ -27,6 +27,7 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
   const [chargeReason, setChargeReason] = useState('');
   const [chargeError, setChargeError] = useState<string>();
   const [reasonError, setReasonError] = useState<string>();
+  const [serverNeedsReason, setServerNeedsReason] = useState(false);
   const resolve = useMutation({
     mutationFn: ({ id, body }: { id: string; body: ChangeRequestResolve }) =>
       apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
@@ -41,6 +42,7 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
         return;
       }
       if (payloadField(err, 'error') === 'charge_reason_required') {
+        setServerNeedsReason(true);
         setReasonError('Explain why the charge differs from the suggestion.');
         return;
       }
@@ -48,12 +50,13 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
     },
   });
   const [ask, setAsk] = useState<{ request: BookingDetailResponse['changeRequests'][number]; decision: 'approved' | 'rejected' } | null>(null);
-  const needsReason = ask?.request.kind === 'extend' && Number(charge) !== ask.request.suggestedChargePhp;
+  const needsReason = serverNeedsReason || (ask?.request.kind === 'extend' && Number(charge) !== ask.request.suggestedChargePhp);
   function openRequest(request: BookingDetailResponse['changeRequests'][number], decision: 'approved' | 'rejected') {
     setCharge(request.suggestedChargePhp === null ? '' : String(request.suggestedChargePhp));
     setChargeReason('');
     setChargeError(undefined);
     setReasonError(undefined);
+    setServerNeedsReason(false);
     setAsk({ request, decision });
   }
 
