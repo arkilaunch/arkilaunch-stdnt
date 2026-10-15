@@ -83,9 +83,9 @@ describe('validateCart', () => {
       expect(validateCart(input({ companyId: '' })).companyId).toMatch(/choose/i);
     });
 
-    it('agrees with the dropdown about what is selectable', () => {
+    it('lets a pending company fill a cart but not a rejected one', () => {
       expect(isSelectableCompany(APPROVED)).toBe(true);
-      expect(isSelectableCompany(company('x', 'pending'))).toBe(false);
+      expect(isSelectableCompany(company('x', 'pending'))).toBe(true);
       expect(isSelectableCompany(company('x', 'rejected'))).toBe(false);
     });
   });

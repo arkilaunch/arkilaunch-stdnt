@@ -40,11 +40,11 @@ afterEach(() => {
   clearTokens();
 });
 describe('tenant storefront', () => {
-  it('hides landing prices and empty testimonials; exposes signed-out Cart', async () => {
+  it('shows public prices, hides empty testimonials; exposes signed-out Cart', async () => {
     stub([]);
     const view = await renderRoute('/');
     await screen.findByText('Test machine');
-    expect(screen.queryByText(/\/ hour|Price on request/)).not.toBeInTheDocument();
+    expect(screen.getByText(/1,500\.00 \/ hour/)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Testimonials' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Testimonials' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
@@ -66,11 +66,10 @@ describe('tenant storefront', () => {
     expect(screen.getByText('TA')).toHaveAttribute('aria-hidden', 'true');
     view.unmount();
   });
-  it('asks a guest to log in for prices on /equipment', async () => {
+  it('shows a guest prices on /equipment', async () => {
     stub([]);
     const view = await renderRoute('/equipment');
-    expect(await screen.findByText('Log in to see prices')).toBeInTheDocument();
-    expect(screen.queryByText(/\/ hour/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/1,500\.00 \/ hour/)).toBeInTheDocument();
     view.unmount();
   });
   it('handles a null headline', async () => {

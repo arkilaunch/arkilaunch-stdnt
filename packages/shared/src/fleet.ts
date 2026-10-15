@@ -165,12 +165,6 @@ export const CatalogEquipmentListResponseSchema = z.object({
 });
 export type CatalogEquipmentListResponse = z.infer<typeof CatalogEquipmentListResponseSchema>;
 
-// Prices are not public: only a signed-in customer with a KYC-approved company gets them.
-export const CatalogRateListResponseSchema = z.object({
-  items: z.array(z.object({ equipmentId: z.string().uuid(), rateValue: z.number().nullable() })),
-});
-export type CatalogRateListResponse = z.infer<typeof CatalogRateListResponseSchema>;
-
 export const CatalogTestimonialSchema = z.object({
   id: z.string().uuid(),
   headline: z.string().nullable(),

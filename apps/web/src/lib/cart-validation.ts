@@ -24,9 +24,13 @@ function startOfToday(): number {
   return d.getTime();
 }
 
-// Deliberately stricter than the API, which only gates payment on verification.
+// A pending company can fill a cart; sending the request waits for verification (the API enforces it).
 export function isSelectableCompany(company: CompanyResponse): boolean {
-  return company.kycStatus === 'approved';
+  return company.kycStatus !== 'rejected';
+}
+
+export function needsVerification(company: CompanyResponse | undefined): boolean {
+  return company?.kycStatus === 'pending';
 }
 
 export function companyStatusLabel(company: CompanyResponse): string {
@@ -53,11 +57,11 @@ export function validateCart(input: ValidateCartInput): CartFieldErrors {
     errors.companyId = 'Choose which company this rental is for.';
   } else if (!company) {
     errors.companyId = 'That company is no longer on your account.';
-  } else if (!isSelectableCompany(company)) {
+  } else if (company.kycStatus !== 'approved') {
     errors.companyId =
       company.kycStatus === 'rejected'
         ? `${company.companyName} failed verification, so it cannot rent. Contact the rental team.`
-        : `${company.companyName} is still awaiting verification. You can book once the rental team approves it.`;
+        : `${company.companyName} is awaiting verification. Finish it to send this request; your cart is saved.`;
   }
 
   if (!input.projectSiteId) {
