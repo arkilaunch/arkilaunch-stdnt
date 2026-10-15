@@ -60,7 +60,7 @@ MoSCoW priorities. IDs are permanent and frozen. Sequencing note (from scrutiny 
 | PRD-F5 | Weather-Aware Module | Open-Meteo poll per project site (lat/long); risk advisories; auto-logged environmental liability incidents. A cron scheduler drives the polling. | Must-Have |
 | PRD-F6 | OCR-assisted KYC & Registration | Extract SEC number and TIN from corporate documents using Azure DI layout plus query fields (not the prebuilt ID model, which covers only US licenses and passports). Human-in-the-loop admin confirms against SEC and BIR portals; BIR ORUS CAPTCHA blocks full automation. | Must-Have |
 | PRD-F7 | Multi-Tenant Access, Identity & RBAC | Tenant onboarding and subscription; NestJS/Passport-JWT identity with short-lived access tokens and rotating refresh tokens carrying tenant_id and role; RBAC over Role/Permission; Postgres row-level tenant isolation. | Must-Have |
-| PRD-F8 | Client Booking Portal | Browse catalog, cart and book, place or modify orders, track transaction status. | Should-Have |
+| PRD-F8 | Client Booking Portal | Browse catalog, cart and book, place or modify orders, track transaction status. **Addendum (2026-10-15, `cr-arkilaunch-return-reminders.md`):** return reminders before each machine's return date at per-tenant points (baseline 5, 3, 1 days) and once when overdue, to the customer and staff. | Should-Have |
 
 ---
 
@@ -247,7 +247,7 @@ Screen count: **25**. Grouped by area. Every interactive screen defines empty / 
     └── /field/notifications  /field/settings  /field/profile
 ```
 
-**Persistent / global elements:** Top app bar with tenant name, active-tenant badge, notifications (PM alerts, weather advisories, review-queue count), and account menu on every authed screen. Sidebar hidden during onboarding and on the timekeeper console.
+**Persistent / global elements:** Top app bar with tenant name, active-tenant badge, notifications (PM alerts, weather advisories, review-queue count, return reminders), and account menu on every authed screen. Sidebar hidden during onboarding and on the timekeeper console.
 
 **Auth boundaries:** Public: `/`, `/login`, `/register/*`, `/equipment/*`, `/contact`, `/help`, `/terms`, `/privacy`. Authed customer: `/account/*`. Authed tenant: `/app/*` and `/field/*`, scoped to the JWT tenant_id with row-level isolation. Platform admin: `/app/companies/pending`. RBAC gates admin-only routes (`/app/registration`, `/app/companies/*`, `/app/users`, `/app/settings`) from owner and timekeeper roles.
 

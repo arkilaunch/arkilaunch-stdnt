@@ -83,7 +83,7 @@ graph TD
 | Client | React 19.2 + Vite 8, TanStack Router v1 + Query v5, Tailwind, Zod, native fetch | Role-aware SPA (admin/owner/timekeeper/customer/platform); client-side image compression and resumable upload queue; printable quote output; never sees another tenant's data. Serves PRD-F1, F2, F3, F4, F5, F6, F7, F8 screens. |
 | Edge / Gateway | Cloudflare (WAF, L3/L4/L7 DDoS, DNS), Cloudflare Workers static assets for frontend delivery | TLS 1.3 termination at the edge, WAF rules, DDoS absorption, bot mitigation on the public booking portal (`/t/:tenantSlug`). **Addendum (2026-09-27, `cr-arkilaunch-turnstile.md`):** the API is not behind Cloudflare (it stays on the ACA ingress FQDN), so the WAF covers the frontend only; bot mitigation for the API is Cloudflare Turnstile verified server-side on signup, company registration, forgot-password, and login after repeated failures. |
 | API | NestJS 11.1 on Node 24 LTS (Azure Container Apps, persistent) | REST API, Passport-JWT identity authority, RBAC guard, per-request tenant transaction that sets the RLS GUC, PayMongo session creation and webhook verification, Azure DI extraction dispatch. Serves every PRD-F#. |
-| Service / Compute | ACA Jobs (cron) on Node 24 | Weather poll per active site (PRD-F5), PM-threshold notifications (PRD-F4), diesel-price refresh (PRD-F1), async OCR + reconciliation workers (PRD-F3). Guards overlapping runs via replica/parallelism limit or an advisory lock. |
+| Service / Compute | ACA Jobs (cron) on Node 24 | Weather poll per active site (PRD-F5), PM-threshold notifications (PRD-F4), diesel-price refresh (PRD-F1), async OCR + reconciliation workers (PRD-F3), daily return reminders (PRD-F8, `cr-arkilaunch-return-reminders.md`). Guards overlapping runs via replica/parallelism limit or an advisory lock. |
 | Data | Supabase managed PostgreSQL + Supabase Storage; Drizzle ORM | Multi-tenant relational store with RLS by `tenant_id`; Storage holds EDTR and KYC image blobs behind short-TTL signed URLs. Not used as the session-auth authority. |
 | Infrastructure | Cloudflare Workers (frontend), Azure Container Apps (API + Jobs), Supabase (DB + Storage), Cloudflare (edge); external Azure DI, PayMongo, Open-Meteo, diesel source | Hosting, private DB networking, static egress IPs, secrets in env, CI/CD from `dev`/`staging`/`main`. Detailed in §6. |
 
@@ -513,6 +513,8 @@ erDiagram
 | `GET` | `/api/v1/incidents/companies` | Used-despite-warning incidents per renting company, dismissed left out (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `PATCH` | `/api/v1/incidents/:id` | Review status `open/acknowledged/dismissed` + note (a dismissal needs one), audit-logged; never money (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `GET` | `/api/v1/notifications`, `PATCH /api/v1/notifications/:id/read` | The caller's own notifications feed (`cr-arkilaunch-f9-read-surface.md`) | cross-cutting |
+| `GET` | `/api/v1/bookings/returns-due` | Machines due back within the tenant's widest reminder point, overdue first (`cr-arkilaunch-return-reminders.md`) | PRD-F8 |
+| `GET`/`PUT` | `/api/v1/bookings/return-reminders` | Tenant return reminder points (7/5/3/2/1 days) and overdue switch; `PUT` needs `tenant:manage` | PRD-F8 |
 | `GET` | `/api/v1/reports/financial` | Invoiced/paid/deducted totals by period (QAD-T8's financial half) | PRD-F4 |
 
 ### Must-Have endpoint contracts
