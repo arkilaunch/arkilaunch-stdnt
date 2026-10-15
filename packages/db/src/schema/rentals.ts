@@ -6,6 +6,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  smallint,
   text,
   timestamp,
   unique,
@@ -332,5 +333,22 @@ export const siteDocuments = pgTable(
     tenantIsolationPolicy(),
     index('site_documents_tenant_id_idx').on(t.tenantId),
     index('site_documents_project_site_id_idx').on(t.projectSiteId),
+  ],
+);
+
+// Return reminder points per tenant (0091); a tenant with no row gets DEFAULT_RETURN_REMINDERS.
+export const returnReminderSettings = pgTable(
+  'return_reminder_settings',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    daysBefore: smallint('days_before').array().notNull().default(sql`'{5,3,1}'`),
+    overdue: boolean('overdue').notNull().default(true),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    tenantIsolationPolicy(),
+    check('return_reminder_settings_days_chk', sql`${t.daysBefore} <@ '{7,5,3,2,1}'::smallint[]`),
   ],
 );

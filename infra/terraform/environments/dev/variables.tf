@@ -123,6 +123,12 @@ variable "hold_expiry_cron" {
   default = "5 * * * *"
 }
 
+# 00:00 UTC = 08:00 Manila.
+variable "return_reminders_cron" {
+  type    = string
+  default = "0 0 * * *"
+}
+
 # --- Secrets: TF_VAR_* from GitHub encrypted secrets, never committed. ---
 
 variable "database_url_direct" {

@@ -41,6 +41,8 @@ import type {
   AvailabilityResponse,
   EdtrSheetContext,
   EdtrSettings,
+  ReturnReminderSettings,
+  ReturnsDueResponse,
   FieldSheetListResponse,
   ScanTargetsResponse,
   EquipmentReportResponse,
@@ -264,6 +266,11 @@ export interface BookingListFilters {
 }
 
 export const bookingsQueries = {
+  // Under ['bookings'] so any booking change refreshes the countdowns.
+  returnsDue: () =>
+    queryOptions({ queryKey: ['bookings', 'returns-due'] as const, queryFn: () => apiGet<ReturnsDueResponse>('/bookings/returns-due') }),
+  returnReminders: () =>
+    queryOptions({ queryKey: ['return-reminders'] as const, queryFn: () => apiGet<ReturnReminderSettings>('/bookings/return-reminders') }),
   edtrSheet: (bookingId: string) =>
     queryOptions({
       queryKey: ['booking', bookingId, 'edtr-sheet'] as const,

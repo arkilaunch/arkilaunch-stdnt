@@ -12,6 +12,8 @@ import {
   getBillingSettings,
   invoices,
   customerTier,
+  dueAssignments,
+  getReturnReminderSettings,
   negotiationMessages,
   payments,
   projectSites,
@@ -19,6 +21,7 @@ import {
   quotationItems,
   rentals,
   resolveDepositLedger,
+  returnReminderSettings,
   withTenantTx,
 } from '@arkilaunch/db';
 import type {
@@ -37,9 +40,15 @@ import type {
   AvailabilityBlocker,
   RequestContext,
   RescheduleSuggestion,
+  ReturnReminderSettings,
+  ReturnsDueResponse,
 } from '@arkilaunch/shared';
 import {
+  addDaysIso,
   bookingCodeSearchPrefix,
+  daysUntilReturn,
+  manilaDate,
+  returnWindowDays,
   bookingDays,
   maxBookingHours,
   minBookingHours,
@@ -356,6 +365,45 @@ export class BookingsService {
         }),
         total,
         statusCounts,
+      };
+    });
+  }
+
+  getReturnReminders(ctx: RequestContext): Promise<ReturnReminderSettings> {
+    return withTenantTx(ctx, (tx) => getReturnReminderSettings(tx, ctx.tenantId));
+  }
+
+  saveReturnReminders(ctx: RequestContext, body: ReturnReminderSettings): Promise<ReturnReminderSettings> {
+    const daysBefore = [...body.daysBefore].sort((a, b) => b - a);
+    return withTenantTx(ctx, async (tx) => {
+      await tx
+        .insert(returnReminderSettings)
+        .values({ tenantId: ctx.tenantId, daysBefore, overdue: body.overdue })
+        .onConflictDoUpdate({
+          target: returnReminderSettings.tenantId,
+          set: { daysBefore, overdue: body.overdue, updatedAt: new Date() },
+        });
+      return { daysBefore, overdue: body.overdue };
+    });
+  }
+
+  // Machines due within the tenant's widest reminder point, overdue first (end ascending puts them first).
+  async returnsDue(ctx: RequestContext, now = new Date()): Promise<ReturnsDueResponse> {
+    return withTenantTx(ctx, async (tx) => {
+      const windowDays = returnWindowDays(await getReturnReminderSettings(tx, ctx.tenantId));
+      const until = new Date(`${addDaysIso(manilaDate(now), windowDays + 1)}T00:00:00+08:00`);
+      const rows = await dueAssignments(tx, until, ctx.tenantId);
+      return {
+        windowDays,
+        items: rows.map((r) => ({
+          rentalId: r.rentalId,
+          code: r.code,
+          customerName: r.customerName,
+          assignmentId: r.assignmentId,
+          equipmentLabel: r.equipmentLabel,
+          end: r.end.toISOString(),
+          daysLeft: daysUntilReturn(r.end, now),
+        })),
       };
     });
   }

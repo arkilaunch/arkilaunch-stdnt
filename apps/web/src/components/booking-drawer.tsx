@@ -13,6 +13,7 @@ import { buttonClass } from './button.js';
 import { Modal } from './modal.js';
 import { Tabs } from './tabs.js';
 import { StatusBadge } from './status-badge.js';
+import { ReturnCountdown } from './return-countdown.js';
 import { RouteMap } from './route-map.js';
 import { NegotiationThread, inAppNegotiation } from './negotiation-thread.js';
 import { CapReview } from './tier-cap.js';
@@ -90,6 +91,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className="text-text-muted">
                 {formatDate(item.start)} – {item.end ? formatDate(item.end) : 'open'}
               </span>
+              {item.status === 'active' && <ReturnCountdown end={item.end} />}
               {item.returnConditionNotes && <p className="w-full whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
               {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
             </li>
