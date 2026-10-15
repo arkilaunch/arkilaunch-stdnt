@@ -396,7 +396,7 @@ export const rentalAgreements = pgTable(
   },
   (t) => [
     tenantIsolationPolicy(),
-    index('rental_agreements_rental_idx').on(t.tenantId, t.rentalId),
+    unique('rental_agreements_rental_quotation_uq').on(t.tenantId, t.rentalId, t.quotationId).nullsNotDistinct(),
     check('rental_agreements_name_chk', sql`char_length(${t.signedName}) between 2 and 120`),
     check('rental_agreements_signature_chk', sql`char_length(${t.signaturePng}) <= 140000`),
   ],

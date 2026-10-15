@@ -22,9 +22,10 @@ CREATE TABLE IF NOT EXISTS "rental_agreements" (
 	"ip" text,
 	"user_agent" text,
 	CONSTRAINT "rental_agreements_name_chk" CHECK (char_length("signed_name") between 2 and 120),
-	CONSTRAINT "rental_agreements_signature_chk" CHECK (char_length("signature_png") <= 140000)
+	CONSTRAINT "rental_agreements_signature_chk" CHECK (char_length("signature_png") <= 140000),
+	-- One signature per rental + quotation; NULLS NOT DISTINCT so a deposit-only booking (no quotation) also signs once.
+	CONSTRAINT "rental_agreements_rental_quotation_uq" UNIQUE NULLS NOT DISTINCT ("tenant_id","rental_id","quotation_id")
 );--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "rental_agreements_rental_idx" ON "rental_agreements" ("tenant_id","rental_id");--> statement-breakpoint
 ALTER TABLE "rental_terms_settings" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "rental_terms_settings" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "rental_agreements" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint

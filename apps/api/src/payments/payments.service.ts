@@ -118,7 +118,7 @@ export class PaymentsService {
 
       const { quotation, mobAmount, demobAmount, depositAmount, invoiceType } = await this.bookingCharge(tx, ctx, bookingId);
       // A customer signs the rental agreement once per quotation before any money moves; at the office, staff pay on paper.
-      if (!office) await this.recordAgreement(tx, ctx, rental, quotation?.id ?? null, body.agreement, signer);
+      if (!office && ctx.role === 'customer') await this.recordAgreement(tx, ctx, rental, quotation?.id ?? null, body.agreement, signer);
       const amount = round2HalfUp(mobAmount + demobAmount + depositAmount);
 
       const [alreadyPaid] = await tx
