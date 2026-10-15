@@ -40,7 +40,7 @@ function toLabel(name: string): string {
     .slice(0, 50);
 }
 
-function useScrollReveal<T extends HTMLElement>() {
+export function useScrollReveal<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [visible, setVisible] = useState(() =>
     typeof IntersectionObserver === 'undefined' ||

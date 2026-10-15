@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderRoute } from '../test/render-route.js';
 import { clearTokens } from '../lib/auth-client.js';
 
@@ -90,6 +90,48 @@ describe('tenant storefront', () => {
     const view = await renderRoute('/');
     await screen.findByRole('heading', { name: 'Headline 6' });
     expect(screen.getAllByRole('heading', { name: /^Headline \d/ })).toHaveLength(7);
+    view.unmount();
+  });
+
+  it('shows how renting works and sends the search to the full catalog', async () => {
+    stub([]);
+    const view = await renderRoute('/');
+    expect(await screen.findByRole('heading', { name: 'How renting works' })).toBeInTheDocument();
+    expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('Sign and pay')]),
+    );
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search equipment' }), { target: { value: 'hoe' } });
+    fireEvent.submit(screen.getByRole('search'));
+    await waitFor(() => expect(view.router.state.location.pathname).toBe('/equipment'));
+    expect(view.router.state.location.search).toEqual({ q: 'hoe' });
+    expect(await screen.findByRole('searchbox', { name: 'Search equipment' })).toHaveValue('hoe');
+    view.unmount();
+  });
+  it('offers a retry when the fleet fails to load, not a blank search miss', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve(
+          String(url).includes('/catalog/equipment')
+            ? new Response('{}', { status: 500 })
+            : new Response(JSON.stringify(String(url).includes('/catalog/tenant') ? { name: 'Test rentals', slug: 'almara' } : { items: [] })),
+        ),
+      ),
+    );
+    const view = await renderRoute('/');
+    expect(await screen.findByText('The equipment list could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText(/No equipment matches/)).not.toBeInTheDocument();
+    view.unmount();
+  });
+  it('says the fleet is empty instead of a search miss', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve(new Response(JSON.stringify(String(url).includes('/catalog/tenant') ? { name: 'Test rentals', slug: 'almara' } : { items: [] }))),
+      ),
+    );
+    const view = await renderRoute('/');
+    expect(await screen.findByText('No machines listed yet')).toBeInTheDocument();
     view.unmount();
   });
 });

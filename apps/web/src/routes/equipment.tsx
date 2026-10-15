@@ -136,7 +136,7 @@ function ConfigureRentalDialog({
 
 function EquipmentPage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(equipmentRoute.useSearch().q ?? '');
   const [category, setCategory] = useState('');
   const [offset, setOffset] = useState(0);
   const [configuring, setConfiguring] = useState<CatalogEquipment | null>(null);
@@ -256,5 +256,8 @@ function EquipmentPage() {
 export const equipmentRoute = createRoute({
   getParentRoute: () => storefrontLayoutRoute,
   path: '/equipment',
+  // Seeded from the landing page search.
+  validateSearch: (search: Record<string, unknown>): { q?: string } =>
+    typeof search.q === 'string' && search.q ? { q: search.q.slice(0, 100) } : {},
   component: EquipmentPage,
 });
