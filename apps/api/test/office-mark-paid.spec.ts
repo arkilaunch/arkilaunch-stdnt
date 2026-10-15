@@ -11,6 +11,7 @@ import { BillingService } from '../src/billing/billing.service.js';
 import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 
 // QA 34: a walk-in pays at the office; staff mark it paid (optional OR) and can deploy or dispatch next.
 describe('Office mark-as-paid', () => {
@@ -56,6 +57,7 @@ describe('Office mark-as-paid', () => {
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
@@ -123,7 +125,7 @@ describe('Office mark-as-paid', () => {
     const start = new Date(Date.UTC(2034, 0, 5, 8)).toISOString();
     const end = new Date(Date.UTC(2034, 0, 5, 17)).toISOString();
     const created = await bookings.create(customerCtx, { customerId: companyId, projectSiteId: siteId, items: [{ equipmentId, start, end }] });
-    await expect(payments.checkout(customerCtx, created.id, { cash: true })).rejects.toMatchObject({ response: { error: 'call_not_confirmed' } });
+    await expect(payments.checkout(customerCtx, created.id, { ...SIGNED, cash: true })).rejects.toMatchObject({ response: { error: 'call_not_confirmed' } });
 
     await payments.markPaidAtOffice(adminCtx, 'rental', created.id);
     const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, created.id)));

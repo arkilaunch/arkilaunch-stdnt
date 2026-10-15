@@ -21,6 +21,7 @@ import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { checkoutPaidWebhook } from './paymongo-webhook.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 
 // What is charged upfront is the contract deposit plus mob/demob, once; hours bill weekly.
 describe('Customer journey', () => {
@@ -90,6 +91,7 @@ describe('Customer journey', () => {
       await sql`update quotations set parent_quotation_id = null where rental_id = any(${ids})`;
       await sql`delete from quotations where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
@@ -165,7 +167,7 @@ describe('Customer journey', () => {
     });
 
     // Paying before agreeing the price is refused.
-    await expect(payments.checkout(customerCtx, booking.id)).rejects.toMatchObject({
+    await expect(payments.checkout(customerCtx, booking.id, SIGNED)).rejects.toMatchObject({
       response: { error: 'quote_not_accepted' },
     });
 
@@ -204,8 +206,8 @@ describe('Customer journey', () => {
     // hours bill weekly against the deposit. A retry reuses it.
     const [stored] = await withTenantTx(adminCtx, (tx) => tx.select().from(quotations).where(eq(quotations.id, second.id)));
     const upfrontLines = [deposit, Number(stored?.mobilizationPhp ?? 0), Number(stored?.demobilizationPhp ?? 0)].filter((n) => n > 0);
-    const checkout = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
-    const retry = await payments.checkout(customerCtx, booking.id, { method: 'qrph' });
+    const checkout = await payments.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph' });
+    const retry = await payments.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph' });
     expect(retry.invoiceId).toBe(checkout.invoiceId);
     const [invoice] = await withTenantTx(adminCtx, (tx) => tx.select().from(invoices).where(eq(invoices.id, checkout.invoiceId)));
     expect(invoice?.invoiceType).toBe('booking');
@@ -221,7 +223,7 @@ describe('Customer journey', () => {
     const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, booking.id)));
     expect(rental?.status).toBe('confirmed');
     expect(await notificationTypes(booking.id)).toContain('payment_received');
-    await expect(payments.checkout(customerCtx, booking.id)).rejects.toMatchObject({ response: { error: 'already_paid' } });
+    await expect(payments.checkout(customerCtx, booking.id, SIGNED)).rejects.toMatchObject({ response: { error: 'already_paid' } });
 
     // Once paid, the customer asks to cancel rather than cancelling.
     await expect(bookings.cancel(customerCtx, booking.id)).rejects.toMatchObject({

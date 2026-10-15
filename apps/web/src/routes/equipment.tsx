@@ -9,8 +9,7 @@ import { PageHeader } from '../components/page-header.js';
 import { SearchFilterBar } from '../components/search-filter-bar.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { equipmentImageUrl } from '../lib/equipment-images.js';
-import { catalogQueries, companiesQueries } from '../lib/queries.js';
-import { isSelectableCompany } from '../lib/cart-validation.js';
+import { catalogQueries } from '../lib/queries.js';
 import { Skeleton } from '../components/skeleton.js';
 import { LoadError } from '../components/load-error.js';
 import { Modal } from '../components/modal.js';
@@ -137,16 +136,13 @@ function ConfigureRentalDialog({
 
 function EquipmentPage() {
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(equipmentRoute.useSearch().q ?? '');
   const [category, setCategory] = useState('');
   const [offset, setOffset] = useState(0);
   const [configuring, setConfiguring] = useState<CatalogEquipment | null>(null);
   const [weatherOpen, setWeatherOpen] = useState(false);
   const { data, isPending, isError, refetch } = useQuery(catalogQueries.equipment());
-  // The lock is a customer nudge only; the API still gates payment.
   const signedIn = Boolean(getAccessToken());
-  const { data: companies } = useQuery({ ...companiesQueries.mine(), enabled: signedIn });
-  const rentLocked = Boolean(companies && !companies.some(isSelectableCompany));
   const { rateById, priceNote } = useCatalogRates();
 
   const equipment = useMemo(
@@ -221,9 +217,8 @@ function EquipmentPage() {
                 {...(imageUrl ? { imageUrl } : {})}
                 model={eq.model}
                 make={eq.equipmentTypeName}
-                {...(rentLocked ? { rentLabel: 'Verify to rent' } : {})}
                 onRent={() =>
-                  rentLocked ? navigate({ to: '/account/applications' }) : setConfiguring(eq)
+                  setConfiguring(eq)
                 }
                 onViewDetails={() =>
                   navigate({ to: '/equipment/$equipmentId', params: { equipmentId: eq.id } })
@@ -261,5 +256,8 @@ function EquipmentPage() {
 export const equipmentRoute = createRoute({
   getParentRoute: () => storefrontLayoutRoute,
   path: '/equipment',
+  // Seeded from the landing page search.
+  validateSearch: (search: Record<string, unknown>): { q?: string } =>
+    typeof search.q === 'string' && search.q ? { q: search.q.slice(0, 100) } : {},
   component: EquipmentPage,
 });

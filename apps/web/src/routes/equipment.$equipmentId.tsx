@@ -6,8 +6,7 @@ import { Button, buttonClass } from '../components/button.js';
 import { EmptyState } from '../components/empty-state.js';
 import { EquipmentSchematic } from '../components/equipment-schematic.js';
 import { equipmentImageUrl } from '../lib/equipment-images.js';
-import { catalogQueries, companiesQueries } from '../lib/queries.js';
-import { isSelectableCompany } from '../lib/cart-validation.js';
+import { catalogQueries } from '../lib/queries.js';
 import { formatPeso } from '../lib/format.js';
 import { ApiError } from '../lib/api-client.js';
 import { Skeleton } from '../components/skeleton.js';
@@ -22,9 +21,6 @@ function EquipmentDetailPage() {
   const { equipmentId } = equipmentDetailRoute.useParams();
   const navigate = useNavigate();
   const signedIn = Boolean(getAccessToken());
-  // Renting is for verified companies; the API refuses the booking regardless.
-  const { data: companies } = useQuery({ ...companiesQueries.mine(), enabled: signedIn });
-  const rentLocked = Boolean(companies && !companies.some(isSelectableCompany));
   const { rateById, priceNote } = useCatalogRates();
   const {
     data: equipment,
@@ -129,10 +125,6 @@ function EquipmentDetailPage() {
         className="w-fit"
         disabled={unavailable}
         onClick={() => {
-          if (rentLocked) {
-            void navigate({ to: '/account/applications' });
-            return;
-          }
           addToCart({
             equipmentId: equipment.id,
             model: equipment.model,
@@ -147,7 +139,7 @@ function EquipmentDetailPage() {
           );
         }}
       >
-        {!signedIn ? 'Sign in to rent' : rentLocked ? 'Verify to rent' : 'Rent this unit'}
+        {signedIn ? 'Rent this unit' : 'Sign in to rent'}
       </Button>
     </div>
   );

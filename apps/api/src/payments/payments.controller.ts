@@ -14,7 +14,7 @@ export class PaymentsController {
   @RequirePermission('payment:checkout')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   checkout(@Param('id') id: string, @Body() body: CheckoutRequestDto, @Req() req: CtxRequest) {
-    return this.payments.checkout(req.ctx, id, body, req.headers.origin);
+    return this.payments.checkout(req.ctx, id, body, req.headers.origin, false, { ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
   // Tight throttle: this is the endpoint a code guesser would hammer.

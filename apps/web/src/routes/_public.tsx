@@ -12,7 +12,7 @@ type FooterTo = NonNullable<LinkProps['to']>;
 
 const FOOTER_COLUMNS: { title: string; links: { label: string; to: FooterTo }[] }[] = [
   {
-    title: 'Use cases',
+    title: 'Rent',
     links: [
       { label: 'Browse equipment', to: '/equipment' },
       { label: 'My bookings', to: '/account/bookings' },
@@ -54,7 +54,7 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
               {tenantName}
             </p>
             <p className="mt-2 text-sm text-text-inverse/70">
-              {tenantName} &copy; 2026. All rights reserved. Powered by ArkiLaunch.
+              {tenantName} &copy; {new Date().getFullYear()}. All rights reserved. Powered by ArkiLaunch.
             </p>
             {tenant?.facebookUrl && (
               <div className="mt-4">

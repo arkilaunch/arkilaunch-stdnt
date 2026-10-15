@@ -26,6 +26,7 @@ import { EventsService } from '../src/events/events.service.js';
 // PhilSys Check, the holder may act for the company.
 const IDENTITY = { philsysVerified: true, holderAuthorized: true } as const;
 import { JwtService } from '@nestjs/jwt';
+import { SIGNED } from './signed.js';
 
 // Sign up, add a company and site, book, and cannot pay until staff verify; nobody else can use the company.
 function jwtService(): JwtService {
@@ -91,6 +92,7 @@ describe('Customer onboarding', () => {
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
@@ -245,12 +247,12 @@ describe('Customer onboarding', () => {
     );
 
     // Verified but not yet called back: still no payment.
-    await expect(payments.checkout(ctx, booking.id)).rejects.toMatchObject({
+    await expect(payments.checkout(ctx, booking.id, SIGNED)).rejects.toMatchObject({
       response: { error: 'call_not_confirmed' },
     });
     await bookings.requestCall(ctx, booking.id);
     await bookings.confirmCall(adminCtx, booking.id);
-    const checkout = await payments.checkout(ctx, booking.id);
+    const checkout = await payments.checkout(ctx, booking.id, SIGNED);
     expect(checkout.checkoutUrl).toContain('about:blank');
 
     await bookings.cancel(ctx, booking.id);

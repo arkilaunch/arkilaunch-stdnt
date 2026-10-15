@@ -8,6 +8,7 @@ import {
   ChangeRequestResolveSchema,
   NegotiationMessageCreateSchema,
   ReturnReminderSettingsSchema,
+  RentalTermsUpdateSchema,
 } from '@arkilaunch/shared';
 
 export class BookingCreateDto extends createZodDto(BookingCreateRequestSchema) {}
@@ -18,3 +19,4 @@ export class NegotiationMessageCreateDto extends createZodDto(NegotiationMessage
 export class ChangeRequestCreateDto extends createZodDto(ChangeRequestCreateSchema) {}
 export class ChangeRequestResolveDto extends createZodDto(ChangeRequestResolveSchema) {}
 export class ReturnReminderSettingsDto extends createZodDto(ReturnReminderSettingsSchema) {}
+export class RentalTermsUpdateDto extends createZodDto(RentalTermsUpdateSchema) {}

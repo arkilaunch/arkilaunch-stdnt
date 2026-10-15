@@ -54,7 +54,7 @@ function SignupPage() {
     setError(null);
     try {
       await registerCustomer(parsed.data, captcha);
-      await navigate({ to: '/account/companies/new', replace: true });
+      await navigate({ to: '/equipment', replace: true });
     } catch (err) {
       setError(signupError(err instanceof Error ? err.message : ''));
       // The token was spent on this attempt; get a fresh one.
@@ -72,7 +72,7 @@ function SignupPage() {
           <h1 id="signup-heading" className="text-heading-lg text-text">
             Create account
           </h1>
-          <p className="text-sm text-text-muted">Rent equipment for your projects. Company details come next.</p>
+          <p className="text-sm text-text-muted">Browse and price equipment right away. Verify your company when you are ready to book.</p>
         </div>
         <Input label="First name" autoComplete="given-name" required maxLength={80} value={firstName} onChange={(e) => setFirstName(e.target.value)} error={fieldErrors.firstName} />
         <Input label="Last name" autoComplete="family-name" required maxLength={80} value={lastName} onChange={(e) => setLastName(e.target.value)} error={fieldErrors.lastName} />

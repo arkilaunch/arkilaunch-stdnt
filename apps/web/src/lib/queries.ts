@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
 import type {
-  CatalogRateListResponse,
   BookingDetailResponse,
   RentPart,
   RateBreakdown,
@@ -42,6 +41,7 @@ import type {
   EdtrSheetContext,
   EdtrSettings,
   ReturnReminderSettings,
+  RentalTerms,
   ReturnsDueResponse,
   FieldSheetListResponse,
   ScanTargetsResponse,
@@ -126,13 +126,6 @@ export const catalogQueries = {
     queryOptions({
       queryKey: ['catalog', 'equipment', id] as const,
       queryFn: () => apiGet<CatalogEquipment>(`/catalog/equipment/${id}`),
-    }),
-  // 403 kyc_required for anyone but a verified customer: callers gate it on useCatalogRates().
-  rates: () =>
-    queryOptions({
-      queryKey: ['catalog', 'rates'] as const,
-      queryFn: () => apiGet<CatalogRateListResponse>('/catalog/rates'),
-      retry: false,
     }),
   testimonials: () =>
     queryOptions({
@@ -271,6 +264,8 @@ export const bookingsQueries = {
     queryOptions({ queryKey: ['bookings', 'returns-due'] as const, queryFn: () => apiGet<ReturnsDueResponse>('/bookings/returns-due') }),
   returnReminders: () =>
     queryOptions({ queryKey: ['return-reminders'] as const, queryFn: () => apiGet<ReturnReminderSettings>('/bookings/return-reminders') }),
+  rentalTerms: () =>
+    queryOptions({ queryKey: ['rental-terms'] as const, queryFn: () => apiGet<RentalTerms>('/bookings/rental-terms') }),
   edtrSheet: (bookingId: string) =>
     queryOptions({
       queryKey: ['booking', bookingId, 'edtr-sheet'] as const,

@@ -10,7 +10,7 @@ import { localDate } from '../components/availability-days.js';
 const PRICED = { id: '11111111-1111-1111-1111-111111111111', model: 'JCB 3CX', rateValue: 1500 };
 const UNPRICED = { id: '22222222-2222-2222-2222-222222222222', model: 'CAT 320D', rateValue: null };
 
-function stubFetch() {
+function stubFetch(kycStatus = 'approved') {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
@@ -19,12 +19,10 @@ function stubFetch() {
       const body = href.includes('/users/me')
         ? { tenantName: 'Almara' }
         : href.includes('/me/companies')
-          ? [{ id: 'c1', companyName: 'Acme', kycStatus: 'approved' }]
+          ? [{ id: 'c1', companyName: 'Acme', kycStatus }]
           : href.includes('sites')
             ? []
-            : href.includes('/catalog/rates')
-              ? { items: [PRICED, UNPRICED].map((eq) => ({ equipmentId: eq.id, rateValue: eq.rateValue })) }
-              : { items: [PRICED, UNPRICED] };
+            : { items: [PRICED, UNPRICED] };
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     }),
   );
@@ -143,6 +141,20 @@ describe('/account/cart cost summary', () => {
 
     await screen.findByRole('heading', { name: 'Cost summary' });
     expect(screen.queryByRole('list', { name: 'Cost per machine' })).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it('lets a pending company fill the cart and stops the request on submit', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+    stubFetch('pending');
+    act(() => addToCart({ equipmentId: PRICED.id, model: PRICED.model, ...defaultRentalWindow() }));
+    const { unmount } = await renderRoute('/account/cart');
+
+    await screen.findByRole('heading', { name: 'Cost summary' });
+    expect(screen.getByRole('link', { name: 'Finish verification' })).toHaveAttribute('href', '/account/companies/c1');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', { name: 'Request a quote' })[0]!);
+    expect(screen.getByText(/Acme is awaiting verification/).closest('[role="alert"]')).not.toBeNull();
     unmount();
   });
 });

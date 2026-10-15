@@ -25,6 +25,7 @@ import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { checkoutPaidWebhook } from './paymongo-webhook.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 
 describe('Delivery, return and staff alerts', () => {
   const events = new EventsService();
@@ -92,6 +93,7 @@ describe('Delivery, return and staff alerts', () => {
       await sql`update quotations set parent_quotation_id = null where rental_id = any(${ids})`;
       await sql`delete from quotations where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
@@ -161,7 +163,7 @@ describe('Delivery, return and staff alerts', () => {
     const quote = await priceBookQuote(booking.id, booking.customerId);
     await quotes.accept(customerCtx, quote.id);
     expect(await staffAlerts('quote_accepted', booking.id)).toBeGreaterThan(0);
-    const checkout = await payments.checkout(customerCtx, booking.id);
+    const checkout = await payments.checkout(customerCtx, booking.id, SIGNED);
     const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
     await payments.handleWebhook(rawBody, header, webhookSecret);
 
@@ -270,7 +272,7 @@ describe('Delivery, return and staff alerts', () => {
     const booking = await book(2);
     const quote = await priceBookQuote(booking.id, booking.customerId);
     await quotes.accept(customerCtx, quote.id);
-    const checkout = await payments.checkout(customerCtx, booking.id);
+    const checkout = await payments.checkout(customerCtx, booking.id, SIGNED);
     const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
     await payments.handleWebhook(rawBody, header, webhookSecret);
     try {

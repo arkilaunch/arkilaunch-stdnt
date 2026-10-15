@@ -19,6 +19,7 @@ import { NegotiationThread, inAppNegotiation } from './negotiation-thread.js';
 import { CapReview } from './tier-cap.js';
 import { BookingSide, SiteRepContact } from './booking-actions.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
+import { AgreementLine } from './agreement-line.js';
 
 const heading = 'text-heading-md text-text';
 
@@ -107,6 +108,9 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
             ))}
           </ul>
         )}
+      </Section>
+      <Section title="Rental agreement">
+        <AgreementLine agreement={booking.agreement} />
       </Section>
       <Section title="Site">
         <p className="text-sm text-text">{booking.siteCity ?? booking.siteProvince ?? '--'}</p>

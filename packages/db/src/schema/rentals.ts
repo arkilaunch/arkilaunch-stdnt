@@ -352,3 +352,52 @@ export const returnReminderSettings = pgTable(
     check('return_reminder_settings_days_chk', sql`${t.daysBefore} <@ '{7,5,3,2,1}'::smallint[]`),
   ],
 );
+
+// Each tenant's current rental agreement text (0092); a tenant with no row gets DEFAULT_RENTAL_TERMS.
+export const rentalTermsSettings = pgTable(
+  'rental_terms_settings',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    body: text('body').notNull(),
+    version: integer('version').notNull().default(1),
+    updatedBy: uuid('updated_by').references(() => users.id),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [tenantIsolationPolicy(), check('rental_terms_settings_body_len_chk', sql`char_length(${t.body}) <= 50000`)],
+);
+
+// Append-only signing evidence (0092): the exact text signed, who, when, from where. One per rental + quotation.
+export const rentalAgreements = pgTable(
+  'rental_agreements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    rentalId: uuid('rental_id')
+      .notNull()
+      .references(() => rentals.id),
+    quotationId: uuid('quotation_id').references(() => quotations.id),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    termsVersion: text('terms_version').notNull(),
+    termsBody: text('terms_body').notNull(),
+    signedName: text('signed_name').notNull(),
+    signaturePng: text('signature_png').notNull(),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (t) => [
+    tenantIsolationPolicy(),
+    unique('rental_agreements_rental_quotation_uq').on(t.tenantId, t.rentalId, t.quotationId).nullsNotDistinct(),
+    check('rental_agreements_name_chk', sql`char_length(${t.signedName}) between 2 and 120`),
+    check('rental_agreements_signature_chk', sql`char_length(${t.signaturePng}) <= 140000`),
+  ],
+);

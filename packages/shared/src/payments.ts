@@ -1,3 +1,4 @@
+import { AgreementSignSchema } from './rental-terms.js';
 import { z } from 'zod';
 import { CHECKOUT_METHODS, REFUND_REASONS } from './payments-port.js';
 
@@ -40,6 +41,8 @@ export const CheckoutRequestSchema = z.object({
   cash: z.boolean().optional(),
   // The server prices it; the client only names the code.
   couponCode: CouponCodeSchema.optional(),
+  // Required on a customer's first checkout per quotation; the server records it before charging.
+  agreement: AgreementSignSchema.optional(),
 });
 export type CheckoutRequest = z.infer<typeof CheckoutRequestSchema>;
 

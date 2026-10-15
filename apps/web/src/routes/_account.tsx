@@ -8,7 +8,7 @@ import { buttonClass } from '../components/button.js';
 import { ACCOUNT_NAV } from '../lib/nav-config.js';
 import { companiesQueries, usersQueries } from '../lib/queries.js';
 
-// Not dismissible: nothing books until a company exists.
+// Not dismissible: nothing books until a company exists, but browsing and the cart work without one.
 function CreateCompanyBanner() {
   const companies = useQuery(companiesQueries.mine());
   const { pathname } = useLocation();
@@ -20,8 +20,8 @@ function CreateCompanyBanner() {
     >
       <TriangleAlert className="h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
       <p className="min-w-0 flex-1">
-        <span className="font-semibold">Finish setting up your account.</span> Create your company to book
-        equipment and trucks.
+        <span className="font-semibold">Add your company when you are ready to book.</span> You can browse and
+        fill your cart first.
       </p>
       <Link to="/account/companies/new" className={buttonClass('primary')}>
         Create company
