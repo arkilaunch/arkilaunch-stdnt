@@ -54,4 +54,18 @@ Notification types: `return_reminder` and `return_overdue`. The payload is `{ re
 
 ## 5. Verification
 
-To be completed before merge.
+Pre-merge evidence recorded on 2026-10-15. DB suites ran on a fresh local PostgreSQL 17 database with migrations and `db:seed:test`, following the CI `api-integration-suite` steps with external keys blanked.
+
+| Check | Result |
+|---|---|
+| `pnpm lint` | Passed; two existing unused-variable warnings in `app.inventory.tsx` |
+| `pnpm typecheck` | Passed |
+| `@arkilaunch/shared` | 35 files, 407/407 tests passed (incl. `return-reminder.spec.ts`) |
+| `@arkilaunch/web` | All files passed, incl. feed, countdown, dashboard panel and settings card tests |
+| `@arkilaunch/api` | 59 files, 395/395 tests passed (incl. `return-reminders.spec.ts`). A first run had `ai-abuse.spec.ts` fail in setup; it passed alone and on a fresh-DB rerun |
+| `@arkilaunch/jobs` | 8 files, 54/54 tests passed (incl. `return-reminders.spec.ts`: grouping, same-day dedup, catch-up, extension re-arm, overdue once, per-tenant points and overdue switch, tenant scoping) |
+| `@arkilaunch/db` pooler-independent suites | 5 files, 30/30 tests passed; RLS enumeration covers the new table |
+| Migration 0091 | Applied cleanly after 0001-0090 |
+| Pre-merge agents | `migration-rls-guardian` PASS; `tenant-isolation-checker` PASS; `restraint-guardian` PASS (two nits applied) |
+
+Browser QA has not been run yet.
