@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_RETURN_REMINDERS,
   RETURN_OVERDUE_TYPE,
+  RETURN_REMINDER_DAY_OPTIONS,
   RETURN_REMINDER_TYPE,
   addDaysIso,
   daysUntilReturn,
@@ -29,8 +30,8 @@ import { runJobIfMain } from './telemetry.js';
 
 // Notifies only: no state change and no money movement. Runs daily at 08:00 Manila.
 const STAFF_ROLES = ['admin', 'owner'];
-// The widest point on the menu (7 days); per-tenant settings narrow it below.
-const LOOKAHEAD_DAYS = 7;
+// The widest point on the menu; per-tenant settings narrow it below.
+const LOOKAHEAD_DAYS = Math.max(...RETURN_REMINDER_DAY_OPTIONS);
 
 type Mail = { email: string; subject: string; text: string; html: string };
 type Group = {

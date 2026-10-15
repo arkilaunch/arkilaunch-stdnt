@@ -3,7 +3,6 @@ import { manilaDate } from './edtr.js';
 
 // The day points a tenant can tick; a tenant with no settings row gets the default.
 export const RETURN_REMINDER_DAY_OPTIONS = [7, 5, 3, 2, 1] as const;
-export type ReturnReminderDay = (typeof RETURN_REMINDER_DAY_OPTIONS)[number];
 
 export const ReturnReminderSettingsSchema = z
   .object({
