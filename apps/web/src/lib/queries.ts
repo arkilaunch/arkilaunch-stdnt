@@ -41,6 +41,7 @@ import type {
   EdtrSheetContext,
   EdtrSettings,
   ReturnReminderSettings,
+  RentalTerms,
   ReturnsDueResponse,
   FieldSheetListResponse,
   ScanTargetsResponse,
@@ -263,6 +264,8 @@ export const bookingsQueries = {
     queryOptions({ queryKey: ['bookings', 'returns-due'] as const, queryFn: () => apiGet<ReturnsDueResponse>('/bookings/returns-due') }),
   returnReminders: () =>
     queryOptions({ queryKey: ['return-reminders'] as const, queryFn: () => apiGet<ReturnReminderSettings>('/bookings/return-reminders') }),
+  rentalTerms: () =>
+    queryOptions({ queryKey: ['rental-terms'] as const, queryFn: () => apiGet<RentalTerms>('/bookings/rental-terms') }),
   edtrSheet: (bookingId: string) =>
     queryOptions({
       queryKey: ['booking', bookingId, 'edtr-sheet'] as const,

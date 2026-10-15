@@ -19,6 +19,7 @@ import { useToast } from '../components/toast.js';
 import { MyEquipmentWeather } from '../components/equipment-weather.js';
 import { apiErrorText, apiPatch, apiPost } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatInvoiceType, formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { AgreementLine } from '../components/agreement-line.js';
 
 const STATUS_TONES: Record<string, StatusTone> = {
   confirmed: 'recon-approved',
@@ -218,6 +219,8 @@ function DepositCard({ booking }: { booking: BookingDetailResponse }) {
   const { required, totalDeducted, deductions } = booking.deposit;
   return (
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
+      <h2 className="text-sm font-medium text-text-muted">Rental agreement</h2>
+      <AgreementLine agreement={booking.agreement} />
       <h2 className="text-sm font-medium text-text-muted">Deposit</h2>
       {required === null ? (
         <p className="text-sm text-text-muted">No deposit is held against this booking yet.</p>

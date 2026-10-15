@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
 import { apiDelete, apiErrorText, apiGet, apiPost, apiPut } from '../lib/api-client.js';
-import { FIELD_SHEET_DAILY_LIMIT, RETURN_REMINDER_DAY_OPTIONS, TEST_EMAIL_TYPES, type ReturnReminderSettings, manilaDate, minRentalDays, rateBreakdown, type EquipmentTypeCostsInput, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
+import { DEFAULT_RENTAL_TERMS, FIELD_SHEET_DAILY_LIMIT, MAX_RENTAL_TERMS, RETURN_REMINDER_DAY_OPTIONS, TEST_EMAIL_TYPES, type ReturnReminderSettings, manilaDate, minRentalDays, rateBreakdown, type EquipmentTypeCostsInput, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
 import { bookingsQueries, edtrQueries, equipmentQueries, pricingQueries, referenceQueries, saveParams, type DieselReading, type PricingParametersRow } from '../lib/queries.js';
 import { DataPanel } from '../components/data-panel.js';
 import { Table, type TableColumn } from '../components/table.js';
@@ -1034,6 +1034,78 @@ function EdtrFieldSettingsForm() {
 const dayPoint = (d: number) => `${d} day${d === 1 ? '' : 's'} before`;
 
 // When customers and admins are reminded that machines are due back (the daily 08:00 job).
+// Customers sign this text at checkout; every save is a new version, and each signed copy is kept as signed.
+export function RentalTermsForm() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const query = useQuery(bookingsQueries.rentalTerms());
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (body: string) => apiPut('/bookings/rental-terms', { body }),
+    onSuccess: () => {
+      setDraft(null);
+      void queryClient.invalidateQueries({ queryKey: bookingsQueries.rentalTerms().queryKey });
+      toast.success('Rental agreement saved');
+    },
+    onError: (e) => toast.error('Could not save the rental agreement', apiErrorText(e)),
+  });
+  if (query.isError)
+    return <LoadError message={`The rental agreement could not be loaded. ${apiErrorText(query.error)}`} onRetry={() => void query.refetch()} />;
+  if (!query.data) return <Skeleton label="Loading rental agreement" />;
+  const saved = query.data;
+  const tooShort = draft !== null && draft.trim().length < 200;
+  return (
+    <>
+      <SummaryCard
+        title="Rental agreement"
+        description="Customers read and sign this at checkout with their typed name and a drawn signature, before paying."
+        items={[
+          { label: 'Text', value: saved.isDefault ? 'Platform template (have your lawyer review it)' : 'Your own' },
+          { label: 'Version', value: saved.version },
+        ]}
+        action={<EditButton what="rental agreement" onClick={() => setDraft(saved.body)} />}
+      />
+      <Modal
+        open={draft !== null}
+        onClose={() => setDraft(null)}
+        title="Rental agreement"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDraft(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" disabled={tooShort} loading={save.isPending} onClick={() => draft !== null && save.mutate(draft)}>
+              Save rental agreement
+            </Button>
+          </>
+        }
+      >
+        {draft !== null && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-sm font-medium text-text">
+              Agreement text
+              <textarea
+                rows={16}
+                maxLength={MAX_RENTAL_TERMS}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                aria-invalid={tooShort}
+                className="w-full resize-y rounded-input border border-border bg-surface p-3 font-mono text-xs font-normal text-text focus-visible:outline-2 focus-visible:outline-focus-ring"
+              />
+            </label>
+            <p className={`text-sm ${tooShort ? 'text-error' : 'text-text-muted'}`}>
+              Plain text, at least 200 characters. Bookings already signed keep the version they signed.
+            </p>
+            <Button variant="ghost" className="self-start" onClick={() => setDraft(DEFAULT_RENTAL_TERMS.body)}>
+              Reset to platform template
+            </Button>
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+
 export function ReturnReminderSettingsForm() {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -1130,6 +1202,7 @@ function SettingsPage() {
       <BillingSettingsForm />
       <EdtrFieldSettingsForm />
       <ReturnReminderSettingsForm />
+      <RentalTermsForm />
       <TestEmailModal open={testing} onClose={() => setTesting(false)} />
     </div>
   );
