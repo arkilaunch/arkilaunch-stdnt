@@ -32,6 +32,7 @@ const FINANCIAL = { invoiced: { total: 1250000 }, depositDeducted: 84000 };
 
 let fleet: unknown[] = [];
 let edtr: unknown[] = [];
+let returnsDue: unknown[] = [];
 
 function stubFetch() {
   vi.stubGlobal(
@@ -40,6 +41,7 @@ function stubFetch() {
       const u = String(url);
       const json = (v: unknown) =>
         Promise.resolve(new Response(JSON.stringify(v), { status: 200 }));
+      if (u.includes('/bookings/returns-due')) return json({ windowDays: 5, items: returnsDue });
       if (u.includes('/reports/utilization')) return json(UTILIZATION);
       if (u.includes('/reports/financial')) return json(FINANCIAL);
       if (u.includes('/weather/advisories')) return json({ items: [], total: 0 });
@@ -57,6 +59,7 @@ function stubFetch() {
 beforeEach(() => {
   fleet = [];
   edtr = [];
+  returnsDue = [];
   sessionStorage.clear();
   setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
   stubFetch();
@@ -68,6 +71,26 @@ afterEach(() => {
 });
 
 describe('Admin dashboard', () => {
+  it('lists machines due back, overdue first, each opening its booking', async () => {
+    returnsDue = [
+      { rentalId: 'r1', code: 'EQR-2026-0007', customerName: 'Acme Builders', assignmentId: 'a1', equipmentLabel: 'Excavator · CAT 320 · SN 1', end: '2026-10-14T09:00:00.000Z', daysLeft: -1 },
+      { rentalId: 'r2', code: 'EQR-2026-0008', customerName: 'Beta Corp', assignmentId: 'a2', equipmentLabel: 'Crane · SN 2', end: '2026-10-18T09:00:00.000Z', daysLeft: 3 },
+    ];
+    await renderRoute('/app');
+
+    expect(await screen.findByText('Returns due')).toBeInTheDocument();
+    expect(screen.getByText('1 overdue. Machines due back in the next 5 days.')).toBeInTheDocument();
+    expect(screen.getByText('Overdue by 1 day')).toBeInTheDocument();
+    expect(screen.getByText('Due in 3 days')).toBeInTheDocument();
+    expect(screen.getByText('Excavator · CAT 320 · SN 1').closest('a')).toHaveAttribute('href', '/app/bookings?open=EQR-2026-0007');
+  });
+
+  it('hides the returns panel when nothing is due', async () => {
+    await renderRoute('/app');
+    expect(await screen.findByText('Paid')).toBeInTheDocument();
+    expect(screen.queryByText('Returns due')).not.toBeInTheDocument();
+  });
+
   it('leads with the four headline figures rather than a rail of every number', async () => {
     await renderRoute('/app');
 

@@ -17,6 +17,7 @@ import { BookingCode } from '../components/booking-code.js';
 import { BookingDrawer, type BookingDrawerTarget } from '../components/booking-drawer.js';
 import { BookingSide } from '../components/booking-actions.js';
 import { StatusBadge } from '../components/status-badge.js';
+import { ReturnCountdown } from '../components/return-countdown.js';
 import { Tabs } from '../components/tabs.js';
 import { Alert } from '../components/alert.js';
 import { BOOKING_STATUSES, bookingCodeSearchPrefix, parseBookingCode } from '@arkilaunch/shared';
@@ -29,7 +30,12 @@ const RENTAL_COLUMNS: TableColumn<BookingSummaryResponse>[] = [
   { header: 'Customer', kind: 'text', cell: (b) => b.customerName ?? '--' },
   {
     header: 'Dates', kind: 'text',
-    cell: (b) => (b.startDate ? `${formatDate(b.startDate)} – ${b.endDate ? formatDate(b.endDate) : 'open'}` : '--'),
+    cell: (b) => (
+      <div className="flex flex-col">
+        {b.startDate ? `${formatDate(b.startDate)} – ${b.endDate ? formatDate(b.endDate) : 'open'}` : '--'}
+        {b.status === 'active' && <ReturnCountdown end={b.endDate} />}
+      </div>
+    ),
   },
   { header: 'Site', kind: 'text', cell: (b) => b.siteCity ?? b.siteProvince ?? siteName({ id: b.projectSiteId }) },
   {

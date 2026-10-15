@@ -1,7 +1,7 @@
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { bookingDays, type BookingDetailResponse } from '@arkilaunch/shared';
+import { bookingDays, daysUntilReturn, returnDueLabel, type BookingDetailResponse } from '@arkilaunch/shared';
 import { WeeklyBillingCard } from './statement.js';
 import { accountLayoutRoute } from './_account.js';
 import { bookingsQueries, quotesQueries } from '../lib/queries.js';
@@ -41,9 +41,11 @@ export function leaseProgress(
 
   const elapsed = now.getTime() - from;
   const pct = Math.min(100, Math.max(0, Math.round((elapsed / (to - from)) * 100)));
-  const daysRemaining = Math.max(0, Math.ceil((to - now.getTime()) / 86_400_000));
-  return { pct, daysRemaining };
+  // Manila calendar days, matching the return reminders: 0 is due today, negative is overdue.
+  return { pct, daysRemaining: daysUntilReturn(end, now) };
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 type BookingItem = BookingDetailResponse['items'][number];
 
@@ -118,7 +120,10 @@ function MachineCard({ item, onSite }: { item: BookingItem; onSite: boolean }) {
             <div className="h-full bg-primary" style={{ width: `${progress.pct}%` }} />
           </div>
           <p className="text-sm text-text-muted">
-            {progress.pct}% complete &middot; {progress.daysRemaining} day{progress.daysRemaining === 1 ? '' : 's'} remaining
+            {progress.pct}% complete &middot;{' '}
+            <span className={progress.daysRemaining < 0 ? 'font-semibold text-error' : undefined}>
+              {capitalize(returnDueLabel(progress.daysRemaining))}
+            </span>
           </p>
         </div>
       )}

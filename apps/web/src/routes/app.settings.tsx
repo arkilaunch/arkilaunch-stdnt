@@ -4,8 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
 import { apiDelete, apiErrorText, apiGet, apiPost, apiPut } from '../lib/api-client.js';
-import { FIELD_SHEET_DAILY_LIMIT, TEST_EMAIL_TYPES, manilaDate, minRentalDays, rateBreakdown, type EquipmentTypeCostsInput, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
-import { edtrQueries, equipmentQueries, pricingQueries, referenceQueries, saveParams, type DieselReading, type PricingParametersRow } from '../lib/queries.js';
+import { FIELD_SHEET_DAILY_LIMIT, RETURN_REMINDER_DAY_OPTIONS, TEST_EMAIL_TYPES, type ReturnReminderSettings, manilaDate, minRentalDays, rateBreakdown, type EquipmentTypeCostsInput, type EdtrPaperSize, type TenantCalendar } from '@arkilaunch/shared';
+import { bookingsQueries, edtrQueries, equipmentQueries, pricingQueries, referenceQueries, saveParams, type DieselReading, type PricingParametersRow } from '../lib/queries.js';
 import { DataPanel } from '../components/data-panel.js';
 import { Table, type TableColumn } from '../components/table.js';
 import { Button } from '../components/button.js';
@@ -1031,6 +1031,87 @@ function EdtrFieldSettingsForm() {
   );
 }
 
+const dayPoint = (d: number) => `${d} day${d === 1 ? '' : 's'} before`;
+
+// When customers and admins are reminded that machines are due back (the daily 08:00 job).
+export function ReturnReminderSettingsForm() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const query = useQuery(bookingsQueries.returnReminders());
+  const [draft, setDraft] = useState<ReturnReminderSettings | null>(null);
+  const save = useMutation({
+    mutationFn: (body: ReturnReminderSettings) => apiPut('/bookings/return-reminders', body),
+    onSuccess: () => {
+      setDraft(null);
+      void queryClient.invalidateQueries({ queryKey: bookingsQueries.returnReminders().queryKey });
+      void queryClient.invalidateQueries({ queryKey: bookingsQueries.returnsDue().queryKey });
+      toast.success('Return reminders saved');
+    },
+    onError: (e) => toast.error('Could not save return reminders', apiErrorText(e)),
+  });
+  if (query.isError)
+    return <LoadError message={`Return reminders could not be loaded. ${apiErrorText(query.error)}`} onRetry={() => void query.refetch()} />;
+  if (!query.data) return <Skeleton label="Loading return reminders" />;
+  const saved = query.data;
+  const toggle = (d: ReturnReminderSettings['daysBefore'][number], on: boolean) =>
+    draft && setDraft({ ...draft, daysBefore: on ? [...draft.daysBefore, d] : draft.daysBefore.filter((x) => x !== d) });
+  return (
+    <>
+      <SummaryCard
+        title="Return reminders"
+        description="Customers and admins get an in-app notice and an email before a machine is due back. Sent daily at 8:00 AM."
+        items={[
+          {
+            label: 'Remind',
+            value: saved.daysBefore.length > 0 ? [...saved.daysBefore].sort((a, b) => b - a).map(dayPoint).join(', ') : 'Off',
+          },
+          { label: 'Overdue alert', value: saved.overdue ? 'On' : 'Off' },
+        ]}
+        action={<EditButton what="return reminders" onClick={() => setDraft({ ...saved, daysBefore: [...saved.daysBefore] })} />}
+      />
+      <Modal
+        open={draft !== null}
+        onClose={() => setDraft(null)}
+        title="Return reminders"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDraft(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={save.isPending} onClick={() => draft && save.mutate(draft)}>
+              Save return reminders
+            </Button>
+          </>
+        }
+      >
+        {draft && (
+          <div className="flex flex-col gap-3">
+            <fieldset className="flex flex-col gap-1">
+              <legend className="text-sm font-medium text-text">Remind before the return date</legend>
+              <p className="text-sm text-text-muted">Untick every day to stop countdown reminders.</p>
+              <div className="flex flex-wrap gap-x-4">
+                {RETURN_REMINDER_DAY_OPTIONS.map((d) => (
+                  <label key={d} className="flex min-h-11 items-center gap-1.5 text-sm text-text">
+                    <input type="checkbox" checked={draft.daysBefore.includes(d)} onChange={(e) => toggle(d, e.target.checked)} />
+                    {dayPoint(d)}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label className="flex min-h-11 items-start gap-2 text-sm text-text">
+              <input type="checkbox" className="mt-1" checked={draft.overdue} onChange={(e) => setDraft({ ...draft, overdue: e.target.checked })} />
+              <span>
+                <span className="font-medium">Alert when a machine is overdue</span>
+                <span className="block text-text-muted">Sent once, the morning after the return date passes.</span>
+              </span>
+            </label>
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+
 function SettingsPage() {
   const [testing, setTesting] = useState(false);
   return (
@@ -1048,6 +1129,7 @@ function SettingsPage() {
       <BusinessCalendarForm />
       <BillingSettingsForm />
       <EdtrFieldSettingsForm />
+      <ReturnReminderSettingsForm />
       <TestEmailModal open={testing} onClose={() => setTesting(false)} />
     </div>
   );
