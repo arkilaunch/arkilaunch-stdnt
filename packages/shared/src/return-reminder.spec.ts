@@ -88,7 +88,7 @@ describe('returnReminderEmail', () => {
   const origin = 'https://almara.arkilaunch.app';
   const payload: ReturnReminderPayload = {
     rental_id: 'r-1',
-    code: 'EQR-2026-0001',
+    booking_code: 'EQR-2026-0001',
     threshold: 3,
     days_left: 3,
     machines: [{ assignment_id: 'a-1', equipment_id: 'e-1', label: 'CAT 320 (SN-1)', end: '2026-10-18T09:00:00Z' }],

@@ -57,7 +57,7 @@ export interface ReturnReminderMachine {
 
 export interface ReturnReminderPayload {
   rental_id: string;
-  code: string | null;
+  booking_code: string | null;
   threshold: number | 'overdue';
   days_left: number;
   machines: ReturnReminderMachine[];
@@ -92,7 +92,7 @@ export function returnReminderEmail(
 ): { subject: string; text: string } | null {
   if (type !== RETURN_REMINDER_TYPE && type !== RETURN_OVERDUE_TYPE) return null;
   const base = origin.replace(/\/$/, '');
-  const ref = payload.code ?? 'your booking';
+  const ref = payload.booking_code ?? 'your booking';
   const when = returnDueLabel(payload.days_left);
   const lines = payload.machines.map((m) => `- ${m.label}: return by ${day(m.end)}`).join('\n');
   const overdue = type === RETURN_OVERDUE_TYPE;
@@ -107,8 +107,8 @@ export function returnReminderEmail(
         `\n\n${lines}\n\nView booking: ${base}/account/bookings/${payload.rental_id}${SIGN}`,
     };
   }
-  const open = payload.code
-    ? `${base}/app/bookings?open=${encodeURIComponent(payload.code)}`
+  const open = payload.booking_code
+    ? `${base}/app/bookings?open=${encodeURIComponent(payload.booking_code)}`
     : `${base}/app/bookings/${payload.rental_id}`;
   return {
     subject: overdue ? `Overdue return: ${ref}` : `Return ${when}: ${ref}`,

@@ -103,7 +103,7 @@ export async function runReturnReminders(now = new Date()): Promise<{ sent: stri
       const type = g.threshold === 'overdue' ? RETURN_OVERDUE_TYPE : RETURN_REMINDER_TYPE;
       const payload: ReturnReminderPayload = {
         rental_id: g.rentalId,
-        code: g.code,
+        booking_code: g.code,
         threshold: g.threshold,
         days_left: Math.min(...g.days),
         machines: g.machines,
