@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { DEFAULT_RENTAL_TERMS, type AgreementSummary, type RentalTerms } from '@arkilaunch/shared';
 import type { Executor } from './with-tenant-tx.js';
 import { rentalAgreements, rentalTermsSettings } from './schema/rentals.js';
@@ -29,7 +29,6 @@ export async function findAgreement(ex: Executor, rentalId: string, quotationId:
         quotationId ? eq(rentalAgreements.quotationId, quotationId) : isNull(rentalAgreements.quotationId),
       ),
     )
-    .orderBy(desc(rentalAgreements.signedAt))
     .limit(1);
   return row ?? null;
 }

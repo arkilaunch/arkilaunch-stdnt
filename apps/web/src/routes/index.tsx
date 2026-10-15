@@ -131,7 +131,7 @@ function LandingPage() {
               role="search"
               onSubmit={(e) => {
                 e.preventDefault();
-                void seeAll();
+                seeAll();
               }}
             >
               <SearchFilterBar query={query} onQueryChange={setQuery} />
@@ -166,7 +166,7 @@ function LandingPage() {
             </div>
             {equipment.length > PREVIEW_COUNT && (
               <div>
-                <Button variant="secondary" onClick={() => void seeAll()}>
+                <Button variant="secondary" onClick={seeAll}>
                   See all {equipment.length} machines
                 </Button>
               </div>
