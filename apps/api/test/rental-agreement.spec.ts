@@ -56,26 +56,32 @@ describe('Rental agreement at checkout', () => {
       siteId = (site as { id: string }).id;
       equipmentId = (unit as { id: string }).id;
 
-      // Idempotent: clear this spec's 2036 bookings and any saved terms from a prior run.
-      const stale = await sql`select rental_id from equipment_assignments where equipment_id = ${equipmentId} and start >= '2036-01-01' and start < '2037-01-01'`;
-      const ids = stale.map((row) => (row as { rental_id: string }).rental_id);
-      if (ids.length > 0) {
-        await sql`delete from rental_agreements where rental_id = any(${ids})`;
-        await sql`delete from equipment_assignments where rental_id = any(${ids})`;
-        await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
-        await sql`delete from invoices where rental_id = any(${ids})`;
-        await sql`delete from rentals where id = any(${ids})`;
-      }
-      await sql`delete from rental_terms_settings where tenant_id in (${tenantId}, ${tenantB})`;
+      await clearOwnRows(sql, tenantB);
     });
     await ageCheckouts();
   });
 
+  // Agreement rows hold an FK on their rental, so leftovers would block other specs' booking cleanup;
+  // later specs also check out against the template version.
   afterAll(async () => {
-    // Later specs check out against the template version.
-    await db((sql) => sql`delete from rental_terms_settings where tenant_id = ${customerCtx.tenantId}`);
+    await db((sql) => clearOwnRows(sql));
     await ageCheckouts();
   });
+
+  async function clearOwnRows(sql: postgres.Sql, alsoTenant?: string) {
+    const stale = await sql`select rental_id from equipment_assignments where equipment_id = ${equipmentId} and start >= '2036-01-01' and start < '2037-01-01'`;
+    const ids = stale.map((row) => (row as { rental_id: string }).rental_id);
+    if (ids.length > 0) {
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
+      await sql`delete from equipment_assignments where rental_id = any(${ids})`;
+      await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
+      await sql`delete from invoice_line_items where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
+      await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rentals where id = any(${ids})`;
+    }
+    await sql`delete from rental_terms_settings where tenant_id = ${customerCtx.tenantId}`;
+    if (alsoTenant) await sql`delete from rental_terms_settings where tenant_id = ${alsoTenant}`;
+  }
 
   async function readyBooking(day: number): Promise<string> {
     const start = new Date(Date.UTC(2036, 0, day, 8)).toISOString();

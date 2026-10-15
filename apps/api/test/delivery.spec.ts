@@ -93,6 +93,7 @@ describe('Delivery, return and staff alerts', () => {
       await sql`update quotations set parent_quotation_id = null where rental_id = any(${ids})`;
       await sql`delete from quotations where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();

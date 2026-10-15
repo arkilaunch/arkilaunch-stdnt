@@ -57,6 +57,7 @@ describe('Office mark-as-paid', () => {
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
