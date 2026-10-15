@@ -4,7 +4,7 @@ import { SignaturePad } from './signature-pad.js';
 
 // jsdom has no canvas backend: stub the 2D context and the export.
 function stubCanvas() {
-  const ctx = { beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), clearRect: vi.fn() };
+  const ctx = { beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), clearRect: vi.fn(), fillText: vi.fn() };
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,iVBORw0KGgoAAAA');
   return ctx;
@@ -28,5 +28,17 @@ describe('SignaturePad', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(ctx.clearRect).toHaveBeenCalled();
     expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('signs from the keyboard by stamping the typed name', () => {
+    const ctx = stubCanvas();
+    const onChange = vi.fn();
+    const { rerender } = render(<SignaturePad onChange={onChange} typedName="" />);
+    const stamp = screen.getByRole('button', { name: 'Use my typed name as signature' });
+    expect(stamp).toBeDisabled();
+    rerender(<SignaturePad onChange={onChange} typedName="Juan Dela Cruz" />);
+    fireEvent.click(stamp);
+    expect(ctx.fillText).toHaveBeenCalledWith('Juan Dela Cruz', 300, 100, 560);
+    expect(onChange).toHaveBeenLastCalledWith('data:image/png;base64,iVBORw0KGgoAAAA');
   });
 });

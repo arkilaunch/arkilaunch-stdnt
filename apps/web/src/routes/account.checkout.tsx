@@ -305,7 +305,7 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
                 <span>I have read and agree to this rental agreement on behalf of my company.</span>
               </label>
               <Input label="Full name" autoComplete="name" maxLength={120} value={signedName} onChange={(e) => setSignedName(e.target.value)} />
-              <SignaturePad onChange={setSignaturePng} />
+              <SignaturePad onChange={setSignaturePng} typedName={signedName} />
             </>
           )}
         </Surface>

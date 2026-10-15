@@ -5,7 +5,16 @@ const WIDTH = 600;
 const HEIGHT = 200;
 
 // Native canvas, pointer events for mouse, touch and pen. Emits a PNG data URL after each stroke, null when cleared.
-export function SignaturePad({ onChange, label = 'Signature' }: { onChange: (png: string | null) => void; label?: string }) {
+// Keyboard and screen-reader users sign by stamping their typed name instead of drawing.
+export function SignaturePad({
+  onChange,
+  label = 'Signature',
+  typedName = '',
+}: {
+  onChange: (png: string | null) => void;
+  label?: string;
+  typedName?: string;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
@@ -50,6 +59,18 @@ export function SignaturePad({ onChange, label = 'Signature' }: { onChange: (png
     onChange(e.currentTarget.toDataURL('image/png'));
   }
 
+  function stampTypedName() {
+    const ctx = canvas.current?.getContext('2d');
+    if (!ctx || !canvas.current) return;
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    ctx.font = 'italic 56px "Brush Script MT", "Segoe Script", cursive';
+    ctx.fillStyle = '#111';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(typedName.trim(), WIDTH / 2, HEIGHT / 2, WIDTH - 40);
+    onChange(canvas.current.toDataURL('image/png'));
+  }
+
   function clear() {
     canvas.current?.getContext('2d')?.clearRect(0, 0, WIDTH, HEIGHT);
     onChange(null);
@@ -76,6 +97,9 @@ export function SignaturePad({ onChange, label = 'Signature' }: { onChange: (png
         onPointerLeave={end}
         onPointerCancel={end}
       />
+      <Button variant="secondary" className="self-start" disabled={typedName.trim().length < 2} onClick={stampTypedName}>
+        Use my typed name as signature
+      </Button>
     </div>
   );
 }

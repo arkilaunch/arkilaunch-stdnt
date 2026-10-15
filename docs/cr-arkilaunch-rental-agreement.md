@@ -22,6 +22,7 @@ Now the customer reads the rental company's agreement on the checkout page and s
   - A tenant with no saved text uses the platform template (`default-1`). The template is a draft based on the thesis lessee terms and is labelled for counsel review.
 - **Signing at checkout.** Pay now and Get invoice stay disabled until three things are done: the box is ticked, a name of 2–120 characters is typed, and at least one stroke is drawn on the signature pad.
   - The pad is a native canvas that accepts mouse, touch and pen. It exports a PNG of at most 600×200.
+  - Keyboard and screen-reader users press "Use my typed name as signature", which stamps the typed name onto the pad as the signature image.
 - **Once per quotation.** A booking is signed once for its current quotation. A retry or a switch of payment method needs no new signature. A revised quote has a new quotation id, so the customer signs again.
 - **Stale text.** If the tenant changes the text while a customer is on the checkout page, the server answers 409 `terms_changed`. The page then reloads the new text and asks for the signature again.
 - **Office payments.** Staff marking a booking paid at the office (`mark-paid`) skip the electronic step. The paper agreement covers that case.
