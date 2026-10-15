@@ -10,6 +10,7 @@ import { PaymentsService } from '../src/payments/payments.service.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 
 describe('PaymentsService (PRD-F2)', () => {
   const events = new EventsService();
@@ -137,7 +138,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('QAD-T10: checkout creates a pending payment storing only provider_ref + status, never card data', async () => {
     const bookingId = await createBooking(1);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     expect(result.checkoutUrl).toContain('about:blank');
@@ -151,7 +152,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('QAD-T20: an unresolved checkout leaves the booking/invoice untouched until the webhook fires', async () => {
     const bookingId = await createBooking(2);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     const [rental] = await withTenantTx(customerCtxA, (tx) => tx.select().from(rentals).where(eq(rentals.id, bookingId)));
@@ -173,7 +174,7 @@ describe('PaymentsService (PRD-F2)', () => {
       }),
       events,
     );
-    await Promise.all([service.checkout(customerCtxA, bookingId), service.checkout(customerCtxA, bookingId)]);
+    await Promise.all([service.checkout(customerCtxA, bookingId, SIGNED), service.checkout(customerCtxA, bookingId, SIGNED)]);
 
     const issued = await withTenantTx(customerCtxA, (tx) =>
       tx.select().from(invoices).where(and(eq(invoices.rentalId, bookingId), eq(invoices.status, 'issued'))),
@@ -188,14 +189,14 @@ describe('PaymentsService (PRD-F2)', () => {
   it('checkout of a cancelled booking is refused and issues nothing', async () => {
     const bookingId = await createBooking(14);
     await withTenantTx(customerCtxA, (tx) => tx.update(rentals).set({ status: 'cancelled' }).where(eq(rentals.id, bookingId)));
-    await expect(payments_.checkout(customerCtxA, bookingId)).rejects.toMatchObject({ response: { error: 'booking_cancelled' } });
+    await expect(payments_.checkout(customerCtxA, bookingId, SIGNED)).rejects.toMatchObject({ response: { error: 'booking_cancelled' } });
     const issued = await withTenantTx(customerCtxA, (tx) => tx.select().from(invoices).where(eq(invoices.rentalId, bookingId)));
     expect(issued).toHaveLength(0);
   });
 
   it('QAD-T28: a valid signed webhook confirms payment and moves invoice/rental status', async () => {
     const bookingId = await createBooking(3);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     const response = await deliver(await sessionPaidEvent(result.invoiceId));
@@ -211,7 +212,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('QAD-T28: a replayed webhook is idempotent -- no double credit', async () => {
     const bookingId = await createBooking(4);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
     const rawBody = await sessionPaidEvent(result.invoiceId);
 
@@ -225,7 +226,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('QAD-T28: a forged signature is rejected before anything is written', async () => {
     const bookingId = await createBooking(5);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
     const rawBody = await sessionPaidEvent(result.invoiceId);
     const zeros = '0'.repeat(64);
@@ -239,7 +240,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('payment.failed leaves the invoice/rental unpaid and marks the payment failed', async () => {
     const bookingId = await createBooking(6);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
     await deliver(paymentFailedEvent(result.invoiceId));
 
@@ -253,7 +254,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('a paid amount that differs from the invoice never settles it', async () => {
     const bookingId = await createBooking(7);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     await deliver(await sessionPaidEvent(result.invoiceId, (await invoiceCentavos(result.invoiceId)) - 1));
@@ -269,7 +270,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('a succeeded refund adds one refunded row, however many times it is delivered', async () => {
     const bookingId = await createBooking(8);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
     await deliver(await sessionPaidEvent(result.invoiceId));
 
@@ -297,7 +298,7 @@ describe('PaymentsService (PRD-F2)', () => {
     const service = new PaymentsService(adapter, events);
 
     const bookingId = await createBooking(9);
-    const result = await service.checkout(customerCtxA, bookingId);
+    const result = await service.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     expect(await service.confirmPayment(customerCtxA, result.invoiceId)).toEqual({ invoiceId: result.invoiceId, status: 'issued' });
@@ -311,7 +312,7 @@ describe('PaymentsService (PRD-F2)', () => {
 
   it('a refund is asked of PayMongo only for a paid online payment, never above it', async () => {
     const bookingId = await createBooking(11);
-    const result = await payments_.checkout(customerCtxA, bookingId);
+    const result = await payments_.checkout(customerCtxA, bookingId, SIGNED);
     if (!('paymentId' in result)) throw new Error('expected a card checkout');
 
     await expect(payments_.refund(customerCtxA, result.invoiceId, { reason: 'requested_by_customer' })).rejects.toMatchObject({
@@ -344,10 +345,10 @@ describe('PaymentsService (PRD-F2)', () => {
       refund: (id) => stub.refund(id),
     };
     const service = new PaymentsService(adapter, events);
-    await service.checkout(customerCtxA, await createBooking(10));
+    await service.checkout(customerCtxA, await createBooking(10), SIGNED);
     await setTenantPaymongoAccount(customerCtxA.tenantId, customerCtxA.userId, null);
     try {
-      await service.checkout(customerCtxA, await createBooking(12));
+      await service.checkout(customerCtxA, await createBooking(12), SIGNED);
       expect(seen).toEqual(['org_testA', undefined]);
     } finally {
       await setTenantPaymongoAccount(customerCtxA.tenantId, customerCtxA.userId, 'org_testA');
@@ -365,7 +366,7 @@ describe('PaymentsService (PRD-F2)', () => {
       let rateLimited = false;
       for (const bookingId of bookingIds) {
         try {
-          await payments_.checkout(customerCtxA, bookingId);
+          await payments_.checkout(customerCtxA, bookingId, SIGNED);
         } catch (err) {
           if (err instanceof HttpException && err.getStatus() === 429) {
             rateLimited = true;

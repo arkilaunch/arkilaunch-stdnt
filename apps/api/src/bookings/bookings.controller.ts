@@ -11,6 +11,7 @@ import {
   ChangeRequestResolveDto,
   NegotiationMessageCreateDto,
   ReturnReminderSettingsDto,
+  RentalTermsUpdateDto,
 } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
@@ -47,6 +48,19 @@ export class BookingsController {
   @RequirePermission('tenant:manage')
   saveReturnReminders(@Body() body: ReturnReminderSettingsDto, @Req() req: CtxRequest) {
     return this.bookings.saveReturnReminders(req.ctx, body);
+  }
+
+  // Customers read it at checkout; the tenant comes from the JWT (RFC-1).
+  @Get('rental-terms')
+  @RequirePermission('booking:read')
+  rentalTerms(@Req() req: CtxRequest) {
+    return this.bookings.getRentalTerms(req.ctx);
+  }
+
+  @Put('rental-terms')
+  @RequirePermission('tenant:manage')
+  saveRentalTerms(@Body() body: RentalTermsUpdateDto, @Req() req: CtxRequest) {
+    return this.bookings.saveRentalTerms(req.ctx, body);
   }
 
   @Get(':id/edtr-sheet')

@@ -18,3 +18,4 @@ export * from './customer-tier.js';
 export * from './weekly-invoice.js';
 export * from './void-invoice.js';
 export * from './return-reminders.js';
+export * from './rental-terms.js';

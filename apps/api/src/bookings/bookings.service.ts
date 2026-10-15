@@ -23,6 +23,9 @@ import {
   resolveDepositLedger,
   returnReminderSettings,
   withTenantTx,
+  findAgreement,
+  getRentalTerms,
+  rentalTermsSettings,
 } from '@arkilaunch/db';
 import type {
   ChangeRequestCreate,
@@ -42,6 +45,8 @@ import type {
   RescheduleSuggestion,
   ReturnReminderSettings,
   ReturnsDueResponse,
+  RentalTerms,
+  RentalTermsUpdate,
 } from '@arkilaunch/shared';
 import {
   addDaysIso,
@@ -387,6 +392,26 @@ export class BookingsService {
     });
   }
 
+  getRentalTerms(ctx: RequestContext): Promise<RentalTerms> {
+    return withTenantTx(ctx, (tx) => getRentalTerms(tx, ctx.tenantId));
+  }
+
+  // Each save bumps the version, so a checkout that loaded older text gets terms_changed.
+  saveRentalTerms(ctx: RequestContext, body: RentalTermsUpdate): Promise<RentalTerms> {
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx
+        .insert(rentalTermsSettings)
+        .values({ tenantId: ctx.tenantId, body: body.body, updatedBy: ctx.userId })
+        .onConflictDoUpdate({
+          target: rentalTermsSettings.tenantId,
+          set: { body: body.body, version: sql`${rentalTermsSettings.version} + 1`, updatedBy: ctx.userId, updatedAt: new Date() },
+        })
+        .returning({ version: rentalTermsSettings.version });
+      await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rental_terms_settings', entityId: ctx.tenantId });
+      return { version: `v${row!.version}`, body: body.body, isDefault: false };
+    });
+  }
+
   // Machines due within the tenant's widest reminder point, overdue first (end ascending puts them first).
   async returnsDue(ctx: RequestContext, now = new Date()): Promise<ReturnsDueResponse> {
     return withTenantTx(ctx, async (tx) => {
@@ -550,6 +575,7 @@ export class BookingsService {
               capStatus: quotation.capStatus as 'within' | 'pending_owner' | 'owner_approved' | 'owner_rejected' | null,
             }
           : null,
+        agreement: await findAgreement(tx, id, quotation?.id ?? null),
         invoices: invoiceRows.map((invoice) => ({
           id: invoice.id,
           invoiceType: invoice.invoiceType,

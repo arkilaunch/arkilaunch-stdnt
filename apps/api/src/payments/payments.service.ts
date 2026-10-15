@@ -20,6 +20,9 @@ import {
   withTenantTx,
   recomputeCustomerTier,
   voidEdtrInvoice,
+  findAgreement,
+  getRentalTerms,
+  rentalAgreements,
 } from '@arkilaunch/db';
 import {
   round2HalfUp,
@@ -30,6 +33,7 @@ import {
   type PaymentsPort,
   type RefundRequest,
   type RequestContext,
+  type AgreementSign,
 } from '@arkilaunch/shared';
 import { EventsService } from '../events/events.service.js';
 import { notifyBookingCustomer, notifyStaff, notifyUser } from '../common/notify-customer.js';
@@ -67,6 +71,11 @@ interface OnlineCheckout {
   origin: string | undefined;
 }
 
+export interface Signer {
+  ip?: string | undefined;
+  userAgent?: string | undefined;
+}
+
 @Injectable()
 export class PaymentsService {
   constructor(
@@ -75,7 +84,7 @@ export class PaymentsService {
   ) {}
 
   // Stores only provider_ref + status, never a card/account number.
-  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string, office = false) {
+  async checkout(ctx: RequestContext, bookingId: string, body: CheckoutRequest = {}, origin?: string, office = false, signer: Signer = {}) {
     return withTenantTx(ctx, async (tx) => {
       // Locked so two concurrent checkouts serialize and the second reuses the first's issued invoice.
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1).for('update');
@@ -108,6 +117,8 @@ export class PaymentsService {
       }
 
       const { quotation, mobAmount, demobAmount, depositAmount, invoiceType } = await this.bookingCharge(tx, ctx, bookingId);
+      // A customer signs the rental agreement once per quotation before any money moves; at the office, staff pay on paper.
+      if (!office) await this.recordAgreement(tx, ctx, rental, quotation?.id ?? null, body.agreement, signer);
       const amount = round2HalfUp(mobAmount + demobAmount + depositAmount);
 
       const [alreadyPaid] = await tx
@@ -172,6 +183,33 @@ export class PaymentsService {
         method: body.method,
         origin,
       });
+    });
+  }
+
+  private async recordAgreement(
+    tx: Tx,
+    ctx: RequestContext,
+    rental: { id: string; customerId: string },
+    quotationId: string | null,
+    agreement: AgreementSign | undefined,
+    signer: Signer,
+  ) {
+    if (await findAgreement(tx, rental.id, quotationId)) return;
+    if (!agreement) throw new ConflictException({ error: 'agreement_required' });
+    const terms = await getRentalTerms(tx, ctx.tenantId);
+    if (agreement.termsVersion !== terms.version) throw new ConflictException({ error: 'terms_changed', version: terms.version });
+    await tx.insert(rentalAgreements).values({
+      tenantId: ctx.tenantId,
+      rentalId: rental.id,
+      quotationId,
+      customerId: rental.customerId,
+      userId: ctx.userId,
+      termsVersion: terms.version,
+      termsBody: terms.body,
+      signedName: agreement.signedName,
+      signaturePng: agreement.signaturePng,
+      ip: signer.ip ?? null,
+      userAgent: signer.userAgent?.slice(0, 500) ?? null,
     });
   }
 

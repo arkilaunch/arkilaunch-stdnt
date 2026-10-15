@@ -638,6 +638,13 @@
       "when": 1791849600000,
       "tag": "0091_return_reminder_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1791936000000,
+      "tag": "0092_rental_agreements",
+      "breakpoints": true
     }
   ]
 }

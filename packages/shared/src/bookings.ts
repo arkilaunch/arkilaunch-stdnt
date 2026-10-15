@@ -1,3 +1,4 @@
+import { AgreementSummarySchema } from './rental-terms.js';
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
 import { SelectedOptionsSchema } from './fleet.js';
@@ -228,6 +229,8 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
   callRequestedAt: z.coerce.date().nullable(),
   callConfirmedAt: z.coerce.date().nullable(),
   createdAt: z.coerce.date(),
+  // Rental agreement signed for the current quotation, if any.
+  agreement: AgreementSummarySchema.nullable().optional(),
   quotation: z
     .object({
       id: z.string().uuid(),

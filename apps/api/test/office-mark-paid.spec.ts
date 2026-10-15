@@ -11,6 +11,7 @@ import { BillingService } from '../src/billing/billing.service.js';
 import { PricingEngineService } from '../src/quotes/pricing-engine.service.js';
 import { EventsService } from '../src/events/events.service.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 
 // QA 34: a walk-in pays at the office; staff mark it paid (optional OR) and can deploy or dispatch next.
 describe('Office mark-as-paid', () => {
@@ -123,7 +124,7 @@ describe('Office mark-as-paid', () => {
     const start = new Date(Date.UTC(2034, 0, 5, 8)).toISOString();
     const end = new Date(Date.UTC(2034, 0, 5, 17)).toISOString();
     const created = await bookings.create(customerCtx, { customerId: companyId, projectSiteId: siteId, items: [{ equipmentId, start, end }] });
-    await expect(payments.checkout(customerCtx, created.id, { cash: true })).rejects.toMatchObject({ response: { error: 'call_not_confirmed' } });
+    await expect(payments.checkout(customerCtx, created.id, { ...SIGNED, cash: true })).rejects.toMatchObject({ response: { error: 'call_not_confirmed' } });
 
     await payments.markPaidAtOffice(adminCtx, 'rental', created.id);
     const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, created.id)));

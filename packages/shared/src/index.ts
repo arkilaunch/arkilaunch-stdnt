@@ -41,3 +41,4 @@ export * from './reports.js';
 export * from './tiers.js';
 export * from './support.js';
 export * from './return-reminder.js';
+export * from './rental-terms.js';
