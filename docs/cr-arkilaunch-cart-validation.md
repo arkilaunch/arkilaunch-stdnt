@@ -150,7 +150,7 @@ Recorded because both failed quietly rather than loudly.
   seeded customer owning more than one company, so `POST /bookings` answers
   `company_required`. `seed:test-two-tenant` does not clear them. Not
   introduced here, not fixed here.
-- **The API still accepts a booking from an unverified company.** The gate
+- *(Superseded: `bookings.service.ts` now enforces it, and [cr-arkilaunch-deferred-kyc.md](cr-arkilaunch-deferred-kyc.md) lets a pending company fill the cart.)* **The API still accepted a booking from an unverified company.** The gate
   added here is client-side. Moving it into `bookings.service.ts` would be the
   real enforcement and is not done — the decision in §2 was about what the cart
   offers, and changing the endpoint would break the documented 409 contract
