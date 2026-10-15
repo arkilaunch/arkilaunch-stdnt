@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Reflector } from '@nestjs/core';
 import postgres from 'postgres';
-import { StubPaymentsAdapter, type RequestContext } from '@arkilaunch/shared';
+import { StubPaymentsAdapter, type RequestContext, type ReturnsDueResponse } from '@arkilaunch/shared';
 import { BookingsController } from '../src/bookings/bookings.controller.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
 import { PERMISSION_KEY } from '../src/common/decorators/require-permission.decorator.js';
@@ -116,7 +116,7 @@ describe('Return reminders: settings and returns due', () => {
     const returned = await rental(a, 'active', [{ unit: 1, end: '2038-03-11T17:00:00+08:00', status: 'completed' }]);
     const other = await rental(b, 'active', [{ unit: 0, end: '2038-03-12T17:00:00+08:00' }]);
 
-    const mine = (r: { items: { rentalId: string }[] }) =>
+    const mine = (r: ReturnsDueResponse) =>
       r.items.filter((i) => [due.id, later.id, returned.id, other.id].includes(i.rentalId));
 
     const base = await bookings.returnsDue(adminA, now);
