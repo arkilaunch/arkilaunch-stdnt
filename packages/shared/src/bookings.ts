@@ -1,3 +1,4 @@
+import { ReturnConditionSchema } from './rental-qa.js';
 import { AgreementSummarySchema } from './rental-terms.js';
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
@@ -35,6 +36,7 @@ export type BookingItemRequest = z.infer<typeof BookingItemRequestSchema>;
 
 // Deploy: the operator is a typed name; the timekeeper is a timekeeper user, assigned to the booking's site.
 export const BookingDeliverRequestSchema = z.object({
+  assignmentIds: z.array(z.string().uuid()).min(1).max(100).refine((ids) => new Set(ids).size === ids.length, "Duplicate assignments").optional(),
   operatorName: z.string().trim().min(1).max(120).optional(),
   timekeeperUserId: z.string().uuid().optional(),
 });
@@ -219,6 +221,7 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       end: z.coerce.date().nullable(),
       status: z.string(),
       selectedOptions: SelectedOptionsSchema.optional(),
+      returnCondition: ReturnConditionSchema.nullable().optional(),
       returnConditionNotes: z.string().nullable(),
       returnNeedsRepair: z.boolean(),
     }),
@@ -359,6 +362,7 @@ export const BookingReturnRequestSchema = z
   .object({
     units: z.array(z.object({
       assignmentId: z.string().uuid(),
+      condition: ReturnConditionSchema.optional(),
       conditionNotes: z.string().trim().max(2000).optional(),
       needsRepair: z.boolean().optional(),
     })).optional(),

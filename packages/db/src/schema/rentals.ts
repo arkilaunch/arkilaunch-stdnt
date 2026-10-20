@@ -223,6 +223,7 @@ export const equipmentAssignments = pgTable(
     operatorName: text('operator_name'),
     selectedOptions: jsonb('selected_options').$type<Record<string, string>>().notNull().default({}),
     bookedHours: numeric('booked_hours', { precision: 10, scale: 2 }),
+    returnCondition: text('return_condition'),
     returnConditionNotes: text('return_condition_notes'),
     returnNeedsRepair: boolean('return_needs_repair').notNull().default(false),
   },
