@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute, Link } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
 import { apiErrorText, apiPost, followCheckout } from '../lib/api-client.js';
@@ -71,6 +72,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2" data-print-hide><DocumentDownload path={`/me/invoices/${invoice.id}/pdf`} label="Download invoice (PDF)" />{invoice.status==='paid' && <DocumentDownload path={`/me/invoices/${invoice.id}/receipt/pdf`} label="Download receipt (PDF)" />}</div>
       <PrintFrame
         title={invoice.status === 'paid' ? 'Invoice (paid)' : 'Invoice'}
         docRef={shortCode('invoice', invoice.id)}
@@ -111,7 +113,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             />
             <SummaryRow label="Due" value={formatDate(invoice.dueDate)} />
           </div>
-          {['weekly', 'extension'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
+          {['weekly', 'extension', 'damage'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
         </Surface>
 
         <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
@@ -215,7 +217,7 @@ function AccountInvoicePage() {
           <>
             <Link to="/account/bookings" data-print-hide className={buttonClass('ghost')}>Back</Link>
             <Button variant="secondary" data-print-hide onClick={() => window.print()}>
-              Print statement
+              Print invoice
             </Button>
           </>
         }

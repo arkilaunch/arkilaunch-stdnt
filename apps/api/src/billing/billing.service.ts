@@ -1,3 +1,4 @@
+import { renderAgreementPdf, renderInvoicePdf, renderReceiptPdf } from './document-pdf.js';
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, asc, desc, eq, gte, inArray, isNotNull, lt, ne, type SQL } from 'drizzle-orm';
 import {
@@ -13,6 +14,7 @@ import {
   invoices,
   payments,
   rentals,
+  rentalAgreements,
   resolveDepositLedger,
   truckRequests,
   withTenantTx,
@@ -345,6 +347,27 @@ export class BillingService {
         lastEmailed: ctx.role === 'customer' ? null : await lastStatementEmail(tx, rentalId),
       };
     });
+  }
+
+  async invoicePdf(ctx: RequestContext, id: string, receipt = false): Promise<StatementPdfResponse> {
+    const invoice = await this.getInvoice(ctx,id);
+    const brand = await this.brand(ctx);
+    const paid = receipt ? await withTenantTx(ctx, tx => tx.select().from(payments).where(and(eq(payments.invoiceId,id),eq(payments.status,'paid'))).orderBy(payments.createdAt,payments.id)) : [];
+    if (receipt && paid.length === 0) throw new NotFoundException({error:'successful_payment_not_found'});
+    const bytes = receipt ? await renderReceiptPdf(invoice,paid,brand) : await renderInvoicePdf(invoice,brand);
+    return {filename:`${receipt?'receipt':'invoice'}-${id}.pdf`,contentBase64:Buffer.from(bytes).toString('base64')};
+  }
+
+  async agreementPdf(ctx:RequestContext,rentalId:string,agreementId?:string):Promise<StatementPdfResponse> {
+    const result=await withTenantTx(ctx, async tx=>{
+      const [rental]=await tx.select().from(rentals).where(eq(rentals.id,rentalId));
+      if(!rental || (ctx.role==='customer' && !(await ownsCustomer(tx,ctx,rental.customerId))))throw new NotFoundException({error:'booking_not_found'});
+      const [agreement]=await tx.select().from(rentalAgreements).where(and(eq(rentalAgreements.rentalId,rentalId),...(agreementId?[eq(rentalAgreements.id,agreementId)]:[]))).orderBy(desc(rentalAgreements.signedAt),desc(rentalAgreements.id)).limit(1);
+      if(!agreement)throw new NotFoundException({error:'signed_agreement_not_found'});
+      return {rental,agreement};
+    });
+    const bytes=await renderAgreementPdf(result.agreement,result.rental.code,await this.brand(ctx));
+    return {filename:`agreement-${result.rental.code}.pdf`,contentBase64:Buffer.from(bytes).toString('base64')};
   }
 
   async statementPdf(ctx: RequestContext, rentalId: string): Promise<StatementPdfResponse> {

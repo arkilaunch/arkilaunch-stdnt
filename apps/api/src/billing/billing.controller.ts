@@ -21,6 +21,19 @@ export class BillingController {
     return this.billing.getInvoice(req.ctx, id);
   }
 
+  @Get('invoices/:id/pdf') @RequirePermission('billing:read')
+  invoicePdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.invoicePdf(req.ctx,id);}
+  @Get('me/invoices/:id/pdf') @RequirePermission('booking:read')
+  myInvoicePdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.invoicePdf(req.ctx,id);}
+  @Get('invoices/:id/receipt/pdf') @RequirePermission('billing:read')
+  receiptPdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.invoicePdf(req.ctx,id,true);}
+  @Get('me/invoices/:id/receipt/pdf') @RequirePermission('booking:read')
+  myReceiptPdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.invoicePdf(req.ctx,id,true);}
+  @Get('rentals/:id/agreement/pdf') @RequirePermission('billing:read')
+  agreementPdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.agreementPdf(req.ctx,id);}
+  @Get('me/rentals/:id/agreement/pdf') @RequirePermission('booking:read')
+  myAgreementPdf(@Param('id') id:string,@Req() req:CtxRequest){return this.billing.agreementPdf(req.ctx,id);}
+
   // Ownership checked in the service.
   @Get('me/invoices/:id')
   @RequirePermission('booking:read')

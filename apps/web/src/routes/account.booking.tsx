@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -221,6 +222,8 @@ function DepositCard({ booking }: { booking: BookingDetailResponse }) {
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
       <h2 className="text-sm font-medium text-text-muted">Rental agreement</h2>
       <AgreementLine agreement={booking.agreement} />
+      {booking.agreement && <DocumentDownload path={`/me/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
+      {booking.agreement && <DocumentDownload path={`/me/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
       <h2 className="text-sm font-medium text-text-muted">Deposit</h2>
       {required === null ? (
         <p className="text-sm text-text-muted">No deposit is held against this booking yet.</p>

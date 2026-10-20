@@ -296,6 +296,21 @@
   [data-print-hide] {
     display: none !important;
   }
+  html, body, #root { color: #111 !important; overflow: visible !important; }
+  main, [data-print-letterhead], [data-print-letterhead] * { min-width: 0 !important; overflow-wrap: anywhere; }
+  [data-print-letterhead] { break-inside: avoid; margin-bottom: 5mm; }
+  [data-print-footer] { white-space: normal; font-size: 7pt; }
+  main { padding: 0 !important; max-width: none !important; }
+  main .grid { display: block !important; }
+  main .overflow-auto, main .overflow-x-auto, main .overflow-hidden { overflow: visible !important; }
+  main table { min-width: 0 !important; width: 100% !important; table-layout: fixed; border-collapse: collapse; font-size: 8pt; }
+  main th, main td { white-space: normal !important; overflow-wrap: anywhere; padding: 2mm 1.5mm !important; vertical-align: top; }
+  thead { display: table-header-group; }
+  tfoot { display: table-footer-group; }
+  tr, figure { break-inside: avoid; }
+  h1, h2, h3 { break-after: avoid; }
+  p { orphans: 3; widows: 3; }
+  button, [role="button"] { display: none !important; }
   body {
     background: white;
     /* Room for PrintFrame's fixed running footer. */

@@ -42,3 +42,7 @@ test-results/
 
 # Local Playwright screenshot/run output
 artifacts/
+
+# Local verification databases and rendered document fixtures
+tmp/
+output/

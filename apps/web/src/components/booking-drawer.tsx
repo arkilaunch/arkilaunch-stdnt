@@ -1,3 +1,4 @@
+import { DocumentDownload } from './document-download.js';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -111,6 +112,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
       </Section>
       <Section title="Rental agreement">
         <AgreementLine agreement={booking.agreement} />
+        {booking.agreement && <DocumentDownload path={`/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
       </Section>
       <Section title="Site">
         <p className="text-sm text-text">{booking.siteCity ?? booking.siteProvince ?? '--'}</p>
