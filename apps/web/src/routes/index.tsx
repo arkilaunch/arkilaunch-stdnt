@@ -1,3 +1,4 @@
+import { StorefrontServices } from '../components/storefront-promotions.js';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState, type CSSProperties } from 'react';
@@ -90,10 +91,11 @@ function LandingPage() {
   const seeAll = () => navigate({ to: '/equipment', search: query.trim() ? { q: query.trim() } : {} });
 
   return (
-    <div className="flex flex-col gap-16 px-4 py-12 sm:px-8 lg:gap-24 lg:py-20">
+    <div className="flex flex-col gap-16 px-4 py-10 sm:px-8 lg:gap-24 lg:py-20">
       {heroReady ? (
         <section className={`grid items-center gap-10 lg:gap-16 ${heroImage ? 'lg:grid-cols-2' : ''}`}>
           <div className="flex min-w-0 flex-col gap-6">
+            <p className="text-sm font-semibold uppercase tracking-wider text-primary">{tenant?.name ?? 'Equipment rental'} ? Equipment and hauling</p>
             <h1 className="max-w-xl text-display-lg font-semibold tracking-tight text-pretty text-text lg:text-display-xl">
               {tenant?.tagline || 'Industrial equipment, ready to rent'}
             </h1>
@@ -111,11 +113,13 @@ function LandingPage() {
               )}
             </div>
           </div>
-          {heroImage && <img src={heroImage} alt="" className="aspect-[4/3] w-full rounded-sm object-cover" />}
+          {heroImage && <img src={heroImage} alt="" className="aspect-[4/3] w-full rounded-lg border border-border object-cover" />}
         </section>
       ) : (
         <Skeleton label="Loading" rows={3} className="max-w-xl" />
       )}
+
+      <StorefrontServices />
 
       <section className="flex flex-col gap-6">
         <h2 className="text-display-md text-text lg:text-display-lg">Available equipment</h2>
@@ -150,6 +154,7 @@ function LandingPage() {
                 return (
                   <EquipmentCard
                     key={eq.id}
+                    showPrice={false}
                     rateValue={rateById.get(eq.id) ?? null}
                     priceNote={priceNote}
                     imageAlt={`${eq.equipmentTypeName} ${eq.model}`}
