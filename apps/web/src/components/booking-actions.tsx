@@ -329,7 +329,7 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   });
   const [asking, setAsking] = useState(false);
   const deliverable = booking.status === 'confirmed' || booking.status === 'active';
-  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking });
+  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking && deploymentIds !== null });
   const timekeepers = [...(hub.data?.personnel.timekeepers ?? []), ...(hub.data?.personnel.availableTimekeepers ?? [])];
   if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
   const deliver = deploymentIds !== null;
@@ -502,7 +502,7 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
             <p className="text-text-muted">{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</p>
             {item.returnCondition && <p className="text-sm">Returned: {RETURN_CONDITIONS[item.returnCondition]}</p>}
             {item.returnConditionNotes && <p className="whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
-            {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
+            {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
           </div>
         ))}
         </div>

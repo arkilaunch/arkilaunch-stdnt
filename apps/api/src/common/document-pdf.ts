@@ -22,7 +22,7 @@ export class DocumentPdf {
       throw new Error(`Missing PDF font asset: ${filename}`);
     };
     const [normal, strong] = await Promise.all([load('regular'), load('bold')]);
-    const doc = new DocumentPdf(pdf, await pdf.embedFont(normal, { subset: true }), await pdf.embedFont(strong, { subset: true }), title, reference, brand);
+    const doc = new DocumentPdf(pdf, await pdf.embedFont(normal, { subset: false }), await pdf.embedFont(strong, { subset: false }), title, reference, brand);
     doc.newPage();
     let inset = 0;
     const top = doc.y;

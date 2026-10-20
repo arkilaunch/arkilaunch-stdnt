@@ -1,6 +1,6 @@
 import { SupportIdSchema } from '@arkilaunch/shared';
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BookingDetailResponse, CheckoutMethod, CouponPreviewResponse } from '@arkilaunch/shared';
 import { CHECKOUT_METHODS, CHECKOUT_METHOD_INFO, localPhMobile } from '@arkilaunch/shared';
@@ -129,8 +129,8 @@ function checkoutError(err: unknown): string {
     if (code === 'coupon_used') return 'Your company has already used this coupon.';
     if (code === 'coupon_already_applied') return 'This booking already has a coupon applied.';
     if (code === 'amount_below_minimum') return 'Online payment needs at least PHP 1.00. Choose cash at the office instead.';
-    if (code === 'agreement_required') return 'Sign the rental agreement above before paying.';
-    if (code === 'terms_changed') return 'The rental company just updated its agreement. Read the new text above and sign again.';
+    if (code === 'agreement_required') return 'Open and sign the rental agreement before paying.';
+    if (code === 'terms_changed') return 'The rental company just updated its agreement. Open the updated agreement and sign again.';
     if (code === 'payment_in_progress') return 'A payment for this booking is going through. Check the booking page in a minute.';
   }
   return apiErrorText(err);
@@ -149,6 +149,11 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
   const [reviewedVersion, setReviewedVersion] = useState<string | null>(null);
   const signed = booking.agreement ?? null;
   const terms = useQuery({ ...bookingsQueries.rentalTerms(), enabled: !signed });
+  useEffect(() => {
+    setAccepted(false);
+    setSignaturePng(null);
+    setReviewedVersion(null);
+  }, [terms.data?.version]);
   const draftReady = accepted && signedName.trim().length >= 2 && signaturePng !== null && Boolean(terms.data);
   const signReady = Boolean(signed) || (draftReady && reviewedVersion === terms.data?.version);
 

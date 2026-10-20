@@ -15,7 +15,7 @@ import {
   timekeeperSiteAssignments,
   withTenantTx,
 } from '@arkilaunch/db';
-import { StubPaymentsAdapter, bookingDays, minBookingHours, round2HalfUp, type RequestContext } from '@arkilaunch/shared';
+import { StubPaymentsAdapter, bookingDays, minBookingHours, round2HalfUp, type RequestContext, type BookingDeliverRequest } from '@arkilaunch/shared';
 import { BillingService } from '../src/billing/billing.service.js';
 import { SitesService } from '../src/sites/sites.service.js';
 import { BookingsService } from '../src/bookings/bookings.service.js';
@@ -125,6 +125,12 @@ describe('Delivery, return and staff alerts', () => {
     };
   }
 
+  // Fixtures reserve future dates to avoid other suites; exercise deployment inside that booked window.
+  async function deployDuringBookedWindow(id: string, body: BookingDeliverRequest = {}) {
+    const detail = await bookings.get(adminCtx,id);
+    return bookings.deliver(adminCtx,id,body,new Date(detail.items[0]!.start));
+  }
+
   async function notificationTypes(rentalId: string) {
     const rows = await withTenantTx(customerCtx, (tx) =>
       tx.select().from(notifications).where(eq(notifications.userId, customerCtx.userId)),
@@ -158,7 +164,7 @@ describe('Delivery, return and staff alerts', () => {
     expect(await staffAlerts('booking_requested', booking.id)).toBeGreaterThan(0);
 
     // Not paid yet: nothing to deliver.
-    await expect(bookings.deliver(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'booking_not_ready' } });
+    await expect(deployDuringBookedWindow(booking.id)).rejects.toMatchObject({ response: { error: 'booking_not_ready' } });
 
     const quote = await priceBookQuote(booking.id, booking.customerId);
     await quotes.accept(customerCtx, quote.id);
@@ -170,9 +176,9 @@ describe('Delivery, return and staff alerts', () => {
     try {
       // Only a timekeeper can be put on the site; the refusal rolls the whole deploy back.
       await expect(
-        bookings.deliver(adminCtx, booking.id, { timekeeperUserId: customerCtx.userId }),
+        deployDuringBookedWindow(booking.id, { timekeeperUserId: customerCtx.userId }),
       ).rejects.toMatchObject({ response: { error: 'role_has_no_site_assignments' } });
-      await bookings.deliver(adminCtx, booking.id, { operatorName: 'Juan Dela Cruz', timekeeperUserId: timekeeperId });
+      await deployDuringBookedWindow(booking.id, { operatorName: 'Juan Dela Cruz', timekeeperUserId: timekeeperId });
       const [unit] = await withTenantTx(adminCtx, (tx) => tx.select().from(equipment).where(eq(equipment.id, equipmentId)));
       expect(unit?.availabilityStatus).toBe('deployed');
       const assignments = await withTenantTx(adminCtx, (tx) =>
@@ -193,7 +199,7 @@ describe('Delivery, return and staff alerts', () => {
       await expect(bookings.requestChange(customerCtx, booking.id, { kind: 'cancel' })).rejects.toMatchObject({
         response: { error: 'already_on_site' },
       });
-      await expect(bookings.deliver(adminCtx, booking.id)).rejects.toBeInstanceOf(ConflictException);
+      await expect(deployDuringBookedWindow(booking.id)).rejects.toBeInstanceOf(ConflictException);
       await expect(bookings.cancel(adminCtx, booking.id)).rejects.toMatchObject({ response: { error: 'already_on_site' } });
 
       await bookings.markReturned(adminCtx, booking.id);
@@ -276,7 +282,7 @@ describe('Delivery, return and staff alerts', () => {
     const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
     await payments.handleWebhook(rawBody, header, webhookSecret);
     try {
-      await bookings.deliver(adminCtx, booking.id);
+      await deployDuringBookedWindow(booking.id);
       const before = await bookings.get(adminCtx, booking.id);
       expect(before.quotation?.status).toBe('accepted');
       const assignment = before.items[0]!;

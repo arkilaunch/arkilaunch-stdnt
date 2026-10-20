@@ -20,7 +20,7 @@ interface Response { assessments: Assessment[]; agreements: Agreement[] }
 const textareaClass = 'w-full rounded-input border border-border bg-surface px-4 py-2.5 text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring';
 
 export function DamageAssessments({ booking }: { booking: BookingDetailResponse }) {
-  const candidates = booking.items.filter((item) => item.status === 'completed' && (item.returnNeedsRepair || item.returnCondition === 'damaged'));
+  const candidates = booking.items.filter((item) => item.status === 'completed' && (item.returnCondition === 'damaged' || (!item.returnCondition && item.returnNeedsRepair)));
   const path = `/bookings/${booking.id}/damage-assessments`;
   const key = ['booking-damage-assessments', booking.id] as const;
   const query = useQuery({ queryKey: key, queryFn: () => apiGet<Response>(path), enabled: candidates.length > 0 });

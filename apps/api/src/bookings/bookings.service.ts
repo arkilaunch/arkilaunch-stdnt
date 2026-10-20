@@ -734,7 +734,7 @@ export class BookingsService {
   }
 
   // Reuses the booking's own reservation rather than creating a second assignment (which would collide with its hold).
-  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}) {
+  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}, now = new Date()) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
@@ -747,7 +747,7 @@ export class BookingsService {
         .from(equipmentAssignments)
         .where(and(eq(equipmentAssignments.rentalId, id), eq(equipmentAssignments.status, 'scheduled')));
       const calendar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' });
-      const today = calendar.format(new Date());
+      const today = calendar.format(now);
       const due = (assignment: typeof scheduled[number]) => calendar.format(assignment.start) <= today
         && assignment.end !== null && calendar.format(assignment.end) >= today;
       const selectedIds = body.assignmentIds;

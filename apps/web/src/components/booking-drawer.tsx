@@ -95,7 +95,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               </span>
               {item.status === 'active' && <ReturnCountdown end={item.end} />}
               {item.returnConditionNotes && <p className="w-full whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
-              {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
+              {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
             </li>
           ))}
           {booking.items.length === 0 && <li className="text-text-muted">No machines assigned.</li>}

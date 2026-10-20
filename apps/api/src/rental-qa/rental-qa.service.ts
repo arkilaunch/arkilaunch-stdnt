@@ -21,7 +21,7 @@ export class RentalQaService {
    if (!rental) throw new NotFoundException({ error: 'booking_not_found' });
    const [assignment] = await tx.select().from(equipmentAssignments).where(and(eq(equipmentAssignments.id, body.assignmentId), eq(equipmentAssignments.rentalId, rentalId)));
    const [agreement] = await tx.select().from(rentalAgreements).where(and(eq(rentalAgreements.id, body.agreementId), eq(rentalAgreements.rentalId, rentalId), eq(rentalAgreements.customerId, rental.customerId)));
-   if (!assignment || assignment.status !== 'completed' || (!assignment.returnNeedsRepair && assignment.returnCondition !== 'damaged')) throw new UnprocessableEntityException({ error: 'returned_damage_required' });
+   if (!assignment || assignment.status !== 'completed' || !(assignment.returnCondition === 'damaged' || (assignment.returnCondition === null && assignment.returnNeedsRepair))) throw new UnprocessableEntityException({ error: 'returned_damage_required' });
    if (!agreement || !agreement.termsBody.includes(body.contractClause)) throw new UnprocessableEntityException({ error: 'signed_contract_clause_required' });
    const [pending] = await tx.select({ id: damageAssessments.id }).from(damageAssessments).where(and(eq(damageAssessments.assignmentId, body.assignmentId), sql`${damageAssessments.status} in ('pending','approved')`));
    if (pending) throw new ConflictException({ error: 'damage_assessment_exists' });
