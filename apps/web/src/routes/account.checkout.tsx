@@ -16,6 +16,7 @@ import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
 import { Input } from '../components/input.js';
 import { SignaturePad } from '../components/signature-pad.js';
+import { Modal } from '../components/modal.js';
 import { TriangleAlert } from 'lucide-react';
 import { formatDate, formatPeso, formatStatus, shortCode } from '../lib/format.js';
 
@@ -144,9 +145,12 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
   const [accepted, setAccepted] = useState(false);
   const [signedName, setSignedName] = useState('');
   const [signaturePng, setSignaturePng] = useState<string | null>(null);
+  const [agreementOpen, setAgreementOpen] = useState(false);
+  const [reviewedVersion, setReviewedVersion] = useState<string | null>(null);
   const signed = booking.agreement ?? null;
   const terms = useQuery({ ...bookingsQueries.rentalTerms(), enabled: !signed });
-  const signReady = Boolean(signed) || (accepted && signedName.trim().length >= 2 && signaturePng !== null && Boolean(terms.data));
+  const draftReady = accepted && signedName.trim().length >= 2 && signaturePng !== null && Boolean(terms.data);
+  const signReady = Boolean(signed) || (draftReady && reviewedVersion === terms.data?.version);
 
   const checkout = useMutation({
     mutationFn: (chosen: PaymentMethod) =>
@@ -168,6 +172,9 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
     onError: (err) => {
       if (err instanceof ApiError && err.message === 'terms_changed') {
         setAccepted(false);
+        setSignaturePng(null);
+        setReviewedVersion(null);
+        setAgreementOpen(true);
         void terms.refetch();
       }
     },
@@ -286,12 +293,20 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
           ) : !terms.data ? (
             <p className="text-sm text-text-muted">Loading the rental agreement...</p>
           ) : (
-            <>
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-text-muted">{signReady ? `Ready to submit with payment as ${signedName}.` : 'Review the agreement and sign before continuing to payment.'}</p>
+              <Button variant="secondary" onClick={() => setAgreementOpen(true)}>{signReady ? 'Review signature' : 'Review and sign'}</Button>
+            </div>
+          )}
+        </Surface>
+        <Modal open={agreementOpen && !signed} onClose={() => setAgreementOpen(false)} title="Review and sign rental agreement" size="lg"
+          footer={<Button variant="primary" disabled={!draftReady} onClick={() => { setReviewedVersion(terms.data?.version ?? null); setAgreementOpen(false); }}>Confirm signature</Button>}>
+          {terms.data && <div className="flex flex-col gap-4">
               {/* Plain text, never HTML: the tenant writes it. */}
               <div
                 tabIndex={0}
                 aria-label="Rental agreement text"
-                className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-input border border-border bg-surface-sunk p-3 text-xs text-text"
+                className="whitespace-pre-wrap rounded-input border border-border bg-surface-sunk p-4 text-sm leading-relaxed text-text"
               >
                 {terms.data.body}
               </div>
@@ -305,10 +320,9 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
                 <span>I have read and agree to this rental agreement on behalf of my company.</span>
               </label>
               <Input label="Full name" autoComplete="name" maxLength={120} value={signedName} onChange={(e) => setSignedName(e.target.value)} />
-              <SignaturePad onChange={setSignaturePng} typedName={signedName} />
-            </>
-          )}
-        </Surface>
+              {signaturePng ? <div className="flex flex-col items-start gap-2"><img src={signaturePng} alt="Your signature" className="h-24 max-w-full border border-border bg-white object-contain" /><Button variant="ghost" onClick={() => { setSignaturePng(null); setReviewedVersion(null); }}>Clear signature</Button></div> : <SignaturePad onChange={setSignaturePng} typedName={signedName} />}
+          </div>}
+        </Modal>
 
         {method === 'manual' ? (
           <Button variant="secondary" disabled={!signReady} loading={checkout.isPending} onClick={() => checkout.mutate('manual')}>
@@ -364,7 +378,7 @@ function CheckoutPage() {
         emptyTitle="Booking not found"
         emptyDescription="This booking does not exist, or it belongs to another account."
         isEmpty={(data) => !data?.id}
-        render={(data) => <CheckoutForm booking={data} />}
+        render={(data) => <CheckoutForm key={`${data.id}-${data.quotation?.id ?? 'deposit'}`} booking={data} />}
       />
     </div>
   );
