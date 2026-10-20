@@ -187,7 +187,7 @@ export function StorefrontServices() {
   return (
     <section aria-labelledby="services-heading" className="flex flex-col gap-7">
       <div className="max-w-2xl">
-        <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-primary">
+        <p className="mb-3 text-sm font-semibold uppercase tracking-widest text-text">
           Built around your project
         </p>
         <h2 id="services-heading" className="text-display-md text-text lg:text-display-lg">
@@ -206,7 +206,7 @@ export function StorefrontServices() {
               key={service}
               className="flex h-full flex-col gap-5 border-t-4 border-t-primary p-6 sm:p-8"
             >
-              <span className="font-mono text-sm text-primary">
+              <span className="font-mono text-sm text-text">
                 0{index + 1} / {service === 'equipment' ? 'RENT' : 'TRANSPORT'}
               </span>
               <h3 className="text-heading-lg text-text">{names[service]}</h3>
@@ -218,7 +218,7 @@ export function StorefrontServices() {
               {promotion?.enabled && (
                 <div className="rounded-card bg-primary/5 p-4">
                   <p className="text-sm text-text-muted">As low as</p>
-                  <p className="mt-1 text-heading-lg text-primary">
+                  <p className="mt-1 text-heading-lg text-text">
                     {formatPeso(promotion.amount)}{' '}
                     <span className="text-sm font-normal">/ {promotion.unit}</span>
                   </p>

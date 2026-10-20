@@ -95,7 +95,7 @@ function LandingPage() {
       {heroReady ? (
         <section className={`grid items-center gap-10 lg:gap-16 ${heroImage ? 'lg:grid-cols-2' : ''}`}>
           <div className="flex min-w-0 flex-col gap-6">
-            <p className="text-sm font-semibold uppercase tracking-wider text-primary">{tenant?.name ?? 'Equipment rental'} &middot; Equipment and hauling</p>
+            <p className="text-sm font-semibold uppercase tracking-wider text-text-muted">{tenant?.name ?? 'Equipment rental'} &middot; Equipment and hauling</p>
             <h1 className="max-w-xl text-display-lg font-semibold tracking-tight text-pretty text-text lg:text-display-xl">
               {tenant?.tagline || 'Industrial equipment, ready to rent'}
             </h1>

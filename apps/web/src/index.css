@@ -290,6 +290,8 @@
 }
 
 @media print {
+  :root { --yb-color-bg: #fff !important; --yb-color-surface: #fff !important; --yb-color-surface-sunk: #fff !important; --yb-color-text: #111 !important; --yb-color-text-muted: #444 !important; }
+
   header,
   nav,
   aside,

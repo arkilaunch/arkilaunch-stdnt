@@ -2,7 +2,7 @@
 import { PDFDocument } from 'pdf-lib';
 import type { InvoiceDetailResponse } from '@arkilaunch/shared';
 import { renderAgreementPdf, renderInvoicePdf, renderReceiptPdf } from './document-pdf.js';
-import { TINY_PNG } from '../../test/signed.js';
+const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 const at = new Date('2026-10-20T09:00:00+08:00');
 const brand = {
