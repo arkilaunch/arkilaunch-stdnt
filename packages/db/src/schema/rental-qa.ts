@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, jsonb, timestamp, index, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, numeric, jsonb, timestamp, index, check, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { tenantIsolationPolicy } from '../rls.js';
 import { tenants, users } from './tenancy.js';
@@ -29,5 +29,10 @@ export const damageAssessments = pgTable('damage_assessments', {
   invoiceId: uuid('invoice_id').references(() => invoices.id),
 }, (t) => [tenantIsolationPolicy(), index('damage_assessments_tenant_rental_idx').on(t.tenantId, t.rentalId),
   check('damage_assessments_amount_chk', sql`${t.amount} > 0`),
+  unique('damage_assessments_invoice_id_key').on(t.invoiceId),
+  check('damage_assessments_notes_check',sql`char_length(${t.notes}) <= 2000`),
+  check('damage_assessments_evidence_check',sql`char_length(${t.evidence}) <= 2000`),
+  check('damage_assessments_contract_clause_check',sql`char_length(${t.contractClause}) <= 5000`),
+  check('damage_assessments_reason_check',sql`char_length(${t.reason}) <= 1000`),
   check('damage_assessments_status_chk', sql`${t.status} in ('pending','approved','rejected')`),
 ]).enableRLS();

@@ -94,6 +94,7 @@ const INVOICE_TYPE_LABELS: Record<string, string> = {
   deposit_deduction: 'Deposit deduction',
   rental: 'Rental',
   extension: 'Rental extension',
+    damage: 'Equipment damage',
   penalty: 'Penalty',
   adjustment: 'Adjustment',
   booking: 'Rental and deposit',

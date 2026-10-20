@@ -360,6 +360,7 @@ export type ChangeRequestResolve = z.infer<typeof ChangeRequestResolveSchema>;
 
 export const BookingReturnRequestSchema = z
   .object({
+    cancelScheduled: z.boolean().optional(),
     units: z.array(z.object({
       assignmentId: z.string().uuid(),
       condition: ReturnConditionSchema.optional(),
@@ -369,7 +370,7 @@ export const BookingReturnRequestSchema = z
     confirmIncompleteLogs: z.boolean().optional(),
     reason: z.string().trim().min(3).max(500).optional(),
   })
-  .refine((b) => !b.confirmIncompleteLogs || !!b.reason, {
+  .refine((b) => !(b.confirmIncompleteLogs || b.cancelScheduled) || !!b.reason, {
     message: 'a reason is required', path: ['reason'],
   });
 export type BookingReturnRequest = z.infer<typeof BookingReturnRequestSchema>;

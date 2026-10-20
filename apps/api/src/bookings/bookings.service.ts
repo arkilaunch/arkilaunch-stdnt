@@ -837,7 +837,15 @@ export class BookingsService {
         }
       }
       const [scheduled] = await tx.select({ id: equipmentAssignments.id }).from(equipmentAssignments).where(and(eq(equipmentAssignments.rentalId,id),eq(equipmentAssignments.status,'scheduled'))).limit(1);
-      if (scheduled) return { id, status: 'active' };
+      if (body.cancelScheduled) {
+        await tx.update(equipmentAssignments).set({status:'cancelled'}).where(and(eq(equipmentAssignments.rentalId,id),eq(equipmentAssignments.status,'scheduled')));
+        await tx.insert(auditLogs).values({tenantId:ctx.tenantId,actorId:ctx.userId,action:'UPDATE',entity:'rentals',entityId:id,reason:`Cancelled undeployed remainder: ${body.reason}`});
+      }
+      if (scheduled && !body.cancelScheduled) {
+        await tx.insert(auditLogs).values({tenantId:ctx.tenantId,actorId:ctx.userId,action:'UPDATE',entity:'rentals',entityId:id,reason:'Deployed machines returned; scheduled units remain'});
+        await notifyBookingCustomer(tx,ctx.tenantId,id,'equipment_returned',{item_count:assignments.length});
+        return {id,status:'active'};
+      }
       await tx.update(rentals).set({ status: 'completed', endDate: now }).where(eq(rentals.id, id));
       await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rentals', entityId: id });
       await notifyBookingCustomer(tx, ctx.tenantId, id, 'equipment_returned', { item_count: assignments.length });
