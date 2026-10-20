@@ -458,6 +458,8 @@ export function describeNotification(type: string, payload: unknown, area: FeedA
         body: `Booking ${ref} is confirmed. You can pay for it now.`,
         action: { label: 'Pay now', to: '/account/checkout/$bookingId', params: { bookingId: rentalId } },
       };
+    case 'damage_charge_approved':
+      return {title:'Damage assessment approved',body:'The rental company approved a documented damage charge. Review the invoice or contact the rental team.',action:typeof p.invoice_id==='string'?{label:'View invoice',to:'/account/invoices/$invoiceId',params:{invoiceId:p.invoice_id}}:{label:'View booking',...toBooking}};
     case 'booking_cancelled':
       return {
         title: 'Booking cancelled',

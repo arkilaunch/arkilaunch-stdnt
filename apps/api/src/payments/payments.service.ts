@@ -660,14 +660,14 @@ export class PaymentsService {
       const [rental] = invoice?.rentalId
         ? await tx.select().from(rentals).where(eq(rentals.id, invoice.rentalId)).limit(1)
         : [];
-      if (!invoice || !['weekly', 'extension'].includes(invoice.invoiceType) || !rental || !(await ownsCustomer(tx, ctx, rental.customerId))) {
+      if (!invoice || !['weekly', 'extension', 'damage'].includes(invoice.invoiceType) || !rental || !(await ownsCustomer(tx, ctx, rental.customerId))) {
         throw new NotFoundException({ error: 'invoice_not_found' });
       }
       if (invoice.status !== 'issued') throw new ConflictException({ error: 'invoice_not_payable', status: invoice.status });
       const amount = Number(invoice.amount);
       if (body.cash) return this.issueCash(tx, ctx, invoice.id, amount);
 
-      const label = invoice.invoiceType === 'extension' ? 'Rental extension' : 'Weekly equipment usage';
+      const label = invoice.invoiceType === 'damage' ? 'Equipment damage' : invoice.invoiceType === 'extension' ? 'Rental extension' : 'Weekly equipment usage';
       return this.startOnline(tx, ctx, { invoiceId: invoice.id, amount, label, method: body.method, origin });
     });
   }

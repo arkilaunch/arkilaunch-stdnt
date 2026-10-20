@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-20
 **Built on FMD:** v1.28.1
 
 ---
@@ -23,10 +23,10 @@
 | WRAP · Next Steps | [wrap-arkilaunch.md](wrap-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BRD · Business Requirements | [brd-arkilaunch.md](brd-arkilaunch.md) | 0.1 | Draft | 2026-07-25 | N/A |
 | UES · Unit Economics Sheet | [ues-arkilaunch.md](ues-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-19 |
-| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-07 |
+| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
 | SAD · Subagents | [sad-arkilaunch.md](sad-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BUILD · Build Guide | [build-arkilaunch.md](build-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
 | CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
@@ -59,6 +59,8 @@ Change Record or is explicitly deferred there.
 
 **Materialized at project root (not in `docs/`):** `BRAND.md`, `DESIGN.md` (from DSD §9), `AGENTS.md` (from BUILD §6), `MODEL_CARD.md` (from AIA §1). `README.md` is **not** a materialized artifact -- it is maintained by hand; the three files that used to disagree about this (this section, `CLAUDE.md` §Materialized-files, and README's own footer) were reconciled by `cr-arkilaunch-repo-cleanup-audit.md`. `AGENTS.md` §5.2 was re-materialized 2026-09-13 after sitting 13 months behind BUILD. `BRAND.md` and `MODEL_CARD.md` are current. `DESIGN.md` was **not**: it had been hand-edited away from the Locked DSD (build-status annotations, a `weather-stale` behavioural rule, and an admission at `:405` that it was hand-updated rather than regenerated), which this section asserted was not the case from 2026-09-13 until `cr-arkilaunch-doc-reconcile-2026-09-19.md` folded that content back into the DSD and re-materialized it.
 
+**Rental QA visual verification:** [Screenshots and document evidence](qa/rental-qa/README.md), synthetic fixtures dated 2026-10-20.
+
 ### RFCs (one per major feature)
 
 | RFC ID | File | Feature | Status | Last Updated |
@@ -90,6 +92,7 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-rental-qa-documents | 2026-10-20 | Agreement modal, return condition and approved damage billing, individual deployment, tenant promotions, branded PDFs | Owner QA | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-rental-qa-documents.md](cr-arkilaunch-rental-qa-documents.md) |
 | cr-arkilaunch-return-reminders | 2026-10-15 | Daily 08:00 Manila job reminds customer and admins/owners (in-app + email) before each machine's return date at per-tenant points from 7/5/3/2/1 days (baseline 5, 3, 1) and once when overdue; extensions re-arm; Returns due dashboard panel, countdown badges, settings card; table `return_reminder_settings` (migration 0091). Notify only | Stakeholder panel feedback, QA §2 (Dra. Domingo) | PRD-F8, §5.2; SDD §2/§5; index | [cr-arkilaunch-return-reminders.md](cr-arkilaunch-return-reminders.md) |
 | cr-arkilaunch-deferred-kyc | 2026-10-15 | Customers browse, see prices and fill a cart before company verification: sign-up lands on `/equipment`, public catalog returns rates (`GET /catalog/rates` removed), pending companies can fill the cart and are stopped at request submit with a Finish verification link. Server KYC gates on booking, quote and checkout unchanged. No migration | Stakeholder panel feedback, QA §3 (Mr. Violeta) | index; supersedes price gate and cart-validation §2 | [cr-arkilaunch-deferred-kyc.md](cr-arkilaunch-deferred-kyc.md) |
 | cr-arkilaunch-rental-agreement | 2026-10-15 | Customer signs the tenant's rental agreement at checkout (tick, typed name, drawn signature pad) once per quotation before payment; tenant-editable versioned text with platform template; append-only `rental_agreements` snapshot (migration 0092); `GET/PUT /bookings/rental-terms`; 409 `agreement_required` / `terms_changed` | Stakeholder panel feedback, QA §3 (Mr. Violeta) | index | [cr-arkilaunch-rental-agreement.md](cr-arkilaunch-rental-agreement.md) |

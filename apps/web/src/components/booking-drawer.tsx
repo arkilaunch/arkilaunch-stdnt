@@ -1,3 +1,4 @@
+import { DocumentDownload } from './document-download.js';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -94,7 +95,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               </span>
               {item.status === 'active' && <ReturnCountdown end={item.end} />}
               {item.returnConditionNotes && <p className="w-full whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
-              {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
+              {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
             </li>
           ))}
           {booking.items.length === 0 && <li className="text-text-muted">No machines assigned.</li>}
@@ -111,6 +112,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
       </Section>
       <Section title="Rental agreement">
         <AgreementLine agreement={booking.agreement} />
+        {booking.agreement && <DocumentDownload path={`/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
       </Section>
       <Section title="Site">
         <p className="text-sm text-text">{booking.siteCity ?? booking.siteProvince ?? '--'}</p>
@@ -162,6 +164,8 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className={invoice.status ==='paid' ? 'text-success' : 'text-text-muted'}>
                 {formatPeso(invoice.amount)} · {formatStatus(invoice.status)}
               </span>
+              <DocumentDownload path={`/invoices/${invoice.id}/pdf`} label="Invoice PDF" />
+              {invoice.status==='paid' && <DocumentDownload path={`/invoices/${invoice.id}/receipt/pdf`} label="Receipt PDF" />}
             </li>
           ))}
         </ul>

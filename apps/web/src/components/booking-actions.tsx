@@ -1,3 +1,6 @@
+import { RETURN_CONDITIONS, type ReturnCondition } from '@arkilaunch/shared';
+import { ReturnConditionFields } from './return-condition-fields.js';
+import { DamageAssessments } from './damage-assessments.js';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -278,22 +281,32 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const queryClient = useQueryClient();
   const [operatorName, setOperatorName] = useState('');
   const [timekeeperUserId, setTimekeeperUserId] = useState('');
-  const [units, setUnits] = useState<Record<string, { conditionNotes: string; needsRepair: boolean }>>({});
+  const [units, setUnits] = useState<Record<string, { conditionNotes: string; condition: ReturnCondition | "" }>>({});
   const [incomplete, setIncomplete] = useState(false);
   const [confirmIncompleteLogs, setConfirmIncompleteLogs] = useState(false);
   const [reason, setReason] = useState('');
+  const [cancelScheduled, setCancelScheduled] = useState(false);
   const [returnError, setReturnError] = useState<string>();
+  const [deploymentIds, setDeploymentIds] = useState<string[] | null>(null);
   const activeUnits = booking.items.filter((item) => item.status === 'active');
+  const scheduledUnits = booking.items.filter((item) => item.status === 'scheduled');
+  const calendar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = calendar.format(new Date());
+  const isDue = (item: BookingDetailResponse['items'][number]) => calendar.format(new Date(item.start)) <= today
+    && item.end !== null && calendar.format(new Date(item.end)) >= today;
+  const dueUnits = scheduledUnits.filter(isDue);
   const move = useMutation({
     mutationFn: (step: 'deliver' | 'return') =>
       apiPost(
         `/bookings/${booking.id}/${step}`,
         step === 'deliver'
           ? {
+              assignmentIds: deploymentIds ?? [],
               ...(operatorName.trim() ? { operatorName: operatorName.trim() } : {}),
               ...(timekeeperUserId ? { timekeeperUserId } : {}),
             }
           : BookingReturnRequestSchema.parse({
+              ...(cancelScheduled ? {cancelScheduled:true,reason} : {}),
               units: activeUnits.map((item) => ({ assignmentId: item.id, ...units[item.id] })),
               ...(incomplete ? { confirmIncompleteLogs, reason } : {}),
             }),
@@ -315,30 +328,53 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
     },
   });
   const [asking, setAsking] = useState(false);
-  const deliverable = booking.status === 'confirmed';
-  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking });
+  const deliverable = booking.status === 'confirmed' || booking.status === 'active';
+  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking && deploymentIds !== null });
   const timekeepers = [...(hub.data?.personnel.timekeepers ?? []), ...(hub.data?.personnel.availableTimekeepers ?? [])];
   if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
-  const deliver = booking.status === 'confirmed';
+  const deliver = deploymentIds !== null;
+  const openDeployment = (ids: string[]) => {
+    setDeploymentIds(ids); setOperatorName(''); setTimekeeperUserId(''); setAsking(true);
+  };
   return (
-    <Container header={{ title: deliver ? 'Deploy' : 'Delivery' }}>
+    <Container header={{ title: 'Deployment and return' }}>
       <div className="flex flex-col gap-3">
       <p className="text-sm text-text-muted">
-        {deliver ? 'Paid. Deploy once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
+        Deploy each machine when it arrives within its booked dates (Manila time).
       </p>
-      <Button variant="primary" onClick={() => {
-        setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setReason('');
+      {scheduledUnits.map((item) => (
+        <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+          <div>
+            <p className="text-sm font-semibold">{item.equipmentName ?? 'Machine'}</p>
+            <p className="text-sm text-text-muted">{formatDate(item.start)} - {formatDate(item.end)}</p>
+            {!isDue(item) && <p className="text-sm text-text-muted">Deployment is available during these booked dates.</p>}
+          </div>
+          <Button variant="secondary" disabled={!isDue(item) || move.isPending} onClick={() => openDeployment([item.id])}>
+            Deploy {item.equipmentName ?? 'machine'}
+          </Button>
+        </div>
+      ))}
+      {scheduledUnits.length > 0 && <Button variant="primary" disabled={dueUnits.length === 0 || move.isPending}
+        onClick={() => openDeployment(dueUnits.map((item) => item.id))}>
+        Deploy all due equipment ({dueUnits.length})
+      </Button>}
+      {booking.status === 'active' && <Button variant="secondary" onClick={() => {
+        setDeploymentIds(null);
+        setCancelScheduled(false); setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setReason('');
         setReturnError(undefined); setAsking(true);
       }}>
-        {deliver ? 'Deploy now' : 'Mark returned'}
-      </Button>
+        {activeUnits.length ? 'Mark returned' : 'Close undeployed remainder'}
+      </Button>}
       <ConfirmDialog
         open={asking}
-        title={deliver ? 'Deploy this booking?' : 'Mark this booking returned?'}
+        title={deliver ? 'Deploy selected equipment?' : 'Mark this booking returned?'}
         body={
           deliver ? (
             <div className="flex flex-col gap-4">
-              <p>Only once every machine is on site: this starts the rental on site and opens the field sheet.</p>
+              <p>Confirm these machines are on site. Other machines keep their booked dates and deployment status.</p>
+              <ul className="list-disc pl-5 text-sm">{booking.items.filter((item) => deploymentIds?.includes(item.id)).map((item) => (
+                <li key={item.id}>{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</li>
+              ))}</ul>
               <Input
                 label="Operator name"
                 hint="Optional. Who operates the machines on site."
@@ -362,26 +398,16 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              <p>Only once every machine is back: this closes the booking.</p>
+              <p>Confirm all deployed machines are back. Machines scheduled for later keep the booking open.</p>
               {activeUnits.map((item) => (
                 <fieldset key={item.id} className="flex min-w-0 flex-col gap-2 border-t border-border pt-3">
                   <legend className="text-sm font-semibold">{item.equipmentName ?? 'Machine'}</legend>
-                  <label htmlFor={`return-notes-${item.id}`} className="text-sm font-medium">Condition notes</label>
-                  <textarea id={`return-notes-${item.id}`} maxLength={2000} rows={3}
-                    className="w-full rounded-input border border-border bg-surface px-4 py-2.5 text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
-                    value={units[item.id]?.conditionNotes ?? ''}
-                    onChange={(e) => setUnits((current) => ({ ...current, [item.id]: {
-                      conditionNotes: e.target.value, needsRepair: current[item.id]?.needsRepair ?? false,
-                    } }))} />
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={units[item.id]?.needsRepair ?? false}
-                      onChange={(e) => setUnits((current) => ({ ...current, [item.id]: {
-                        conditionNotes: current[item.id]?.conditionNotes ?? '', needsRepair: e.target.checked,
-                      } }))} />
-                    Needs repair (mark unavailable)
-                  </label>
+                  <ReturnConditionFields id={item.id} condition={units[item.id]?.condition ?? ''} notes={units[item.id]?.conditionNotes ?? ''}
+                    onChange={(condition,conditionNotes)=>setUnits((current)=>({...current,[item.id]:{condition,conditionNotes}}))} />
                 </fieldset>
               ))}
+              {scheduledUnits.length > 0 && <div className="flex flex-col gap-3"><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={cancelScheduled} onChange={e=>setCancelScheduled(e.target.checked)} />Cancel the remaining undeployed machines and close this booking</label><p className="text-xs text-text-muted">Otherwise the booking stays open for later deployment. Any refund is reviewed separately.</p>{cancelScheduled && <Input label="Reason for cancelling undeployed equipment" required value={reason} maxLength={500} onChange={e=>setReason(e.target.value)} />}</div>}
+              {returnError && !incomplete && <Alert type="error">{returnError}</Alert>}
               {incomplete && <div className="flex flex-col gap-3">
                 <Alert type="warning">Field logs are incomplete. Return anyway only once every machine is back, and record why the logs are still missing.</Alert>
                 <label className="flex items-center gap-2 text-sm">
@@ -400,6 +426,8 @@ export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
         confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
         onConfirm={() => {
+          if (!deliver && ((cancelScheduled && reason.trim().length < 3) || (!activeUnits.length && !cancelScheduled))) { setReturnError('Confirm cancellation of the undeployed remainder and give a reason.'); return; }
+          if (!deliver && activeUnits.some((item)=>!units[item.id]?.condition)) { setReturnError('Select a condition for every returned machine.'); return; }
           if (!deliver && incomplete && (!confirmIncompleteLogs || reason.trim().length < 3)) {
             setReturnError('Confirm the return and enter a reason of at least 3 characters.');
             return;
@@ -472,14 +500,16 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
         {booking.items.map((item) => (
           <div key={item.id} className="flex flex-col gap-1">
             <p className="text-text-muted">{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</p>
+            {item.returnCondition && <p className="text-sm">Returned: {RETURN_CONDITIONS[item.returnCondition]}</p>}
             {item.returnConditionNotes && <p className="whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
-            {item.returnNeedsRepair && <StatusBadge status="maintenance" label="Sent for repair" />}
+            {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
           </div>
         ))}
         </div>
       </Container>
       <DeliveryCard booking={booking} />
       {['active', 'completed'].includes(booking.status) && <EdtrSheetCard bookingId={booking.id} printable />}
+      <DamageAssessments booking={booking} />
       <PendingRequests booking={booking} />
       {booking.status === 'confirmed' && <RescheduleCard booking={booking} />}
     </div>

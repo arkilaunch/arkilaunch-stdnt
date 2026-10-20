@@ -61,6 +61,8 @@ export function notificationEmail(
           subject: `Refund issued on ${ref}`,
           text: `A refund was issued on ${ref} (invoice ${inv.invoiceId}). It can take a few banking days to reach you.\n\nView invoice: ${invoicePage}${SIGN}`,
         };
+      case 'damage_charge_approved':
+        return {subject:`Damage assessment approved for ${ref}`,text:`The rental company approved the documented damage assessment for ${ref}. Amount: ${peso(inv.amountPhp)}. Review the invoice and contact the rental team with any questions.\n\nView invoice: ${invoicePage}${SIGN}`};
       case 'weekly_invoice':
         return {
           subject: `Invoice: ${peso(inv.amountPhp)} due for ${ref}`,

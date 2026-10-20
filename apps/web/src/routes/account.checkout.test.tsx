@@ -49,6 +49,7 @@ describe('/account/checkout rental agreement', () => {
     setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
     stub(null);
     const view = await renderRoute(`/account/checkout/${BOOKING_ID}`);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review and sign' }));
     expect(await screen.findByText('Tenant agreement text.')).toBeInTheDocument();
     const pay = screen.getByRole('button', { name: 'Pay now' });
     expect(pay).toBeDisabled();
@@ -59,7 +60,14 @@ describe('/account/checkout rental agreement', () => {
     const pad = screen.getByRole('img', { name: /signature pad/i });
     fireEvent.pointerDown(pad, { clientX: 10, clientY: 10 });
     fireEvent.pointerUp(pad);
+    expect(pay).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm signature' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(pay).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Review signature' }));
+    expect(screen.getByLabelText('Full name')).toHaveValue('Juan Dela Cruz');
+    expect(screen.getByRole('img', { name: 'Your signature' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm signature' }));
 
     await userEvent.click(pay);
     await waitFor(() => expect(checkoutBody).toMatchObject({ agreement: { signedName: 'Juan Dela Cruz', termsVersion: 'v3', signaturePng: PNG } }));

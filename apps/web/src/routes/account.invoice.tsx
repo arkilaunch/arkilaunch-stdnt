@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute, Link } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
 import { apiErrorText, apiPost, followCheckout } from '../lib/api-client.js';
@@ -71,6 +72,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2" data-print-hide><DocumentDownload path={`/me/invoices/${invoice.id}/pdf`} label="Download invoice (PDF)" />{invoice.status==='paid' && <DocumentDownload path={`/me/invoices/${invoice.id}/receipt/pdf`} label="Download receipt (PDF)" />}</div>
       <PrintFrame
         title={invoice.status === 'paid' ? 'Invoice (paid)' : 'Invoice'}
         docRef={shortCode('invoice', invoice.id)}
@@ -92,13 +94,13 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
         ]}
       />
       <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
-        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
+        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5 print:hidden">
           <div className="flex flex-col items-start gap-3">
             <StatusPill tone={meta.tone} label={formatStatus(invoice.status)} icon={meta.icon} />
             <div>
               <p className="font-mono text-display-md text-text">{formatPeso(invoice.amount)}</p>
               <p className="text-sm font-medium text-text-muted">
-                Total amount due
+                Invoice total
               </p>
             </div>
           </div>
@@ -111,10 +113,10 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             />
             <SummaryRow label="Due" value={formatDate(invoice.dueDate)} />
           </div>
-          {['weekly', 'extension'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
+          {['weekly', 'extension', 'damage'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
         </Surface>
 
-        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
+        <Surface radius="md" elevation="sm" className={`flex min-w-0 flex-col gap-4 p-5 ${!invoice.edtrEvidence ? 'print:hidden' : ''}`}>
           <h2 className="text-sm font-medium text-text-muted">
             Evidence for this charge
           </h2>
@@ -152,6 +154,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[520px] border-collapse text-sm">
+            <colgroup><col style={{width:'55%'}} /><col style={{width:'10%'}} /><col style={{width:'17.5%'}} /><col style={{width:'17.5%'}} /></colgroup>
             <thead>
               <tr className="border-b border-border text-left">
                 <th className="px-4 py-3 text-sm font-medium text-text-muted">
@@ -184,7 +187,7 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             </tbody>
           </table>
         </div>
-        <div className="flex flex-col items-end gap-2 border-t border-border bg-surface-sunk px-4 py-4">
+        <div className="flex flex-col items-end gap-2 print:break-inside-avoid border-t border-border bg-surface-sunk px-4 py-4">
           <div className="flex w-full max-w-xs items-center justify-between text-sm">
             <span className="text-text-muted">Subtotal</span>
             <span className="font-mono text-text">{formatPeso(subtotal)}</span>
@@ -208,6 +211,7 @@ function AccountInvoicePage() {
 
   return (
     <div className="flex flex-col gap-5">
+      <div data-print-hide>
       <PageHeader
         title={`Invoice ${shortCode('invoice', invoiceId)}`}
         description="What was charged, and the evidence behind it."
@@ -215,11 +219,12 @@ function AccountInvoicePage() {
           <>
             <Link to="/account/bookings" data-print-hide className={buttonClass('ghost')}>Back</Link>
             <Button variant="secondary" data-print-hide onClick={() => window.print()}>
-              Print statement
+              Print invoice
             </Button>
           </>
         }
       />
+      </div>
       <DataPanel
         title="Invoice"
         options={invoicesQueries.detail(invoiceId)}

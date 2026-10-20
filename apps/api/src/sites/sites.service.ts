@@ -1,3 +1,4 @@
+import { needsMaintenance } from '@arkilaunch/shared';
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, count, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import {
@@ -510,13 +511,13 @@ export class SitesService {
 
       await tx
         .update(equipmentAssignments)
-        .set({ end: new Date(), status: 'completed', returnConditionNotes: body.conditionNotes?.trim() || null, returnNeedsRepair: body.needsRepair ?? false })
+        .set({ end: new Date(), status: 'completed', returnCondition: body.condition ?? null, returnConditionNotes: body.conditionNotes?.trim() || null, returnNeedsRepair: needsMaintenance(body.condition, body.needsRepair) })
         .where(eq(equipmentAssignments.id, assignmentId));
       await tx
         .update(equipment)
-        .set({ availabilityStatus: body.needsRepair ? 'maintenance' : 'available' })
+        .set({ availabilityStatus: needsMaintenance(body.condition, body.needsRepair) ? 'maintenance' : 'available' })
         .where(eq(equipment.id, assignment.equipmentId));
-      if (body.needsRepair) {
+      if (needsMaintenance(body.condition, body.needsRepair)) {
         await tx.insert(auditLogs).values({
           tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
           entityId: assignment.equipmentId, reason: 'flagged for repair on return',

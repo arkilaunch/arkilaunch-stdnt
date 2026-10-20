@@ -1,3 +1,4 @@
+import { needsMaintenance } from '@arkilaunch/shared';
 import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import {
@@ -559,6 +560,7 @@ export class BookingsService {
           end: assignment.end,
           status: assignment.status,
           selectedOptions: assignment.selectedOptions,
+          returnCondition: assignment.returnCondition as "good" | "wear" | "servicing" | "damaged" | null,
           returnConditionNotes: assignment.returnConditionNotes,
           returnNeedsRepair: assignment.returnNeedsRepair,
         })),
@@ -732,21 +734,40 @@ export class BookingsService {
   }
 
   // Reuses the booking's own reservation rather than creating a second assignment (which would collide with its hold).
-  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}) {
+  async deliver(ctx: RequestContext, id: string, body: BookingDeliverRequest = {}, now = new Date()) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
-      if (rental.status !== 'confirmed') throw new ConflictException({ error: 'booking_not_ready', status: rental.status });
-      const assignments = await tx
+      const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+      if (!locked) throw new NotFoundException({ error: 'booking_not_found' });
+      if (locked.status !== 'confirmed' && locked.status !== 'active') {
+        throw new ConflictException({ error: 'booking_not_ready', status: locked.status });
+      }
+      const scheduled = await tx
         .select()
         .from(equipmentAssignments)
         .where(and(eq(equipmentAssignments.rentalId, id), eq(equipmentAssignments.status, 'scheduled')));
+      const calendar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' });
+      const today = calendar.format(now);
+      const due = (assignment: typeof scheduled[number]) => calendar.format(assignment.start) <= today
+        && assignment.end !== null && calendar.format(assignment.end) >= today;
+      const selectedIds = body.assignmentIds;
+      if (selectedIds && (new Set(selectedIds).size !== selectedIds.length
+        || selectedIds.some((assignmentId) => !scheduled.some((a) => a.id === assignmentId)))) {
+        throw new UnprocessableEntityException({ error: 'booking_unit_not_found' });
+      }
+      const assignments = selectedIds ? scheduled.filter((a) => selectedIds.includes(a.id)) : scheduled.filter(due);
       if (assignments.length === 0) throw new ConflictException({ error: 'nothing_to_deliver' });
+      if (assignments.some((a) => !due(a))) throw new ConflictException({ error: 'equipment_outside_booked_window' });
 
       const units = await tx
         .select()
         .from(equipment)
         .where(inArray(equipment.id, assignments.map((a) => a.equipmentId)))
+        .orderBy(equipment.id)
         .for('update');
+      if (units.length !== new Set(assignments.map((a) => a.equipmentId)).size) {
+        throw new ConflictException({ error: 'equipment_unavailable' });
+      }
       const blocked = units.find((unit) => unit.availabilityStatus !== 'available');
       if (blocked) {
         throw new ConflictException({ error: 'equipment_unavailable', equipmentId: blocked.id, status: blocked.availabilityStatus });
@@ -774,6 +795,7 @@ export class BookingsService {
 
   // The deposit refund stays a manual PayMongo step, after field-log deductions settle.
   async markReturned(ctx: RequestContext, id: string, body: BookingReturnRequest = {}) {
+    if (body.cancelScheduled && (!body.reason || body.reason.trim().length < 3)) throw new UnprocessableEntityException({error:'cancellation_reason_required'});
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
@@ -791,19 +813,20 @@ export class BookingsService {
       await requireCompleteReturnLogs(tx, ctx, id, assignments.map((assignment) => assignment.equipmentId), id, body);
       const now = new Date();
       if (assignments.length > 0) {
-        const repairIds = [...new Set(assignments.filter((a) => details.get(a.id)?.needsRepair).map((a) => a.equipmentId))];
+        const repairIds = [...new Set(assignments.filter((a) => needsMaintenance(details.get(a.id)?.condition, details.get(a.id)?.needsRepair)).map((a) => a.equipmentId))];
         await tx.select({ id: equipment.id }).from(equipment)
           .where(inArray(equipment.id, assignments.map((a) => a.equipmentId))).for('update');
         for (const assignment of assignments) {
           const unit = details.get(assignment.id);
           await tx.update(equipmentAssignments).set({
             status: 'completed', end: now,
+            returnCondition: unit?.condition ?? null,
             returnConditionNotes: unit?.conditionNotes?.trim() || null,
-            returnNeedsRepair: unit?.needsRepair ?? false,
+            returnNeedsRepair: needsMaintenance(unit?.condition, unit?.needsRepair),
           }).where(eq(equipmentAssignments.id, assignment.id));
           await tx.update(equipment).set({ availabilityStatus: repairIds.includes(assignment.equipmentId) ? 'maintenance' : 'available' })
             .where(eq(equipment.id, assignment.equipmentId));
-          if (unit?.needsRepair) {
+          if (needsMaintenance(unit?.condition, unit?.needsRepair)) {
             await tx.insert(auditLogs).values({
               tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'equipment',
               entityId: assignment.equipmentId, reason: 'flagged for repair on return',
@@ -813,6 +836,16 @@ export class BookingsService {
         if (repairIds.length > 0) {
           await notifyStaff(tx, ctx.tenantId, 'equipment_needs_repair', { rental_id: id, equipment_ids: repairIds });
         }
+      }
+      const [scheduled] = await tx.select({ id: equipmentAssignments.id }).from(equipmentAssignments).where(and(eq(equipmentAssignments.rentalId,id),eq(equipmentAssignments.status,'scheduled'))).limit(1);
+      if (body.cancelScheduled) {
+        await tx.update(equipmentAssignments).set({status:'cancelled'}).where(and(eq(equipmentAssignments.rentalId,id),eq(equipmentAssignments.status,'scheduled')));
+        await tx.insert(auditLogs).values({tenantId:ctx.tenantId,actorId:ctx.userId,action:'UPDATE',entity:'rentals',entityId:id,reason:`Cancelled undeployed remainder: ${body.reason}`});
+      }
+      if (scheduled && !body.cancelScheduled) {
+        await tx.insert(auditLogs).values({tenantId:ctx.tenantId,actorId:ctx.userId,action:'UPDATE',entity:'rentals',entityId:id,reason:'Deployed machines returned; scheduled units remain'});
+        await notifyBookingCustomer(tx,ctx.tenantId,id,'equipment_returned',{item_count:assignments.length});
+        return {id,status:'active'};
       }
       await tx.update(rentals).set({ status: 'completed', endDate: now }).where(eq(rentals.id, id));
       await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE', entity: 'rentals', entityId: id });

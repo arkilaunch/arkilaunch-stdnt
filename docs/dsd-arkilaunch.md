@@ -6,7 +6,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
+**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **IDEA:** [idea-arkilaunch.md](idea-arkilaunch.md)
 **Mode:** Product Mode (task-first); the public catalog and landing borrow a thin Brand-Mode layer, noted where it applies.
@@ -638,6 +638,12 @@ Regenerates DESIGN.md from shipped tokens/components after each significant ship
 - [x] **Part of the branding**; the humanization from §0 (the field worker's own handwritten EDTR shown as a first-class artifact and cited on the invoice, plus tenant identity leading the app bar and catalog) is specified into real components (Evidence Split View §4.1, Nav shell §4.1, KYC panel §4.1), not deferred.
 
 ---
+
+### 8.7 Rental QA surfaces and document layouts (2026-10-20)
+
+[Approved CR](cr-arkilaunch-rental-qa-documents.md): signing uses the shared accessible modal with bounded viewport scrolling, keyboard focus handling, retained drafts, a pinned confirmation action and a compact checkout summary. Condition selection retains notes and presents servicing/repair next steps. Deployment lists each equipment window with individual and bulk-due actions. Tenant storefronts use a branded hero and two service cards with optional qualified starting prices; individual fleet-preview prices stay hidden.
+
+Print/PDF outputs share a tenant letterhead, proportional logo, configured accent and font, document reference, readable hierarchy, wrapped descriptions, repeated table headings and numbered pages. Keep headings with their first content and signatures with their labels; avoid clipping, overlapping footers and empty pages. Missing branding uses neutral text styling. EDTR form geometry is preserved.
 
 ## 9. Materialization
 

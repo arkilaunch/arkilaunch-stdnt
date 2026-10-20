@@ -130,11 +130,12 @@ describe('booking return', () => {
     const dialog = screen.getByRole('alertdialog');
     expect(within(dialog).queryByText('Returned unit')).not.toBeInTheDocument();
     await userEvent.type(within(dialog).getByLabelText('Condition notes'), ' Track needs inspection ');
-    await userEvent.click(within(dialog).getByLabelText('Needs repair (mark unavailable)'));
+    await userEvent.click(within(dialog).getByRole('combobox', { name: 'Equipment condition' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Damaged / needs repair' }));
     await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
     await within(dialog).findByText(/Field logs are incomplete/);
     expect(JSON.parse(String(fetcher.mock.calls[0]![1].body))).toEqual({
-      units: [{ assignmentId, conditionNotes: 'Track needs inspection', needsRepair: true }],
+      units: [{ assignmentId, conditionNotes: 'Track needs inspection', condition: 'damaged' }],
     });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -143,7 +144,7 @@ describe('booking return', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Mark returned' }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
     expect(JSON.parse(String(fetcher.mock.calls[1]![1].body))).toEqual({
-      units: [{ assignmentId, conditionNotes: 'Track needs inspection', needsRepair: true }],
+      units: [{ assignmentId, conditionNotes: 'Track needs inspection', condition: 'damaged' }],
       confirmIncompleteLogs: true, reason: 'Paper logs will follow',
     });
   });

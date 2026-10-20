@@ -40,11 +40,11 @@ afterEach(() => {
   clearTokens();
 });
 describe('tenant storefront', () => {
-  it('shows public prices, hides empty testimonials; exposes signed-out Cart', async () => {
+  it('hides individual prices on landing, hides empty testimonials; exposes signed-out Cart', async () => {
     stub([]);
     const view = await renderRoute('/');
     await screen.findByText('Test machine');
-    expect(screen.getByText(/1,500\.00 \/ hour/)).toBeInTheDocument();
+    expect(screen.queryByText(/1,500\.00 \/ hour/)).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Testimonials' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Testimonials' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));

@@ -8,10 +8,12 @@ export async function tenantBrand(ctx: RequestContext): Promise<StatementBrand> 
   const [tenant] = await withTenantTx(ctx, (tx) => tx.select().from(tenants).where(eq(tenants.id, ctx.tenantId)).limit(1));
   return {
     name: tenant?.legalName ?? '',
+    primaryColor: tenant?.primaryColor ?? null,
+    font: tenant?.font === 'plex' ? 'plex' : 'inter',
     address: [tenant?.address, tenant?.city, tenant?.province].filter(Boolean).join(', '),
     contact: [tenant?.phone, tenant?.contactEmail].filter(Boolean).join(' | '),
     tin: await getTenantTin(ctx.tenantId).catch(() => null),
-    logo: await firstEmbeddable([tenant?.iconKey ?? null, tenant?.logoKey ?? null]),
+    logo: await firstEmbeddable([tenant?.logoKey ?? null, tenant?.iconKey ?? null]),
   };
 }
 
