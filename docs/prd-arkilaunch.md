@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **BRD:** [brd-arkilaunch.md](brd-arkilaunch.md)
 
 ---
@@ -448,3 +448,12 @@ Phases run Planning → Requirements → Design → Development → Testing & QA
 - [x] Section 9: every milestone has entry + exit criteria and one DRI
 - [x] This document answers *what* to build, not *how* (architecture goes in the SDD)
 - [x] AGENTS hard bans applied (no em-dashes); cross-linked to idea/brd/scrutiny
+
+
+## Rental QA amendment (2026-10-20)
+
+Approved [rental QA and documents CR](cr-arkilaunch-rental-qa-documents.md) amends PRD-F4/F7/F8. Checkout signing is a modal with a compact status and explicit signature confirmation. Returned equipment records Good condition, Normal wear, Needs servicing, or Damaged / needs repair, retaining notes. Servicing/repair blocks availability until maintenance clearance. Damage alone never establishes liability: staff document evidence, a clause from the signed snapshot, an agreed estimate and customer consent; Owner alone approves or rejects a separate seven-day damage invoice. Deposits are unchanged.
+
+Deploy equipment individually within its own booked Manila dates; Deploy all due equipment excludes future/expired windows. Returning deployed units preserves scheduled units. Staff can explicitly cancel the undeployed remainder with an audited reason to close the booking; refunds remain separately reviewed.
+
+Tenant storefronts may advertise qualified, tenant-configured starting prices for equipment and trucking independently of binding quotes. Existing PDF/print documents share consistent tenant branding and readable pagination. Invoice, successful-payment receipt and signed-agreement PDF downloads preserve authoritative financial data and the exact signed terms.

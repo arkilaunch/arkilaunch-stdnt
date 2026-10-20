@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
@@ -989,3 +989,16 @@ Azure DI is an OCR/IDP service rather than a generative LLM, so the OWASP-LLM ca
 - [x] This document answers *how* to build, not *what* (that is the PRD)
 - [x] Cross-linked to idea/prd/scrutiny; forward-linked to RFC-1/2/3; traced to PRD-F1..F8
 - [x] AGENTS hard bans applied (no em-dashes anywhere, including Mermaid labels)
+
+
+## Rental QA implementation amendment (2026-10-20)
+
+See [approved CR](cr-arkilaunch-rental-qa-documents.md). Migration 0093 adds nullable `equipment_assignments.return_condition`, tenant-owned `storefront_promotions` and `damage_assessments`. Both new tables have forced RLS and the canonical tenant policy. Damage assessment records link the booking, returned assignment, signed agreement, staff evidence, amount and Owner decision; approval and invoice creation are atomic and serialized. Servicing categories cannot become damage candidates; legacy repair flags remain readable. No deposit movement is introduced.
+
+- `POST /bookings/:id/deliver`: optional unique `assignmentIds`; omitted selects all due scheduled assignments. Active bookings may deploy remaining units. Date/availability/ownership checks execute within the locked tenant transaction.
+- Existing return APIs accept an optional condition category alongside retained notes/legacy repair flags. Whole-booking return accepts `cancelScheduled` with a required reason to explicitly close undeployed assignments.
+- `GET/POST /bookings/:id/damage-assessments` requires fleet management; `PATCH .../:assessmentId` additionally enforces Owner identity. Create requires the exact stored contract clause and recorded customer agreement. Approval creates one issued damage invoice, due in seven days; rejection creates none.
+- `GET/PATCH /tenants/me/promotions` requires tenant management. `GET /catalog/promotions` exposes only enabled promotional values through an active-slug SECURITY DEFINER lookup; tenant identifiers never come from write input.
+- Staff/customer invoice and receipt downloads use `[/me]/invoices/:id/pdf` and `[/me]/invoices/:id/receipt/pdf`. Signed agreements use `[/me]/rentals/:id/agreement/pdf`. Downloads retain the existing base64 response envelope and enforce tenant/customer ownership. Receipt output requires successful payment records; agreement output uses immutable stored signing evidence.
+
+The shared pdf-lib renderer measures text, wraps long tokens, repeats table headers, reserves footer space and groups signature blocks. Inter/IBM Plex static font assets are embedded with licenses and copied into the API build. Each render receives its own tenant branding; no cross-tenant branding cache exists. Existing EDTR scanner geometry and all calculations remain unchanged. Additive schema rollout precedes API deployment; rollback leaves the expanded schema intact.

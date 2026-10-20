@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-09-07 (see docs/index.md §1); §4's CI-stub deviation and §6's progress note updated by `docs/cr-arkilaunch-m4-money-path-gates.md` (QAD-T26/T40 now CI-enforced; QAD-T39 still unmeasurable). Prior: §2/§4 deviations reconciled 2026-08-20 via `docs/cr-arkilaunch-pilot-honesty.md` §2.2/§2.3 (shipped 2026-08-13, written back 2026-08-20 — see `docs/cr-arkilaunch-doc-reconcile-2026-08-20.md`)
+**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-07 (see docs/index.md §1); §4's CI-stub deviation and §6's progress note updated by `docs/cr-arkilaunch-m4-money-path-gates.md` (QAD-T26/T40 now CI-enforced; QAD-T39 still unmeasurable). Prior: §2/§4 deviations reconciled 2026-08-20 via `docs/cr-arkilaunch-pilot-honesty.md` §2.2/§2.3 (shipped 2026-08-13, written back 2026-08-20 — see `docs/cr-arkilaunch-doc-reconcile-2026-08-20.md`)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **SDD:** [sdd-arkilaunch.md](sdd-arkilaunch.md)
 **RFC(s):** [rfc-arkilaunch-tenancy-rls-auth.md](rfc-arkilaunch-tenancy-rls-auth.md) (RFC-1, PRD-F7), [rfc-arkilaunch-ocr-edtr-reconciliation.md](rfc-arkilaunch-ocr-edtr-reconciliation.md) (RFC-2, PRD-F3), [rfc-arkilaunch-quotation-pricing-engine.md](rfc-arkilaunch-quotation-pricing-engine.md) (RFC-3, PRD-F1)
@@ -371,3 +371,15 @@ The thesis was inconsistent (4-point in some places, 5-point in others). **The t
 - [x] Test data setup command documented and provisions two tenants for isolation tests.
 - [x] Cross-linked back to PRD/SDD/RFC-1/2/3; forward-linked to CLR (compliance test evidence) and AIA (AI evals).
 - [x] AGENTS hard bans applied (no em-dashes anywhere).
+
+
+## Rental QA acceptance scenarios (2026-10-20)
+
+[CR](cr-arkilaunch-rental-qa-documents.md), PRD-F4/F7/F8:
+
+- Modal signing: keyboard/mobile operation, no inline agreement expansion, preserved drafts, explicit confirmation, payment gating and renewed consent/signature after changed terms or quotation.
+- Returns: all four categories, notes retained through incomplete-log confirmation, servicing/repair unavailable, normal wear not billed, partial return preserves scheduled work and explicit closure records a reason.
+- Damage: exact signed clause, customer consent and supporting estimate/evidence; Owner-only decision, no duplicate invoice on retry, seven-day due date, unchanged deposit ledger and cross-tenant/customer denial.
+- Deployment: selected due units, subsequent deployment on active bookings, future/expired refusal, availability recheck and complete bulk rollback.
+- Promotions: enabled/configured values only, per-tenant isolation, qualifications/units, no changes to pricing calculations and no horizontal overflow at 360/1440.
+- Documents: short/long content, long tokens and accented names, multiple tenants/fonts/colors, corrupt/missing/wide/tall logos, multipage tables, footer bounds, no blank pages, preserved numeric values and signed snapshots, successful-payment-only receipts. Render and inspect PDFs and browser print views; verify EDTR geometry unchanged.

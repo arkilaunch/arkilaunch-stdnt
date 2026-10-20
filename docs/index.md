@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-20
 **Built on FMD:** v1.28.1
 
 ---
@@ -23,10 +23,10 @@
 | WRAP · Next Steps | [wrap-arkilaunch.md](wrap-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BRD · Business Requirements | [brd-arkilaunch.md](brd-arkilaunch.md) | 0.1 | Draft | 2026-07-25 | N/A |
 | UES · Unit Economics Sheet | [ues-arkilaunch.md](ues-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-19 |
-| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-07 |
+| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
+| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-10-20 | 2026-10-20 |
 | SAD · Subagents | [sad-arkilaunch.md](sad-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BUILD · Build Guide | [build-arkilaunch.md](build-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
 | CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
@@ -58,6 +58,8 @@ Change Record or is explicitly deferred there.
 | Figma route alignment | [report-figma-route-alignment.md](report-figma-route-alignment.md) | frame-by-frame diff behind `cr-arkilaunch-figma-ia-alignment.md` | Report (2026-09-17) |
 
 **Materialized at project root (not in `docs/`):** `BRAND.md`, `DESIGN.md` (from DSD §9), `AGENTS.md` (from BUILD §6), `MODEL_CARD.md` (from AIA §1). `README.md` is **not** a materialized artifact -- it is maintained by hand; the three files that used to disagree about this (this section, `CLAUDE.md` §Materialized-files, and README's own footer) were reconciled by `cr-arkilaunch-repo-cleanup-audit.md`. `AGENTS.md` §5.2 was re-materialized 2026-09-13 after sitting 13 months behind BUILD. `BRAND.md` and `MODEL_CARD.md` are current. `DESIGN.md` was **not**: it had been hand-edited away from the Locked DSD (build-status annotations, a `weather-stale` behavioural rule, and an admission at `:405` that it was hand-updated rather than regenerated), which this section asserted was not the case from 2026-09-13 until `cr-arkilaunch-doc-reconcile-2026-09-19.md` folded that content back into the DSD and re-materialized it.
+
+**Rental QA visual verification:** [Screenshots and document evidence](qa/rental-qa/README.md), synthetic fixtures dated 2026-10-20.
 
 ### RFCs (one per major feature)
 
