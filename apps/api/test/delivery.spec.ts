@@ -88,12 +88,12 @@ describe('Delivery, return and staff alerts', () => {
       await sql`delete from invoice_line_items where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rental_contracts where quotation_id in (select id from quotations where rental_id = any(${ids}))`;
       await sql`delete from quotation_items where quotation_id in (select id from quotations where rental_id = any(${ids}))`;
       await sql`update quotations set parent_quotation_id = null where rental_id = any(${ids})`;
       await sql`delete from quotations where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
-      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();

@@ -795,6 +795,7 @@ export class BookingsService {
 
   // The deposit refund stays a manual PayMongo step, after field-log deductions settle.
   async markReturned(ctx: RequestContext, id: string, body: BookingReturnRequest = {}) {
+    if (body.cancelScheduled && (!body.reason || body.reason.trim().length < 3)) throw new UnprocessableEntityException({error:'cancellation_reason_required'});
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       const [locked] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');

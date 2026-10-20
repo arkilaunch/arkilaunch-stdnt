@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
+test.beforeEach(async ({page}) => { await page.emulateMedia({reducedMotion:'reduce'}); });
+
 // Browser-only fixtures: intercept every API request before navigation. No seed,
 // database, real authentication, payment provider, or remote write is required.
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

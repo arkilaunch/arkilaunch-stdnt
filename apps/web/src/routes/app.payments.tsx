@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -75,6 +76,8 @@ export function InvoiceDetail({ invoice, onDone }: { invoice: InvoiceSummaryResp
         ))}
       </dl>
       <div className="flex flex-wrap gap-2 border-t border-border pt-3 empty:hidden">
+        <DocumentDownload path={`/invoices/${invoice.id}/pdf`} label="Download invoice (PDF)" />
+        {invoice.status === 'paid' && <DocumentDownload path={`/invoices/${invoice.id}/receipt/pdf`} label="Download receipt (PDF)" />}
         {invoice.status === 'issued' && <RecordCash invoice={invoice} onDone={onDone} />}
         {invoice.status === 'issued' && ADJUSTABLE.has(invoice.invoiceType) && <ChangeAmount invoice={invoice} onDone={onDone} />}
         {invoice.status === 'paid' && invoice.invoiceType !== 'deposit_deduction' && <RefundPayment invoice={invoice} />}

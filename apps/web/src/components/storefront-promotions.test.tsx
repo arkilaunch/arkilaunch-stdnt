@@ -7,30 +7,67 @@ import { StorefrontPromotionsForm, StorefrontServices } from './storefront-promo
 import { ToastProvider } from './toast.js';
 
 const api = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }));
-vi.mock('../lib/api-client.js', async (original) => ({ ...await original<typeof import('../lib/api-client.js')>(), apiGet: api.get, apiPatch: api.patch }));
-vi.mock('@tanstack/react-router', async (original) => ({ ...await original<typeof import('@tanstack/react-router')>(), Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => <a href={to} className={className}>{children}</a> }));
-const promotion = { enabled: true, amount: 820.25, unit: 'hour', qualification: 'Selected units, minimum eight hours.' };
+vi.mock('../lib/api-client.js', async (original) => ({
+  ...(await original<typeof import('../lib/api-client.js')>()),
+  apiGet: api.get,
+  apiPatch: api.patch,
+}));
+vi.mock('@tanstack/react-router', async (original) => ({
+  ...(await original<typeof import('@tanstack/react-router')>()),
+  Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
+}));
+const promotion = {
+  enabled: true,
+  amount: 820.25,
+  unit: 'hour',
+  qualification: 'Selected units, minimum eight hours.',
+};
 const clients: QueryClient[] = [];
 function mount(children: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  });
   clients.push(client);
-  render(<QueryClientProvider client={client}><ToastProvider>{children}</ToastProvider></QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>{children}</ToastProvider>
+    </QueryClientProvider>,
+  );
   return client;
 }
-beforeEach(() => { api.get.mockReset(); api.patch.mockReset(); });
-afterEach(() => { clients.forEach((client) => client.clear()); clients.length = 0; });
+beforeEach(() => {
+  api.get.mockReset();
+  api.patch.mockReset();
+});
+afterEach(() => {
+  clients.forEach((client) => client.clear());
+  clients.length = 0;
+});
 
 describe('Storefront service promotions', () => {
   it('shows only configured enabled starting prices with qualification and service-specific links', async () => {
-    api.get.mockResolvedValue({ equipment: promotion, trucking: { ...promotion, enabled: false, amount: 9999, unit: 'trip' } });
+    api.get.mockResolvedValue({
+      equipment: promotion,
+      trucking: { ...promotion, enabled: false, amount: 9999, unit: 'trip' },
+    });
     mount(<StorefrontServices />);
     expect(await screen.findByText(/820\.25/)).toBeInTheDocument();
     expect(screen.getByText(promotion.qualification)).toBeInTheDocument();
     expect(screen.getByText('Final price confirmed in quote.')).toBeInTheDocument();
     expect(screen.getAllByText('As low as')).toHaveLength(1);
     expect(screen.queryByText(/9,999/)).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Explore equipment' })).toHaveAttribute('href', '/equipment');
-    expect(screen.getByRole('link', { name: 'Request trucking' })).toHaveAttribute('href', '/account/trucks');
+    expect(screen.getByRole('link', { name: 'Explore equipment' })).toHaveAttribute(
+      'href',
+      '/equipment',
+    );
+    expect(screen.getByRole('link', { name: 'Request trucking' })).toHaveAttribute(
+      'href',
+      '/account/trucks',
+    );
     expect(api.get).toHaveBeenCalledWith('/catalog/promotions');
   });
 
@@ -51,7 +88,10 @@ describe('Storefront service promotions', () => {
     // A tenant storefront navigation loads a new document and query client.
     const { cleanup } = await import('@testing-library/react');
     cleanup();
-    api.get.mockResolvedValueOnce({ equipment: null, trucking: { ...promotion, amount: 1500, unit: 'trip', qualification: 'Local trips only.' } });
+    api.get.mockResolvedValueOnce({
+      equipment: null,
+      trucking: { ...promotion, amount: 1500, unit: 'trip', qualification: 'Local trips only.' },
+    });
     mount(<StorefrontServices />);
     expect(await screen.findByText(/1,500\.00/)).toBeInTheDocument();
     expect(screen.queryByText(/820\.25/)).not.toBeInTheDocument();
@@ -77,9 +117,17 @@ describe('Storefront service promotions', () => {
     await userEvent.clear(price);
     await userEvent.type(price, '750.50');
     await userEvent.click(screen.getByRole('button', { name: 'Save service promotions' }));
-    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/tenants/me/promotions', {
-      equipment: { enabled: true, amount: 750.5, unit: 'day', qualification: 'Selected machines only.' }, trucking: null,
-    }));
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith('/tenants/me/promotions', {
+        equipment: {
+          enabled: true,
+          amount: 750.5,
+          unit: 'day',
+          qualification: 'Selected machines only.',
+        },
+        trucking: null,
+      }),
+    );
     expect(client.getQueryData(['price-book'])).toEqual({ hourlyRate: 2000 });
     expect(client.getQueryState(['price-book'])?.isInvalidated).toBe(false);
   });

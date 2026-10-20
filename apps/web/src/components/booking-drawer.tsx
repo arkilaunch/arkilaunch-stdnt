@@ -164,6 +164,8 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className={invoice.status ==='paid' ? 'text-success' : 'text-text-muted'}>
                 {formatPeso(invoice.amount)} · {formatStatus(invoice.status)}
               </span>
+              <DocumentDownload path={`/invoices/${invoice.id}/pdf`} label="Invoice PDF" />
+              {invoice.status==='paid' && <DocumentDownload path={`/invoices/${invoice.id}/receipt/pdf`} label="Receipt PDF" />}
             </li>
           ))}
         </ul>
