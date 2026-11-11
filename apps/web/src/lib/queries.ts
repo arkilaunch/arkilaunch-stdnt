@@ -188,11 +188,11 @@ export const truckBanRulesQuery = {
 };
 
 export const trucksQueries = {
-  list: (limit: number, offset: number, q = '', status?: 'open' | 'closed') =>
+  list: (limit: number, offset: number, q = '', status?: 'open' | 'closed', bucket?: 'active' | 'history') =>
     queryOptions({
-      queryKey: ['truck-requests', limit, offset, q, status ?? 'all'] as const,
+      queryKey: ['truck-requests', limit, offset, q, status ?? 'all', bucket ?? 'all'] as const,
       queryFn: () =>
-        apiGet<TruckRequestListResponse>(withParams('/truck-requests', { limit, offset, q, status })),
+        apiGet<TruckRequestListResponse>(withParams('/truck-requests', { limit, offset, q, status, bucket })),
     }),
   route: (id: string) =>
     queryOptions({
@@ -252,6 +252,7 @@ export const incidentsQueries = {
 };
 
 export interface BookingListFilters {
+  bucket?: 'active' | 'history';
   status?: BookingStatus[];
   from?: string;
   to?: string;
@@ -278,6 +279,7 @@ export const bookingsQueries = {
         const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (q) params.set('q', q);
         if (filters.status?.length) params.set('status', filters.status.join(','));
+        if (filters.bucket) params.set('bucket', filters.bucket);
         if (filters.from) params.set('from', filters.from);
         if (filters.to) params.set('to', filters.to);
         if (filters.sort) params.set('sort', filters.sort);

@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNotNull, like, notInArray } from 'drizzle-orm';
-import { type Tx, auditLogs, customerTier, customers,negotiationMessages, notifications, projectSites, tollRates, truckBanRules, truckRequests, truckSettings, users, withTenantTx } from '@arkilaunch/db';
+import { and, asc, desc, eq, inArray, isNotNull, like, lt, notInArray } from 'drizzle-orm';
+import { type Tx, auditLogs, customerTier, customers, negotiationMessages, notifications, projectSites, tollRates, truckBanRules, truckRequests, truckSettings, users, withTenantTx } from '@arkilaunch/db';
 import {
   round2HalfUp,
   bookingCodeSearchPrefix,
@@ -44,6 +44,7 @@ import { PricingEngineService } from '../quotes/pricing-engine.service.js';
 import { notifyStaff, notifyUser } from '../common/notify-customer.js';
 import { ownCustomers } from '../common/customer-scope.js';
 import { PaymentsService } from '../payments/payments.service.js';
+import { truckSchedulePassed } from '../common/booking-expiry.js';
 import { roadRoute } from './route-distance.js';
 import { routeCities } from './route-cities.js';
 import { countRows } from '../common/count-rows.js';
@@ -360,6 +361,7 @@ export class TrucksService {
 
   list(ctx: RequestContext, scope: 'mine' | 'all', query: TruckRequestListQuery): Promise<TruckRequestListResponse> {
     return withTenantTx(ctx, async (tx) => {
+      await this.expireOpen(tx, scope === 'mine' ? ctx.userId : undefined);
       const codePrefix = query.q ? bookingCodeSearchPrefix(query.q) : null;
       const closed = [...CLOSED_TRUCK_STATUSES];
       const where = and(
@@ -367,6 +369,8 @@ export class TrucksService {
         codePrefix ? like(truckRequests.code, `${codePrefix}%`) : undefined,
         query.status === 'open' ? notInArray(truckRequests.status, closed) : undefined,
         query.status === 'closed' ? inArray(truckRequests.status, closed) : undefined,
+        query.bucket === 'active' ? notInArray(truckRequests.status, ['cancelled', 'expired']) : undefined,
+        query.bucket === 'history' ? inArray(truckRequests.status, ['cancelled', 'expired']) : undefined,
       );
       const rows = await tx
         .select({ row: truckRequests, companyName: customers.companyName, first: users.firstName, last: users.lastName, phone: users.phone })
@@ -388,6 +392,17 @@ export class TrucksService {
         total: await countRows(tx, truckRequests, where),
       };
     });
+  }
+
+  private async expireOpen(tx: Tx, requestedBy?: string) {
+    const candidates = await tx.select({ id: truckRequests.id }).from(truckRequests)
+      .where(and(inArray(truckRequests.status, ['estimated', 'km_confirmed', 'agreed']), lt(truckRequests.scheduledFor, new Date()),
+        requestedBy ? eq(truckRequests.requestedBy, requestedBy) : undefined))
+      .for('update');
+    for (const row of candidates) {
+      await tx.update(truckRequests).set({ status: 'expired' }).where(eq(truckRequests.id, row.id));
+      await this.payments.voidUnpaid(tx, { truckRequestId: row.id });
+    }
   }
 
   // Pins are read under RLS; routing runs after the transaction closes.
@@ -461,7 +476,9 @@ export class TrucksService {
             : [];
       const [row] = await tx.select().from(truckRequests).where(eq(truckRequests.id, id)).limit(1);
       if (!row) throw new NotFoundException({ error: 'truck_request_not_found' });
-      if (row.status === 'cancelled') throw new ConflictException({ error: 'truck_request_cancelled' });
+      if (row.status === 'cancelled' || row.status === 'expired' || (truckSchedulePassed(row.scheduledFor, new Date()) && row.status !== 'paid' && row.status !== 'dispatched')) {
+        throw new ConflictException({ error: 'truck_request_closed' });
+      }
       const { price, internal } = await this.price(tx, ctx.tenantId, km, tolls);
       const [updated] = await tx
         .update(truckRequests)
@@ -491,6 +508,9 @@ export class TrucksService {
       .limit(1);
     const [row] = lock ? await query.for('update') : await query;
     if (!row) throw new NotFoundException({ error: 'truck_request_not_found' });
+    if (lock && (row.status === 'expired' || (truckSchedulePassed(row.scheduledFor, new Date()) && row.status !== 'paid' && row.status !== 'dispatched' && row.status !== 'cancelled'))) {
+      throw new ConflictException({ error: 'truck_request_closed', status: row.status });
+    }
     return row;
   }
 
@@ -517,8 +537,8 @@ export class TrucksService {
 
   postMessage(ctx: RequestContext, id: string, body: NegotiationMessageCreate) {
     return withTenantTx(ctx, async (tx) => {
-      const request = await this.visibleRequest(tx, ctx, id);
-      if (request.status === 'cancelled' || request.status === 'paid' || request.status === 'dispatched') {
+      const request = await this.visibleRequest(tx, ctx, id, true);
+      if (request.status === 'cancelled' || request.status === 'expired' || request.status === 'paid' || request.status === 'dispatched') {
         throw new ConflictException({ error: 'truck_request_closed', status: request.status });
       }
       const [row] = await tx
@@ -550,6 +570,7 @@ export class TrucksService {
 
   async setCrew(ctx: RequestContext, id: string, crew: TruckCrew): Promise<TruckRequestResponse> {
     return withTenantTx(ctx, async (tx) => {
+      await this.visibleRequest(tx, ctx, id, true);
       const [row] = await tx
         .update(truckRequests)
         .set({ driverName: crew.driverName || null, helperName: crew.helperName || null })
@@ -564,7 +585,7 @@ export class TrucksService {
   async agree(ctx: RequestContext, id: string, pricePhp: number): Promise<TruckRequestResponse> {
     return withTenantTx(ctx, async (tx) => {
       const request = await this.visibleRequest(tx, ctx, id, true);
-      if (request.status === 'cancelled' || request.status === 'paid' || request.status === 'dispatched') {
+      if (request.status === 'cancelled' || request.status === 'expired' || request.status === 'paid' || request.status === 'dispatched') {
         throw new ConflictException({ error: 'truck_request_closed', status: request.status });
       }
       const was = num(request.agreedPricePhp);
@@ -625,6 +646,10 @@ export class TrucksService {
   // Checkout refuses until call_confirmed_at is set.
   async requestCall(ctx: RequestContext, id: string): Promise<TruckRequestResponse> {
     return withTenantTx(ctx, async (tx) => {
+      const request = await this.visibleRequest(tx, ctx, id, true);
+      if (request.status === 'cancelled' || request.status === 'paid' || request.status === 'dispatched') {
+        throw new ConflictException({ error: 'truck_request_closed', status: request.status });
+      }
       const [updated] = await tx
         .update(truckRequests)
         .set({ callRequestedAt: new Date() })
@@ -638,6 +663,10 @@ export class TrucksService {
 
   async confirmCall(ctx: RequestContext, id: string): Promise<TruckRequestResponse> {
     return withTenantTx(ctx, async (tx) => {
+      const request = await this.visibleRequest(tx, ctx, id, true);
+      if (request.status === 'cancelled' || request.status === 'paid' || request.status === 'dispatched') {
+        throw new ConflictException({ error: 'truck_request_closed', status: request.status });
+      }
       const [updated] = await tx
         .update(truckRequests)
         .set({ callConfirmedAt: new Date(), callConfirmedBy: ctx.userId })

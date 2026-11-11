@@ -1,11 +1,13 @@
 # QA & Test Plan (QAD)
 
+> **Admin operations amendment (2026-11-11):** [Change Record](cr-arkilaunch-admin-operations-clarity.md) adds checks for Dashboard counts matching Equipment, Manila rental and exact truck expiry boundaries, paid and pending-online-payment exceptions, Active/History separation, invoice company and location grouping, staff-only registration submitter details, and ticket layout at 360 and 1440 pixels.
+
 **Project:** ArkiLaunch (Web-Based Construction Equipment Rental Management System)
 **Date:** 2026-07-25
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-07 (see docs/index.md §1); §4's CI-stub deviation and §6's progress note updated by `docs/cr-arkilaunch-m4-money-path-gates.md` (QAD-T26/T40 now CI-enforced; QAD-T39 still unmeasurable). Prior: §2/§4 deviations reconciled 2026-08-20 via `docs/cr-arkilaunch-pilot-honesty.md` §2.2/§2.3 (shipped 2026-08-13, written back 2026-08-20 — see `docs/cr-arkilaunch-doc-reconcile-2026-08-20.md`)
+**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-07 (see docs/index.md §1); §4's CI-stub deviation and §6's progress note updated by `docs/cr-arkilaunch-m4-money-path-gates.md` (QAD-T26/T40 now CI-enforced; QAD-T39 still unmeasurable). Prior: §2/§4 deviations reconciled 2026-08-20 via `docs/cr-arkilaunch-pilot-honesty.md` §2.2/§2.3 (shipped 2026-08-13, written back 2026-08-20 — see `docs/cr-arkilaunch-doc-reconcile-2026-08-20.md`)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **SDD:** [sdd-arkilaunch.md](sdd-arkilaunch.md)
 **RFC(s):** [rfc-arkilaunch-tenancy-rls-auth.md](rfc-arkilaunch-tenancy-rls-auth.md) (RFC-1, PRD-F7), [rfc-arkilaunch-ocr-edtr-reconciliation.md](rfc-arkilaunch-ocr-edtr-reconciliation.md) (RFC-2, PRD-F3), [rfc-arkilaunch-quotation-pricing-engine.md](rfc-arkilaunch-quotation-pricing-engine.md) (RFC-3, PRD-F1)

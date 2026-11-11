@@ -33,6 +33,7 @@ const FINANCIAL = { invoiced: { total: 1250000 }, depositDeducted: 84000 };
 let fleet: unknown[] = [];
 let edtr: unknown[] = [];
 let returnsDue: unknown[] = [];
+let equipmentCounts = { total: 0, available: 0 };
 
 function stubFetch() {
   vi.stubGlobal(
@@ -49,7 +50,7 @@ function stubFetch() {
       if (u.includes('/incidents')) return json({ items: [], total: 0 });
       if (u.includes('/invoices')) return json({ items: [], total: 0 });
       if (u.includes('/reference/equipment')) return json(fleet);
-      if (u.includes('/equipment')) return json({ items: [], total: 0 });
+      if (u.includes('/equipment?')) return json({ items: [], total: u.includes('status=available') ? equipmentCounts.available : equipmentCounts.total });
       if (u.includes('/edtr')) return json({ items: edtr, total: edtr.length });
       return json({ items: [], total: 0 });
     }),
@@ -60,6 +61,7 @@ beforeEach(() => {
   fleet = [];
   edtr = [];
   returnsDue = [];
+  equipmentCounts = { total: 0, available: 0 };
   sessionStorage.clear();
   setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
   stubFetch();
@@ -71,6 +73,14 @@ afterEach(() => {
 });
 
 describe('Admin dashboard', () => {
+  it('uses the Equipment list total and partitions it into available and unavailable', async () => {
+    equipmentCounts = { total: 7, available: 3 };
+    await renderRoute('/app');
+    await userEvent.click(await screen.findByText('Fleet details'));
+    await waitFor(() => expect(screen.getByText('Machines').parentElement).toHaveTextContent('7'));
+    expect(screen.getByText('Available').parentElement).toHaveTextContent('3');
+    expect(screen.getByText('Unavailable').parentElement).toHaveTextContent('4');
+  });
   it('lists machines due back, overdue first, each opening its booking', async () => {
     returnsDue = [
       { rentalId: 'r1', code: 'EQR-2026-0007', customerName: 'Acme Builders', assignmentId: 'a1', equipmentLabel: 'Excavator · CAT 320 · SN 1', end: '2026-10-14T09:00:00.000Z', daysLeft: -1 },

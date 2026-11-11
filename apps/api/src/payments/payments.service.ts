@@ -40,6 +40,7 @@ import { notifyBookingCustomer, notifyStaff, notifyUser } from '../common/notify
 import { customerOwnsInvoice, ownsCustomer } from '../common/customer-scope.js';
 import { renewLapsedHold } from '../common/booking-hold.js';
 import { countRows } from '../common/count-rows.js';
+import { rentalStartPassed, truckSchedulePassed } from '../common/booking-expiry.js';
 import { resolveBookingRef } from '../common/booking-ref.js';
 import { checkoutReturnOrigin } from './return-origin.js';
 import { claimCoupon, previewCoupon } from './coupons.js';
@@ -95,6 +96,10 @@ export class PaymentsService {
       }
       // A cancel or hold expiry that won the lock first leaves nothing to pay for.
       if (rental.status === 'cancelled') throw new ConflictException({ error: 'booking_cancelled' });
+      if (rental.status === 'expired') throw new ConflictException({ error: 'booking_closed', status: rental.status });
+      if (rental.status === 'pending' && rentalStartPassed(rental.startDate, new Date())) {
+        throw new ConflictException({ error: 'booking_expired' });
+      }
 
       // Money moves only once staff have verified the company.
       const [company] = await tx.select().from(customers).where(eq(customers.id, rental.customerId)).limit(1);
@@ -523,7 +528,7 @@ export class PaymentsService {
         await tx
           .update(rentals)
           .set({ status: 'confirmed' })
-          .where(and(eq(rentals.id, invoice.rentalId), ne(rentals.status, 'cancelled')));
+          .where(and(eq(rentals.id, invoice.rentalId), ne(rentals.status, 'cancelled'), ne(rentals.status, 'expired')));
       }
       await notifyBookingCustomer(tx, tenantId, invoice.rentalId, 'payment_received', { invoice_id: invoiceId });
       const [rental] = await tx.select({ customerId: rentals.customerId }).from(rentals).where(eq(rentals.id, invoice.rentalId)).limit(1);
@@ -533,7 +538,7 @@ export class PaymentsService {
       const [request] = await tx
         .update(truckRequests)
         .set({ status: 'paid' })
-        .where(and(eq(truckRequests.id, invoice.truckRequestId), ne(truckRequests.status, 'cancelled')))
+        .where(and(eq(truckRequests.id, invoice.truckRequestId), ne(truckRequests.status, 'cancelled'), ne(truckRequests.status, 'expired')))
         .returning({ requestedBy: truckRequests.requestedBy });
       if (request?.requestedBy) {
         await notifyUser(tx, tenantId, request.requestedBy, 'payment_received', {
@@ -563,6 +568,9 @@ export class PaymentsService {
         .where(and(eq(truckRequests.id, truckRequestId), eq(truckRequests.requestedBy, ctx.userId)))
         .limit(1);
       if (!request) throw new NotFoundException({ error: 'truck_request_not_found' });
+      if (request.status === 'expired' || (truckSchedulePassed(request.scheduledFor, new Date()) && request.status !== 'paid' && request.status !== 'dispatched')) {
+        throw new ConflictException({ error: 'booking_expired' });
+      }
       if (request.agreedPricePhp === null) throw new ConflictException({ error: 'price_not_agreed', status: request.status });
       const companies = await tx
         .select()
@@ -593,6 +601,7 @@ export class PaymentsService {
         .limit(1)
         .for('update');
       if (!request) throw new NotFoundException({ error: 'truck_request_not_found' });
+      if (request.status === 'expired' || truckSchedulePassed(request.scheduledFor, new Date())) throw new ConflictException({ error: 'booking_expired' });
       if (request.status === 'paid' || request.status === 'dispatched') throw new ConflictException({ error: 'already_paid' });
       if (request.status !== 'agreed' || request.agreedPricePhp === null) {
         throw new ConflictException({ error: 'price_not_agreed', status: request.status });

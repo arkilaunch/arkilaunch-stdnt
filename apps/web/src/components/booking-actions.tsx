@@ -203,7 +203,7 @@ function CallCard({ booking }: { booking: BookingDetailResponse }) {
             ? 'The customer asked for a call.'
             : 'Call the customer before they pay.'}
       </p>
-      {!booking.callConfirmedAt && booking.status !== 'cancelled' && (
+      {!booking.callConfirmedAt && booking.status !== 'cancelled' && booking.status !== 'expired' && (
         <Button variant="secondary" loading={confirm.isPending} onClick={() => setAsking(true)}>
           Confirmed by phone
         </Button>
@@ -253,7 +253,7 @@ function HoldCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
-const PAID_OR_CLOSED = ['confirmed', 'active', 'completed', 'cancelled'];
+const PAID_OR_CLOSED = ['confirmed', 'active', 'completed', 'cancelled', 'expired'];
 
 function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
   const queryClient = useQueryClient();
@@ -478,7 +478,7 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
         {quote && quote.status === 'approved' && !quote.inNegotiation && (
           <p className="text-sm text-text-muted">Priced from the price book and sent. You can revise it once the customer negotiates.</p>
         )}
-        {booking.status !== 'cancelled' && (!quote || quote.inNegotiation) && (
+        {booking.status !== 'cancelled' && booking.status !== 'expired' && (!quote || quote.inNegotiation) && (
           <Link to="/app/quotes" search={{ bookingId: booking.id }} className={buttonClass('primary')}>{quote ? 'Revise quote' : 'Quote this booking'}</Link>
         )}
         {quote && (

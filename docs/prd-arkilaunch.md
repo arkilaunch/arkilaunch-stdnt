@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **BRD:** [brd-arkilaunch.md](brd-arkilaunch.md)
 
 ---
@@ -457,3 +457,7 @@ Approved [rental QA and documents CR](cr-arkilaunch-rental-qa-documents.md) amen
 Deploy equipment individually within its own booked Manila dates; Deploy all due equipment excludes future/expired windows. Returning deployed units preserves scheduled units. Staff can explicitly cancel the undeployed remainder with an audited reason to close the booking; refunds remain separately reviewed.
 
 Tenant storefronts may advertise qualified, tenant-configured starting prices for equipment and trucking independently of binding quotes. Existing PDF/print documents share consistent tenant branding and readable pagination. Invoice, successful-payment receipt and signed-agreement PDF downloads preserve authoritative financial data and the exact signed terms.
+
+## Admin operations amendment (2026-11-11)
+
+The [admin operations CR](cr-arkilaunch-admin-operations-clarity.md) amends PRD-F4/F6/F8. Dashboard fleet totals match unretired Equipment records, with Available and Unavailable counts. Admin bookings separate Active from History for both services. Unpaid equipment rentals expire after their Manila start date passes; unpaid truck bookings expire after their scheduled instant. Paid or deployed work remains active until staff closes it. History retains expired, cancelled and completed records. Admin invoices group by billed company and site or delivery location, with booking code and booking person shown. Registration review identifies the submitting customer, including when one login submitted several companies. Ticket text and actions fit their cells and dialogs.

@@ -36,7 +36,7 @@ export function rentalSteps(b: Pick<BookingDetailResponse, 'status' | 'callConfi
   ];
 }
 
-function Stepper({ steps, cancelled }: { steps: TripStep[]; cancelled: boolean }) {
+function Stepper({ steps, closed }: { steps: TripStep[]; closed: 'Cancelled' | 'Expired' | undefined }) {
   return (
     <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" aria-label="Progress">
       {steps.map((step, i) => (
@@ -49,7 +49,7 @@ function Stepper({ steps, cancelled }: { steps: TripStep[]; cancelled: boolean }
           </span>
         </li>
       ))}
-      {cancelled && <li className="font-semibold text-error">Cancelled</li>}
+      {closed && <li className="font-semibold text-error">{closed}</li>}
     </ol>
   );
 }
@@ -76,7 +76,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
   const extensions = booking.changeRequests.filter((request) => request.kind === 'extend');
   return (
     <div className="flex flex-col gap-4">
-      <Stepper steps={rentalSteps(booking)} cancelled={booking.status === 'cancelled'} />
+      <Stepper steps={rentalSteps(booking)} closed={booking.status === 'cancelled' ? 'Cancelled' : booking.status === 'expired' ? 'Expired' : undefined} />
       <Section title="Customer">
         <dl className="flex flex-col gap-1">
           <Row label="Company">{booking.customerName ?? '--'}</Row>
@@ -200,7 +200,7 @@ function TruckOverview({ truck }: { truck: TruckRequestResponse }) {
   const cities = route.data?.cities ?? truck.routeCities ?? [];
   return (
     <div className="flex flex-col gap-4">
-      <Stepper steps={tripSteps(truck)} cancelled={truck.status === 'cancelled'} />
+      <Stepper steps={tripSteps(truck)} closed={truck.status === 'cancelled' ? 'Cancelled' : truck.status === 'expired' ? 'Expired' : undefined} />
       <Section title="Route">
         <p className="text-sm font-medium text-text">
           {truck.pickup} → {truck.dropoff}
@@ -340,7 +340,7 @@ export function BookingDrawer({
             <>
               {tab === 'overview' && <RentalBody booking={booking.data} />}
               {tab === 'negotiation' && (
-                <NegotiationThread base={`/bookings/${rentalId}`} disabled={booking.data.status === 'cancelled'} />
+                <NegotiationThread base={`/bookings/${rentalId}`} disabled={booking.data.status === 'cancelled' || booking.data.status === 'expired'} />
               )}
               {tab === 'actions' && <BookingSide booking={booking.data} />}
             </>
@@ -351,7 +351,7 @@ export function BookingDrawer({
               {tab === 'negotiation' && (
                 <NegotiationThread
                   base={`/truck-requests/${shownTruck.id}`}
-                  disabled={shownTruck.status === 'cancelled' || shownTruck.status === 'paid' || shownTruck.status === 'dispatched'}
+                  disabled={shownTruck.status === 'cancelled' || shownTruck.status === 'expired' || shownTruck.status === 'paid' || shownTruck.status === 'dispatched'}
                 />
               )}
               {tab === 'actions' && <RequestRow r={shownTruck} />}

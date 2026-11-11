@@ -3,6 +3,7 @@ import { Injectable, NotFoundException, UnprocessableEntityException } from '@ne
 import { and, asc, desc, eq, gte, inArray, isNotNull, lt, ne, type SQL } from 'drizzle-orm';
 import {
   type Tx,
+  addresses,
   auditLogs,
   customers,
   depositAccruals,
@@ -13,6 +14,7 @@ import {
   invoiceLineItems,
   invoices,
   payments,
+  projectSites,
   rentals,
   rentalAgreements,
   resolveDepositLedger,
@@ -50,12 +52,13 @@ export function isoWeek(day: string): { weekStart: string; weekEnd: string } {
   return { weekStart: d.toISOString().slice(0, 10), weekEnd: end.toISOString().slice(0, 10) };
 }
 
-function toInvoiceSummary(row: typeof invoices.$inferSelect, codes: Map<string, string>): InvoiceSummaryResponse {
+function toInvoiceSummary(row: typeof invoices.$inferSelect, codes: Map<string, string>, context?: Pick<InvoiceSummaryResponse, 'customerId' | 'projectSiteId' | 'customerName' | 'location' | 'bookedBy'>): InvoiceSummaryResponse {
   return {
     id: row.id,
     rentalId: row.rentalId,
     truckRequestId: row.truckRequestId,
     bookingCode: invoiceBookingRef(row, codes)?.code ?? null,
+    ...context,
     invoiceType: row.invoiceType,
     amount: Number(row.amount),
     status: row.status,
@@ -154,7 +157,51 @@ export class BillingService {
         rentalIds: rows.map((row) => row.rentalId),
         truckRequestIds: rows.map((row) => row.truckRequestId),
       });
-      return { items: rows.map((row) => toInvoiceSummary(row, codes)), total };
+      const rentalIds = rows.map((row) => row.rentalId).filter((id): id is string => !!id);
+      const truckIds = rows.map((row) => row.truckRequestId).filter((id): id is string => !!id);
+      const rentalRows = rentalIds.length
+        ? await tx.select({ id: rentals.id, customerId: rentals.customerId, siteId: rentals.projectSiteId }).from(rentals).where(inArray(rentals.id, rentalIds))
+        : [];
+      const truckRows = truckIds.length
+        ? await tx.select({ id: truckRequests.id, customerId: truckRequests.customerId, siteId: truckRequests.projectSiteId, requestedBy: truckRequests.requestedBy, dropoff: truckRequests.dropoff }).from(truckRequests).where(inArray(truckRequests.id, truckIds))
+        : [];
+      const bookingActors = rentalIds.length
+        ? await tx.select({ rentalId: auditLogs.entityId, userId: auditLogs.actorId }).from(auditLogs)
+            .where(and(eq(auditLogs.entity, 'rentals'), eq(auditLogs.action, 'CREATE'), inArray(auditLogs.entityId, rentalIds)))
+        : [];
+      const customerIds = [...new Set([...rentalRows, ...truckRows].map((row) => row.customerId).filter((id): id is string => !!id))];
+      const customerRows = customerIds.length
+        ? await tx.select({ id: customers.id, name: customers.companyName }).from(customers).where(inArray(customers.id, customerIds))
+        : [];
+      const siteIds = [...new Set([...rentalRows, ...truckRows].map((row) => row.siteId).filter((id): id is string => !!id))];
+      const siteRows = siteIds.length
+        ? await tx.select({ id: projectSites.id, line1: addresses.line1, barangay: addresses.barangay, city: addresses.city, province: addresses.province })
+            .from(projectSites).innerJoin(addresses, eq(addresses.id, projectSites.addressId)).where(inArray(projectSites.id, siteIds))
+        : [];
+      const userIds = [...new Set([...bookingActors.map((row) => row.userId), ...truckRows.map((row) => row.requestedBy)].filter((id): id is string => !!id))];
+      const userRows = userIds.length
+        ? await tx.select({ id: users.id, first: users.firstName, last: users.lastName }).from(users).where(inArray(users.id, userIds))
+        : [];
+      const byRental = new Map(rentalRows.map((row) => [row.id, row]));
+      const byTruck = new Map(truckRows.map((row) => [row.id, row]));
+      const actorByRental = new Map(bookingActors.map((row) => [row.rentalId, row.userId]));
+      const byCustomer = new Map(customerRows.map((row) => [row.id, row]));
+      const bySite = new Map(siteRows.map((row) => [row.id, [row.line1, row.barangay, row.city, row.province].filter(Boolean).join(', ')]));
+      const byUser = new Map(userRows.map((row) => [row.id, [row.first, row.last].filter(Boolean).join(' ')]));
+      return { items: rows.map((row) => {
+        const rental = row.rentalId ? byRental.get(row.rentalId) : undefined;
+        const truck = row.truckRequestId ? byTruck.get(row.truckRequestId) : undefined;
+        const customerId = rental?.customerId ?? truck?.customerId ?? null;
+        const company = customerId ? byCustomer.get(customerId) : undefined;
+        const siteId = rental?.siteId ?? truck?.siteId;
+        return toInvoiceSummary(row, codes, {
+          customerId,
+          projectSiteId: siteId ?? null,
+          customerName: company?.name ?? null,
+          location: (siteId ? bySite.get(siteId) : null) || truck?.dropoff || null,
+          bookedBy: (truck ? byUser.get(truck.requestedBy) : rental ? byUser.get(actorByRental.get(rental.id) ?? '') : null) || null,
+        });
+      }), total };
     });
   }
 
