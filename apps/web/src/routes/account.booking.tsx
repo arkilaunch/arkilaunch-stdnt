@@ -160,6 +160,7 @@ export function bookingTimeline(booking: BookingDetailResponse): TimelineStep[] 
 }
 
 function Timeline({ booking }: { booking: BookingDetailResponse }) {
+  if (booking.status === 'expired') return <p className="rounded-md border border-border px-3 py-2 text-sm text-text-muted">This booking expired before it was paid. It remains in your history.</p>;
   if (booking.status === 'cancelled') {
     return (
       <p className="rounded-md border border-error px-3 py-2 text-sm text-error">
@@ -213,7 +214,7 @@ function NextStep({ booking }: { booking: BookingDetailResponse }) {
 export function bookingStage(booking: BookingDetailResponse) {
   const onSite = booking.status === 'active' || booking.status === 'completed';
   const paid = onSite || booking.status === 'confirmed' || booking.payments.some((payment) => payment.status === 'paid');
-  return { paid, onSite, cancelled: booking.status === 'cancelled' };
+  return { paid, onSite, cancelled: booking.status === 'cancelled' || booking.status === 'expired' };
 }
 
 function DepositCard({ booking }: { booking: BookingDetailResponse }) {
@@ -423,7 +424,7 @@ function CancelAction({ booking }: { booking: BookingDetailResponse }) {
     onError: (err) => toast.error('That did not go through', apiErrorText(err)),
   });
 
-  if (booking.status === 'cancelled' || hasOpenRequest) return null;
+  if (booking.status === 'cancelled' || booking.status === 'expired' || hasOpenRequest) return null;
   return (
     <>
       <Button variant="ghost" onClick={() => setOpen(true)}>

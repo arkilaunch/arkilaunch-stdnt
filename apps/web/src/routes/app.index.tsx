@@ -8,6 +8,7 @@ import {
   bookingsQueries,
   companiesQueries,
   edtrQueries,
+  equipmentQueries,
   referenceQueries,
   fleetUtilizationPct,
   incidentsQueries,
@@ -234,8 +235,8 @@ function AdminDashboardPage() {
     return match ? match.model : 'Unknown machine';
   }
 
-  const fleetItems = fleet ?? [];
-  const inMaintenance = fleetItems.filter((e) => e.availabilityStatus === 'maintenance').length;
+  const { data: equipmentTotal } = useQuery(equipmentQueries.list(1));
+  const { data: equipmentAvailable } = useQuery(equipmentQueries.list(1, 0, { status: 'available' }));
   const recoveredHours =
     snapshot?.utilization.fleet.reduce((sum, u) => sum + u.runtimeHours, 0) ?? null;
   const pendingInvoices = invoices?.items ?? [];
@@ -276,9 +277,9 @@ function AdminDashboardPage() {
               {(
                 [
                   ['Sites', sites?.total],
-                  ['Machines', fleet?.length],
-                  ['In maintenance', fleet ? inMaintenance : null],
-                  ['Available', fleet ? fleetItems.filter((e) => e.availabilityStatus === 'available').length : null],
+                  ['Machines', equipmentTotal?.total],
+                  ['Available', equipmentAvailable?.total],
+                  ['Unavailable', equipmentTotal && equipmentAvailable ? equipmentTotal.total - equipmentAvailable.total : null],
                 ] as const
               ).map(([label, value]) => (
                 <div key={label}>

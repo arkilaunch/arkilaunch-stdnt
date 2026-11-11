@@ -265,6 +265,7 @@ export type CompanyResponse = z.infer<typeof CompanyResponseSchema>;
 
 // Staff-only: never on the customer's own /me responses.
 export const CompanyReviewResponseSchema = CompanyResponseSchema.extend({
+  submitterEmail: z.string().email().nullable(),
   documents: z.array(
     z.object({
       id: z.string().uuid(),

@@ -26,6 +26,7 @@ const STAGE_HINT: Record<string, string> = {
   confirmed: 'Paid, waiting for delivery',
   active: 'On site',
   completed: 'Returned',
+  expired: 'Booking date passed',
 };
 
 const COLUMNS: TableColumn<BookingSummaryResponse>[] = [

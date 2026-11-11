@@ -652,6 +652,13 @@
       "when": 1792454400000,
       "tag": "0093_rental_qa",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1794355200000,
+      "tag": "0094_booking_expired_status",
+      "breakpoints": true
     }
   ]
 }

@@ -159,7 +159,7 @@ function MessengerCard({ booking }: { booking: BookingDetailResponse }) {
         Ask questions or counter-offer on Messenger. We copy your booking details so you only need
         to paste them. Whatever you agree comes back here as a revised quote for you to accept.
       </p>
-      {booking.status !== 'cancelled' && (
+      {booking.status !== 'cancelled' && booking.status !== 'expired' && (
         <MessengerNegotiate booking={booking} variant="primary">Message us on Messenger</MessengerNegotiate>
       )}
     </Surface>
@@ -211,7 +211,7 @@ function NegotiationPage({ bookingId }: { bookingId: string }) {
           <div className="order-2 flex min-w-0 flex-col gap-3 lg:order-1">
             <TierNote customerId={booking.data.customerId} audience="customer" />
             {inAppNegotiation() ? (
-              <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} noOffer={tier.data?.eligible === false} />
+              <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled' || booking.data.status === 'expired'} noOffer={tier.data?.eligible === false} />
             ) : (
               <MessengerCard booking={booking.data} />
             )}

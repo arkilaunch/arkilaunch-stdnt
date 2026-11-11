@@ -7,7 +7,7 @@ import { setAccessToken } from '../lib/auth-client.js';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const company = (n: number) => ({
   id: id(n), companyName: `Company ${n}`, tin: null, secNumber: null, billingAddress: null, kycStatus: 'pending',
-  firstName: null, middleName: null, lastName: null, rejection: null, score: null, documents: [], createdAt: '2026-09-01T00:00:00Z',
+  firstName: 'Ana', middleName: null, lastName: 'Cruz', submitterEmail: 'ana@example.com', rejection: null, score: null, documents: [], createdAt: '2026-09-01T00:00:00Z',
 });
 const page = (count: number) => ({ items: Array.from({ length: count }, (_, i) => company(i + 1)), total: count });
 
@@ -28,6 +28,13 @@ afterEach(() => {
 });
 
 describe('Registration queue deep link', () => {
+  it('identifies the same submitting customer on each company application', async () => {
+    setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
+    stub();
+    await renderRoute('/app/registration/pending');
+    expect((await screen.findAllByText('Submitted by Ana Cruz')).length).toBeGreaterThan(1);
+    expect(screen.getAllByText('ana@example.com').length).toBeGreaterThan(1);
+  });
   it('opens a company that is past the first page', async () => {
     setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
     stub();

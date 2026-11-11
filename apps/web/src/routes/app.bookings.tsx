@@ -53,13 +53,17 @@ const RENTAL_COLUMNS: TableColumn<BookingSummaryResponse>[] = [
   },
 ];
 
-const STATUS_CHIPS: { id: BookingStatus | undefined; label: string }[] = [
+const ACTIVE_STATUS_CHIPS: { id: BookingStatus | undefined; label: string }[] = [
   { id: undefined, label: 'All' },
   { id: 'pending', label: 'New requests' },
   { id: 'confirmed', label: 'Paid' },
   { id: 'active', label: 'On site' },
+];
+const HISTORY_STATUS_CHIPS: { id: BookingStatus | undefined; label: string }[] = [
+  { id: undefined, label: 'All' },
   { id: 'completed', label: 'Completed' },
   { id: 'cancelled', label: 'Cancelled' },
+  { id: 'expired', label: 'Expired' },
 ];
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -89,6 +93,7 @@ const TRUCK_COLUMNS: TableColumn<TruckRequestResponse>[] = [
 
 export interface BookingsSearch {
   service?: Service;
+  bucket?: 'active' | 'history';
   open?: string;
   tab?: 'actions' | 'negotiation';
   status?: BookingStatus;
@@ -100,6 +105,7 @@ function validateBookingsSearch(search: Record<string, unknown>): BookingsSearch
   const out: BookingsSearch = {};
   if (search.tab === 'actions' || search.tab === 'negotiation') out.tab = search.tab;
   if (search.service === 'truck' || search.service === 'rental') out.service = search.service;
+  if (search.bucket === 'active' || search.bucket === 'history') out.bucket = search.bucket;
   if (typeof search.open === 'string' && parseBookingCode(search.open)) out.open = search.open.trim().toUpperCase();
   if (typeof search.status === 'string' && (BOOKING_STATUSES as readonly string[]).includes(search.status)) {
     out.status = search.status as BookingStatus;
@@ -111,12 +117,13 @@ function validateBookingsSearch(search: Record<string, unknown>): BookingsSearch
 }
 
 function BookingsPage() {
-  const { service: fromUrl, open, tab, status, from, to, sort } = appBookingsRoute.useSearch();
+  const { service: fromUrl, bucket: fromBucket, open, tab, status, from, to, sort } = appBookingsRoute.useSearch();
   const navigate = appBookingsRoute.useNavigate();
   const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState('');
   const codePrefix = bookingCodeSearchPrefix(search) ?? '';
   const service: Service = codePrefix.startsWith('TRK') ? 'truck' : codePrefix.startsWith('EQR') ? 'rental' : (fromUrl ?? 'rental');
+  const bucket = fromBucket ?? 'active';
   const setService = (next: Service) => {
     setOffset(0);
     setSearch('');
@@ -124,7 +131,7 @@ function BookingsPage() {
   };
 
   const rentalQuery = codePrefix || search.trim();
-  const filters = { ...(status ? { status: [status] } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sort ? { sort } : {}) };
+  const filters = { bucket, ...(status ? { status: [status] } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), ...(sort ? { sort } : {}) };
   const setFilters = (patch: { [K in 'status' | 'from' | 'to' | 'sort']?: BookingsSearch[K] | undefined }) => {
     setOffset(0);
     void navigate({
@@ -137,8 +144,8 @@ function BookingsPage() {
     });
   };
   const rentals = useQuery({ ...bookingsQueries.list(PAGE_SIZE, offset, rentalQuery, filters), enabled: service === 'rental' });
-  const trucks = useQuery({ ...trucksQueries.list(PAGE_SIZE, offset, codePrefix), enabled: service === 'truck' });
-  const openTrucks = useQuery(trucksQueries.list(1, 0, '', 'open'));
+  const trucks = useQuery({ ...trucksQueries.list(PAGE_SIZE, offset, codePrefix, undefined, bucket), enabled: service === 'truck' });
+  const openTrucks = useQuery(trucksQueries.list(1, 0, '', undefined, 'active'));
 
   const openCode = open ? parseBookingCode(open) : null;
   const openRental = useQuery({ ...bookingsQueries.list(1, 0, open ?? ''), enabled: openCode?.service === 'rental' });
@@ -209,7 +216,7 @@ function BookingsPage() {
           label="Show bookings"
           value={status ?? ''}
           onChange={(next) => setFilters({ status: (next || undefined) as BookingStatus | undefined })}
-          items={STATUS_CHIPS.map((c) => {
+          items={(bucket === 'active' ? ACTIVE_STATUS_CHIPS : HISTORY_STATUS_CHIPS).map((c) => {
             const counts = rentals.data?.statusCounts;
             return {
               id: c.id ?? '',
@@ -244,6 +251,15 @@ function BookingsPage() {
           { id: 'rental', label: 'Equipment rental' },
           { id: 'truck', label: 'Truck service', badge: openTrucks.data?.total ?? null },
         ]}
+      />
+      <Tabs
+        label="Booking view"
+        value={bucket}
+        onChange={(next) => {
+          setOffset(0);
+          void navigate({ search: ({ status: _status, ...prev }) => ({ ...prev, bucket: next }), replace: true });
+        }}
+        items={[{ id: 'active', label: 'Active bookings' }, { id: 'history', label: 'History' }]}
       />
       <div role="tabpanel" aria-label={service === 'truck' ? 'Truck service' : 'Equipment rental'}>
         {list.isError && <Alert type="error">{apiErrorText(list.error)}</Alert>}
@@ -291,11 +307,11 @@ function BookingPage() {
       {booking.isError && <Alert type="error">{apiErrorText(booking.error)}</Alert>}
       {booking.data && (
         <div className={inAppNegotiation() ? 'grid gap-4 lg:grid-cols-[1fr_minmax(280px,360px)]' : 'max-w-xl'}>
-          {inAppNegotiation() && <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled'} />}
+          {inAppNegotiation() && <NegotiationThread base={`/bookings/${bookingId}`} disabled={booking.data.status === 'cancelled' || booking.data.status === 'expired'} />}
           <BookingSide booking={booking.data} />
         </div>
       )}
-      {booking.data && booking.data.status !== 'pending' && booking.data.status !== 'cancelled' && (
+      {booking.data && booking.data.status !== 'pending' && booking.data.status !== 'cancelled' && booking.data.status !== 'expired' && (
         <WeeklyBillingCard rentalId={bookingId} scope="staff" />
       )}
     </div>

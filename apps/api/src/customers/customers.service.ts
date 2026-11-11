@@ -1024,6 +1024,7 @@ async function withDocuments(
   ]);
   return rows.map((row) => ({
     ...toCompany(row, row.userId ? names.get(row.userId) : undefined),
+    ...(withReads ? { submitterEmail: row.userId ? names.get(row.userId)?.email ?? null : null } : {}),
     documents: docs
       .filter((doc) => doc.customerId === row.id)
       .map((doc) => ({

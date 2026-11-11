@@ -77,6 +77,7 @@ import {
 import { ownCustomers, ownsCustomer, requireVerifiedCompany } from '../common/customer-scope.js';
 import { loadFieldLogs, requireCompleteReturnLogs } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
+import { rentalExpiryCutoff, rentalStartPassed } from '../common/booking-expiry.js';
 import { buildEdtrSheetContext, isAssignedToSite } from '../common/edtr-sheet-context.js';
 import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js';
 
@@ -277,6 +278,9 @@ export class BookingsService {
         const own = await ownCustomers(tx, ctx);
         if (own.length === 0) return { items: [], total: 0 };
         conditions.push(inArray(rentals.customerId, own.map((row) => row.id)));
+        await this.expirePending(tx, own.map((row) => row.id));
+      } else {
+        await this.expirePending(tx);
       }
       // bookingCodeSearchPrefix keeps only letters, digits and hyphens, so no caller-chosen LIKE wildcard; company names are escaped.
       const codePrefix = query.q ? bookingCodeSearchPrefix(query.q) : null;
@@ -294,6 +298,8 @@ export class BookingsService {
       // A booking whose dates touch [from, to], Manila days.
       if (query.from) conditions.push(or(isNull(rentals.endDate), gte(rentals.endDate, new Date(`${query.from}T00:00:00+08:00`)))!);
       if (query.to) conditions.push(lt(rentals.startDate, new Date(new Date(`${query.to}T00:00:00+08:00`).getTime() + 86_400_000)));
+      if (query.bucket === 'active') conditions.push(inArray(rentals.status, ['pending', 'confirmed', 'active']));
+      if (query.bucket === 'history') conditions.push(inArray(rentals.status, ['completed', 'cancelled', 'expired']));
       const unfiltered = conditions.length ? and(...conditions) : undefined;
       if (query.status?.length) conditions.push(inArray(rentals.status, query.status));
       const where = conditions.length ? and(...conditions) : undefined;
@@ -448,6 +454,8 @@ export class BookingsService {
   // Never returns card/account data, only provider_ref + status.
   async get(ctx: RequestContext, id: string): Promise<BookingDetailResponse> {
     return withTenantTx(ctx, async (tx) => {
+      await this.visibleRental(tx, ctx, id);
+      await this.expirePending(tx, undefined, id);
       const rental = await this.visibleRental(tx, ctx, id);
 
       const assignmentRows = await tx
@@ -618,6 +626,7 @@ export class BookingsService {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
       if (rental.status !== 'pending') throw new ConflictException({ error: 'not_on_hold', status: rental.status });
+      this.requireUnexpired(rental);
       await renewLapsedHold(tx, ctx.tenantId, id);
       const holdExpiresAt = await holdDeadline(tx, ctx.tenantId);
       await tx.update(rentals).set({ holdExpiresAt }).where(eq(rentals.id, id));
@@ -635,7 +644,7 @@ export class BookingsService {
   // Checkout refuses until staff have called and confirmed.
   async requestCall(ctx: RequestContext, id: string) {
     return withTenantTx(ctx, async (tx) => {
-      await this.visibleRental(tx, ctx, id);
+      this.requireUnexpired(await this.visibleRental(tx, ctx, id));
       const callRequestedAt = new Date();
       await tx.update(rentals).set({ callRequestedAt }).where(eq(rentals.id, id));
       await notifyStaff(tx, ctx.tenantId, 'call_requested', { rental_id: id });
@@ -645,7 +654,7 @@ export class BookingsService {
 
   async confirmCall(ctx: RequestContext, id: string) {
     return withTenantTx(ctx, async (tx) => {
-      await this.visibleRental(tx, ctx, id);
+      this.requireUnexpired(await this.visibleRental(tx, ctx, id));
       const callConfirmedAt = new Date();
       await tx.update(rentals).set({ callConfirmedAt, callConfirmedBy: ctx.userId }).where(eq(rentals.id, id));
       await notifyBookingCustomer(tx, ctx.tenantId, id, 'call_confirmed');
@@ -703,6 +712,7 @@ export class BookingsService {
   async postMessage(ctx: RequestContext, id: string, body: NegotiationMessageCreate) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
+      this.requireUnexpired(rental);
       if (rental.status === 'cancelled') throw new ConflictException({ error: 'booking_cancelled' });
       const authorRole = ctx.role === 'customer' ? 'customer' : 'staff';
       if (authorRole === 'customer' && body.offerPhp !== undefined) await this.requireOfferAllowed(tx, ctx, rental);
@@ -862,9 +872,10 @@ export class BookingsService {
   async requestChange(ctx: RequestContext, id: string, body: ChangeRequestCreate) {
     return withTenantTx(ctx, async (tx) => {
       const rental = await this.visibleRental(tx, ctx, id);
-      if (rental.status === 'cancelled' || rental.status === 'completed') {
+      if (rental.status === 'cancelled' || rental.status === 'completed' || rental.status === 'expired') {
         throw new ConflictException({ error: 'booking_closed', status: rental.status });
       }
+      this.requireUnexpired(rental);
       if (body.kind === 'cancel' && rental.status === 'active') {
         throw new ConflictException({ error: 'already_on_site' });
       }
@@ -922,6 +933,7 @@ export class BookingsService {
         .for('update');
       if (!request) throw new NotFoundException({ error: 'change_request_not_found' });
       if (request.status !== 'pending') throw new ConflictException({ error: 'change_request_resolved' });
+      if (body.decision === 'approved') this.requireUnexpired(await this.visibleRental(tx, ctx, id));
 
       let chargePhp: number | null = null;
       let invoiceId: string | null = null;
@@ -1004,9 +1016,10 @@ export class BookingsService {
   // Pre-pick requests have no assignmentId and extend every unit; end_date follows the latest unit.
   private async extendRental(tx: Tx, id: string, newEnd: Date, assignmentId: string | null) {
     // Rental before units, the order checkout takes, so an extension racing a checkout can't deadlock.
-    const [rental] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
+    const [rental] = await tx.select({ status: rentals.status, startDate: rentals.startDate }).from(rentals).where(eq(rentals.id, id)).for('update');
     if (!rental) throw new NotFoundException({ error: 'booking_not_found' });
-    if (rental.status === 'cancelled' || rental.status === 'completed') throw new ConflictException({ error: 'booking_closed', status: rental.status });
+    if (rental.status === 'cancelled' || rental.status === 'completed' || rental.status === 'expired') throw new ConflictException({ error: 'booking_closed', status: rental.status });
+    if (rental.status === 'pending' && rentalStartPassed(rental.startDate, new Date())) throw new ConflictException({ error: 'booking_expired' });
     const live = await tx
       .select()
       .from(equipmentAssignments)
@@ -1079,6 +1092,7 @@ export class BookingsService {
     const [rental] = await tx.select({ status: rentals.status }).from(rentals).where(eq(rentals.id, id)).for('update');
     if (rental?.status === 'active') throw new ConflictException({ error: 'already_on_site' });
     if (rental?.status === 'completed') throw new ConflictException({ error: 'booking_closed', status: rental.status });
+    if (rental?.status === 'expired') throw new ConflictException({ error: 'booking_closed', status: rental.status });
     await this.payments.voidUnpaid(tx, { rentalId: id });
     await tx.update(rentals).set({ status: 'cancelled' }).where(eq(rentals.id, id));
     await tx.update(equipmentAssignments).set({ status: 'cancelled' }).where(eq(equipmentAssignments.rentalId, id));
@@ -1091,6 +1105,27 @@ export class BookingsService {
     });
     await this.events.emit(ctx, 'booking_cancelled', { rental_id: id });
     if (ctx.role === 'customer') await notifyStaff(tx, ctx.tenantId, 'booking_cancelled', { rental_id: id });
+  }
+
+  private async expirePending(tx: Tx, customerIds?: string[], rentalId?: string) {
+    const today = rentalExpiryCutoff(new Date());
+    const candidates = await tx.select({ id: rentals.id }).from(rentals)
+      .where(and(eq(rentals.status, 'pending'), lt(rentals.startDate, today),
+        customerIds ? inArray(rentals.customerId, customerIds) : undefined,
+        rentalId ? eq(rentals.id, rentalId) : undefined))
+      .for('update');
+    for (const row of candidates) {
+      await tx.update(rentals).set({ status: 'expired' }).where(eq(rentals.id, row.id));
+      await this.payments.voidUnpaid(tx, { rentalId: row.id });
+      await tx.update(equipmentAssignments).set({ status: 'cancelled' })
+        .where(and(eq(equipmentAssignments.rentalId, row.id), eq(equipmentAssignments.status, 'scheduled')));
+    }
+  }
+
+  private requireUnexpired(rental: typeof rentals.$inferSelect) {
+    if (rental.status === 'expired' || (rental.status === 'pending' && rentalStartPassed(rental.startDate, new Date()))) {
+      throw new ConflictException({ error: 'booking_expired' });
+    }
   }
 
   // RLS bounds the tenant; this bounds a customer to their own bookings (404, never 403).

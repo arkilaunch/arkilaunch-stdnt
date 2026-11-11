@@ -185,10 +185,11 @@ export function sheetQrCheck(
   return qr.rentalId === filed.rentalId.toLowerCase() && qr.equipmentId === filed.equipmentId.toLowerCase() ? 'match' : 'mismatch';
 }
 
-export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled'] as const;
+export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled', 'expired'] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 const IsoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const BookingListQuerySchema = PaginationQuerySchema.extend({
+  bucket: z.enum(['active', 'history']).optional(),
   q: z.string().trim().max(80).optional(),
   status: z
     .string()

@@ -129,7 +129,7 @@ function StepList({ steps, onNavigate }: { steps: SetupStep[]; onNavigate: () =>
 function AccountHomePage() {
   const { data: bookings } = useQuery(bookingsQueries.list());
   const activeCount =
-    bookings?.items.filter((b) => b.status !== 'cancelled' && b.status !== 'completed').length ?? 0;
+    bookings?.items.filter((b) => b.status !== 'cancelled' && b.status !== 'completed' && b.status !== 'expired').length ?? 0;
 
   return (
     <div className="flex flex-col gap-5">

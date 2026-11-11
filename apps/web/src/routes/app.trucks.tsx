@@ -772,7 +772,7 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
       toast.error('Not accepted', apiErrorText(e));
     },
   });
-  const open = r.status !== 'cancelled' && r.status !== 'paid' && r.status !== 'dispatched';
+  const open = r.status !== 'cancelled' && r.status !== 'expired' && r.status !== 'paid' && r.status !== 'dispatched';
   const overCap = r.capPhp !== null && Number(price) > r.capPhp;
   // The tenant's max discount warns, never blocks: going lower is the admin's call.
   const floor = r.internal?.floorPhp ?? null;
@@ -853,7 +853,7 @@ export function RequestRow({ r }: { r: TruckRequestResponse }) {
           )}
         </section>
       )}
-      {r.status !== 'cancelled' && (
+      {r.status !== 'cancelled' && r.status !== 'expired' && (
         <section className={section}>
           <h3 className={heading}>Distance and tolls</h3>
           <p className="text-sm text-text-muted">

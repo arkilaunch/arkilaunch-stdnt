@@ -173,7 +173,7 @@ function priceOf(r: TruckRequestResponse) {
 export function TruckRequestCard({ request: r, initiallyOpen = false }: { request: TruckRequestResponse; initiallyOpen?: boolean }) {
   const [open, setOpen] = useState(initiallyOpen);
   const price = priceOf(r);
-  const cancelled = r.status === 'cancelled';
+  const cancelled = r.status === 'cancelled' || r.status === 'expired';
   return (
     <>
       <button
@@ -264,7 +264,7 @@ function TripDetail({ request: r }: { request: TruckRequestResponse }) {
     },
     onError: refresh,
   });
-  const closed = r.status === 'cancelled' || r.status === 'paid' || r.status === 'dispatched';
+  const closed = r.status === 'cancelled' || r.status === 'expired' || r.status === 'paid' || r.status === 'dispatched';
   const needsAccept = r.status === 'agreed' && r.agreedPricePhp !== null && r.acceptedPricePhp !== r.agreedPricePhp;
   const accepted = r.status === 'agreed' && !needsAccept;
   const pickup = r.pickupLat !== null && r.pickupLng !== null ? { lat: r.pickupLat, lng: r.pickupLng } : null;
@@ -310,7 +310,7 @@ function TripDetail({ request: r }: { request: TruckRequestResponse }) {
           )}
         </dl>
       )}
-      {r.status !== 'cancelled' && <TripStepper request={r} />}
+      {r.status !== 'cancelled' && r.status !== 'expired' && <TripStepper request={r} />}
 
       <section className="flex flex-col gap-2 rounded-md border border-border bg-surface-sunk p-4">
         <p className="font-mono text-heading-md tabular-nums text-text">

@@ -56,7 +56,7 @@ export class SiteHubService {
           )
         : new Set<string>();
       // Field logs only for bookings that reached the ground.
-      const live = rentalRows.filter((r) => r.rental.status !== 'cancelled').map((r) => r.rental.id);
+      const live = rentalRows.filter((r) => r.rental.status !== 'cancelled' && r.rental.status !== 'expired').map((r) => r.rental.id);
       const logs = await loadFieldLogs(tx, live);
 
       const [siteCustomer] = site.customerId

@@ -1,12 +1,14 @@
 # Design System Document (DSD)
 
+> **Admin operations amendment (2026-11-11):** [Change Record](cr-arkilaunch-admin-operations-clarity.md) separates Active and History bookings for both services; invoice groups identify billed company and location; registration review names the submitter; ticket text and controls fit their desktop and card layouts.
+
 **System Name:** Yardboard (the ArkiLaunch design system)
 **Project:** ArkiLaunch (Web-Based Construction Equipment Rental Management System)
 **Date:** 2026-07-25
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
+**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **IDEA:** [idea-arkilaunch.md](idea-arkilaunch.md)
 **Mode:** Product Mode (task-first); the public catalog and landing borrow a thin Brand-Mode layer, noted where it applies.

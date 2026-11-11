@@ -1,11 +1,13 @@
 # System Design Document (SDD)
 
+> **Admin operations amendment (2026-11-11):** [Change Record](cr-arkilaunch-admin-operations-clarity.md) adds `expired` booking/truck statuses and `bucket=active|history` list filters. Tenant-scoped reads materialize elapsed unpaid bookings, void unpaid payment intents and release scheduled rental assignments; checkout refuses elapsed windows and payment settlement cannot reopen expired records. Staff invoice rows include billed company, booking actor from the rental CREATE audit or truck requester, and site or dropoff location. Migration 0094 expands the truck status CHECK constraint; rental status is unconstrained text.
+
 **Project:** ArkiLaunch (Web-Based Construction Equipment Rental Management System)
 **Date:** 2026-07-25
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
