@@ -19,6 +19,7 @@ import { BookingSide } from '../components/booking-actions.js';
 import { StatusBadge } from '../components/status-badge.js';
 import { ReturnCountdown } from '../components/return-countdown.js';
 import { Tabs } from '../components/tabs.js';
+import { ActivePastSwitch } from '../components/active-past-switch.js';
 import { Alert } from '../components/alert.js';
 import { BOOKING_STATUSES, bookingCodeSearchPrefix, parseBookingCode } from '@arkilaunch/shared';
 import { formatDate, formatDateTime, formatPeso, formatStatus, siteName } from '../lib/format.js';
@@ -252,14 +253,13 @@ function BookingsPage() {
           { id: 'truck', label: 'Truck service', badge: openTrucks.data?.total ?? null },
         ]}
       />
-      <Tabs
-        label="Booking view"
-        value={bucket}
+      <ActivePastSwitch
+        label="Show bookings"
+        value={bucket === 'active' ? 'active' : 'past'}
         onChange={(next) => {
           setOffset(0);
-          void navigate({ search: ({ status: _status, ...prev }) => ({ ...prev, bucket: next }), replace: true });
+          void navigate({ search: ({ status: _status, ...prev }) => ({ ...prev, bucket: next === 'active' ? 'active' : 'history' }), replace: true });
         }}
-        items={[{ id: 'active', label: 'Active bookings' }, { id: 'history', label: 'History' }]}
       />
       <div role="tabpanel" aria-label={service === 'truck' ? 'Truck service' : 'Equipment rental'}>
         {list.isError && <Alert type="error">{apiErrorText(list.error)}</Alert>}

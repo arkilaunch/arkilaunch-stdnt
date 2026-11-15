@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { notificationEmail, renderEmailHtml, round2HalfUp, tenantWebOrigin } from '@arkilaunch/shared';
-import { customers, depositAccruals, invoiceLineItems, invoices, notifications, rentals, tenants, users } from './schema/index.js';
+import { customers, depositAccruals, edtr, edtrReconciliations, equipment, equipmentTypes, invoiceLineItems, invoices, notifications, rentals, tenants, users } from './schema/index.js';
 import { publicPhotoUrl } from './public-url.js';
 import { coverAccruals, getBillingSettings, resolveDepositLedger } from './deposit-ledger.js';
 import type { Tx } from './with-tenant-tx.js';
@@ -17,7 +17,7 @@ export interface WeeklyInvoiceMail {
 // write names its tenant_id (RFC-1). The caller sends `mail` after its transaction commits, so a rollback mails nobody.
 export async function issueWeeklyInvoice(
   tx: Tx,
-  opts: { tenantId: string; rentalId: string; accrualIds?: string[] },
+  opts: { tenantId: string; rentalId: string; accrualIds?: string[]; weekStart?: string; invoiceType?: 'weekly' | 'weekly_correction' },
 ): Promise<{ invoiceId: string; amount: number; mail: WeeklyInvoiceMail | null } | null> {
   const { tenantId, rentalId, accrualIds } = opts;
   if (accrualIds && accrualIds.length === 0) return null;
@@ -35,6 +35,8 @@ export async function issueWeeklyInvoice(
     )
     .for('update');
   if (rows.length === 0) return null;
+  const [rental] = await tx.select({ mode: rentals.depositMode }).from(rentals)
+    .where(and(eq(rentals.tenantId, tenantId), eq(rentals.id, rentalId))).limit(1);
 
   // Deposit first: whatever consumable deposit is left pays these hours before anything is invoiced. Off only
   // when the office's switch sends every hour to the invoice (Settings > Deposit and billing).
@@ -51,7 +53,7 @@ export async function issueWeeklyInvoice(
       ),
     )
     .limit(1);
-  if (!skipDepositForEdtr && depositPaid) {
+  if (rental?.mode !== 'per_machine' && !skipDepositForEdtr && depositPaid) {
     const ledger = await resolveDepositLedger(tx, rentalId, tenantId);
     const balance = Math.max(0, ledger.depositRequired - ledger.totalDeducted);
     const { covered, remaining } = coverAccruals(
@@ -105,7 +107,8 @@ export async function issueWeeklyInvoice(
     .values({
       tenantId,
       rentalId,
-      invoiceType: 'weekly',
+      invoiceType: opts.invoiceType ?? 'weekly',
+      billingWeekStart: opts.weekStart ?? null,
       amount: String(amount),
       status: 'issued',
       dueDate: new Date(Date.now() + 7 * 86_400_000),
@@ -113,28 +116,39 @@ export async function issueWeeklyInvoice(
     .returning();
   if (!invoice) throw new Error('weekly invoice insert returned no row');
 
-  await tx.insert(invoiceLineItems).values(
-    rows.map((row) => ({
+  const detail = await tx.select({ accrualId: depositAccruals.id, equipmentId: edtr.equipmentId,
+    typeName: equipmentTypes.name, model: equipment.model, serialNo: equipment.serialNo, day: edtr.reportDate })
+    .from(depositAccruals).innerJoin(edtrReconciliations, and(eq(edtrReconciliations.id, depositAccruals.reconciliationId), eq(edtrReconciliations.tenantId, tenantId)))
+    .innerJoin(edtr, and(eq(edtr.id, edtrReconciliations.edtrId), eq(edtr.tenantId, tenantId)))
+    .innerJoin(equipment, and(eq(equipment.id, edtr.equipmentId), eq(equipment.tenantId, tenantId)))
+    .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+    .where(and(eq(depositAccruals.tenantId, tenantId), inArray(depositAccruals.id, rows.map((row) => row.id))));
+  const byId = new Map(detail.map((row) => [row.accrualId, row]));
+  await tx.insert(invoiceLineItems).values(rows.map((row) => {
+    const unit = byId.get(row.id);
+    if (!unit) throw new Error(`weekly_accrual_equipment_missing:${row.id}`);
+    return {
       tenantId,
       invoiceId: invoice.id,
       reconciliationId: row.reconciliationId,
-      description: `Hours past the deposit (EDTR reconciliation ${row.reconciliationId})`,
+      equipmentId: unit.equipmentId,
+      description: `${unit.typeName} ${unit.model} (SN ${unit.serialNo}) - ${unit.day}`,
       quantity: row.hours,
       unitPrice: row.unitPrice,
       amount: row.amount,
-    })),
-  );
+    };
+  }));
   await tx
     .update(depositAccruals)
     .set({ invoiceId: invoice.id })
-    .where(inArray(depositAccruals.id, rows.map((row) => row.id)));
+    .where(and(eq(depositAccruals.tenantId, tenantId), inArray(depositAccruals.id, rows.map((row) => row.id))));
 
   let mail: WeeklyInvoiceMail | null = null;
   const [owner] = await tx
-    .select({ userId: customers.userId, code: rentals.code, email: users.email, prefs: users.notificationPrefs })
+    .select({ userId: users.id, code: rentals.code, email: users.email, prefs: users.notificationPrefs })
     .from(rentals)
-    .innerJoin(customers, eq(customers.id, rentals.customerId))
-    .leftJoin(users, eq(users.id, customers.userId))
+    .innerJoin(customers, and(eq(customers.id, rentals.customerId), eq(customers.tenantId, tenantId)))
+    .leftJoin(users, and(eq(users.id, customers.userId), eq(users.tenantId, tenantId)))
     .where(and(eq(rentals.tenantId, tenantId), eq(rentals.id, rentalId)))
     .limit(1);
   if (owner?.userId) {
@@ -153,7 +167,7 @@ export async function issueWeeklyInvoice(
       owner.email && owner.prefs?.email && tenant
         ? notificationEmail(
             'weekly_invoice',
-            { invoiceId: invoice.id, invoiceType: 'weekly', code: owner.code, amountPhp: amount, dueDate: invoice.dueDate, rentalId, truckRequestId: null },
+            { invoiceId: invoice.id, invoiceType: opts.invoiceType ?? 'weekly', code: owner.code, amountPhp: amount, dueDate: invoice.dueDate, rentalId, truckRequestId: null },
             'customer',
             tenantWebOrigin(tenant.slug, process.env.WEB_ORIGIN ?? 'http://localhost:5173', process.env.PLATFORM_DOMAIN),
           )

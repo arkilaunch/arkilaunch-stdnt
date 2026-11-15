@@ -1,8 +1,10 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { and, desc, eq, gte, inArray, lte, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lte, ne } from 'drizzle-orm';
 import {
   type Tx,
+  addresses,
   auditLogs,
+  customers,
   depositAccruals,
   edtr,
   edtrLineItems,
@@ -10,6 +12,9 @@ import {
   invoiceLineItems,
   invoices,
   issueWeeklyInvoice,
+  projectSites,
+  rentalBillingWeeks,
+  rentals,
   resolveDepositLedger,
   sendEmail,
   withTenantTx,
@@ -18,12 +23,14 @@ import {
   round2HalfUp,
   sumApproved,
   weekBillBlock,
+  weekClosureBlock,
   type EdtrLineItemsInput,
   type EdtrWeekBillRequest,
   type EdtrWeekBillResponse,
   type EdtrWeekResponse,
   type OcrPayload,
   type RequestContext,
+  manilaDate,
 } from '@arkilaunch/shared';
 import { BillingService } from '../billing/billing.service.js';
 import { loadFieldLogs, num } from '../common/field-logs.js';
@@ -50,7 +57,24 @@ export class EdtrWeekService {
 
   week(ctx: RequestContext, rentalId: string, equipmentId: string, weekStart: string): Promise<EdtrWeekResponse> {
     assertMonday(weekStart);
-    return withTenantTx(ctx, async (tx) => (await this.load(tx, rentalId, equipmentId, weekStart)).week);
+    return withTenantTx(ctx, async (tx) => {
+      const result = await this.load(tx, rentalId, equipmentId, weekStart);
+      const weekEnd = addDays(weekStart, 6);
+      const logs = await loadFieldLogs(tx, [rentalId], weekEnd);
+      const labels = new Map(logs.units.map((unit) => [unit.equipmentId, `${unit.name} (SN ${unit.serialNo})`]));
+      const [closed] = await tx.select({ closedAt: rentalBillingWeeks.closedAt, invoiceId: rentalBillingWeeks.invoiceId }).from(rentalBillingWeeks)
+        .where(and(eq(rentalBillingWeeks.tenantId, ctx.tenantId), eq(rentalBillingWeeks.rentalId, rentalId), eq(rentalBillingWeeks.weekStart, weekStart))).limit(1);
+      const [closedInvoice] = closed?.invoiceId ? await tx.select({ status: invoices.status }).from(invoices).where(eq(invoices.id, closed.invoiceId)).limit(1) : [];
+      const [reissueAccrual] = closedInvoice?.status === 'void' ? await tx.select({ id: depositAccruals.id }).from(depositAccruals)
+        .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
+        .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+        .where(and(eq(depositAccruals.tenantId, ctx.tenantId), eq(depositAccruals.rentalId, rentalId), isNull(depositAccruals.invoiceId),
+          gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd))).limit(1) : [];
+      return { ...result.week, closureDays: logs.days.filter((day) => day.date >= weekStart && day.date <= weekEnd)
+        .map((day) => ({ equipmentId: day.equipmentId, label: labels.get(day.equipmentId) ?? day.equipmentId, day: day.date, status: day.status })),
+        closedAt: closed?.closedAt.toISOString() ?? null,
+        reissueAllowed: !!closed?.invoiceId && closedInvoice?.status === 'void' && !!reissueAccrual };
+    });
   }
 
   async bill(
@@ -62,16 +86,93 @@ export class EdtrWeekService {
   ): Promise<EdtrWeekBillResponse> {
     assertMonday(weekStart);
     const issued = await withTenantTx(ctx, async (tx) => {
-      const { week, unbilledAccrualIds } = await this.load(tx, rentalId, equipmentId, weekStart);
-      const block = weekBillBlock({ days: week.days, billableHours: week.totals.billable, request: body });
+      let { week } = await this.load(tx, rentalId, equipmentId, weekStart);
+      let block = weekBillBlock({ days: week.days, billableHours: week.totals.billable, request: body });
       if (block) {
         throw block.error === 'week_summary_mismatch' ? new UnprocessableEntityException(block) : new ConflictException(block);
       }
-      // RFC-2: only hours a person approved, day by day, ever reach this invoice.
-      const result = await issueWeeklyInvoice(tx, { tenantId: ctx.tenantId, rentalId, accrualIds: unbilledAccrualIds });
+      const weekEnd = addDays(weekStart, 6);
+      const [rental] = await tx.select().from(rentals)
+        .where(and(eq(rentals.tenantId, ctx.tenantId), eq(rentals.id, rentalId))).for('update').limit(1);
+      if (!rental) throw new NotFoundException({ error: 'rental_not_found' });
+      week = (await this.load(tx, rentalId, equipmentId, weekStart)).week;
+      block = weekBillBlock({ days: week.days, billableHours: week.totals.billable, request: body });
+      if (block) throw block.error === 'week_summary_mismatch' ? new UnprocessableEntityException(block) : new ConflictException(block);
+      const [closed] = await tx.select().from(rentalBillingWeeks)
+        .where(and(eq(rentalBillingWeeks.tenantId, ctx.tenantId), eq(rentalBillingWeeks.rentalId, rentalId), eq(rentalBillingWeeks.weekStart, weekStart))).limit(1);
+      if (closed) {
+        if (!closed.invoiceId || !body.correctionReason) throw new ConflictException({ error: 'week_already_closed', invoiceId: closed.invoiceId });
+        const live = await tx.select({ id: invoices.id }).from(invoices)
+          .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.rentalId, rentalId), eq(invoices.billingWeekStart, weekStart),
+            inArray(invoices.invoiceType, ['weekly', 'weekly_correction']), ne(invoices.status, 'void'))).limit(1);
+        if (live.length) throw new ConflictException({ error: 'week_already_invoiced', invoiceId: live[0]!.id });
+        const reissueRows = await tx.select({ id: depositAccruals.id }).from(depositAccruals)
+          .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
+          .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+          .where(and(eq(depositAccruals.tenantId, ctx.tenantId), eq(depositAccruals.rentalId, rentalId),
+            isNull(depositAccruals.invoiceId), gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd)));
+        if (!reissueRows.length) throw new ConflictException({ error: 'week_has_no_unbilled_correction' });
+        const reissued = await issueWeeklyInvoice(tx, { tenantId: ctx.tenantId, rentalId,
+          accrualIds: reissueRows.map((row) => row.id), weekStart, invoiceType: 'weekly_correction' });
+        await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'APPROVE',
+          entity: 'edtr_week_reissued', entityId: reissued?.invoiceId ?? rentalId, reason: body.correctionReason });
+        return reissued;
+      }
+      const logs = await loadFieldLogs(tx, [rentalId], weekEnd);
+      const scheduled = logs.days.filter((day) => day.date >= weekStart && day.date <= weekEnd);
+      const noWork = body.noWorkDays ?? [];
+      const closure = weekClosureBlock({ today: manilaDate(new Date()), weekEnd, days: scheduled.map((day) => ({ equipmentId: day.equipmentId, date: day.date, status: day.status })), noWorkDays: noWork });
+      if (closure) throw closure.error === 'invalid_no_work_confirmation' ? new UnprocessableEntityException(closure) : new ConflictException(closure);
+      const [site] = await tx.select({ line1: addresses.line1, barangay: addresses.barangay, city: addresses.city, province: addresses.province })
+        .from(projectSites).innerJoin(addresses, eq(addresses.id, projectSites.addressId))
+        .where(and(eq(projectSites.tenantId, ctx.tenantId), eq(projectSites.id, rental.projectSiteId))).limit(1);
+      const [company] = await tx.select({ companyName: customers.companyName, tin: customers.tin, billingAddress: customers.billingAddress })
+        .from(customers).where(and(eq(customers.tenantId, ctx.tenantId), eq(customers.id, rental.customerId))).limit(1);
+      if (!site || !company) throw new ConflictException({ error: 'billing_header_missing' });
+      let deductedWeek = await tx.select({ equipmentId: edtr.equipmentId, amount: invoiceLineItems.amount, hours: invoiceLineItems.quantity, rate: invoiceLineItems.unitPrice })
+        .from(invoiceLineItems).innerJoin(invoices, eq(invoices.id, invoiceLineItems.invoiceId))
+        .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, invoiceLineItems.reconciliationId))
+        .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+        .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void'), gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd)));
+      let accruedWeek = await tx.select({ id: depositAccruals.id, equipmentId: edtr.equipmentId, amount: depositAccruals.amount, hours: depositAccruals.hours, rate: depositAccruals.unitPrice, invoiceId: depositAccruals.invoiceId })
+        .from(depositAccruals).innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
+        .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+        .where(and(eq(depositAccruals.tenantId, ctx.tenantId), eq(depositAccruals.rentalId, rentalId), gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd)));
+      if (accruedWeek.some((row) => row.invoiceId)) throw new ConflictException({ error: 'week_already_invoiced' });
+      const result = await issueWeeklyInvoice(tx, { tenantId: ctx.tenantId, rentalId, accrualIds: accruedWeek.map((row) => row.id), weekStart });
+      if (rental.depositMode !== 'per_machine' && accruedWeek.length) {
+        deductedWeek = await tx.select({ equipmentId: edtr.equipmentId, amount: invoiceLineItems.amount, hours: invoiceLineItems.quantity, rate: invoiceLineItems.unitPrice })
+          .from(invoiceLineItems).innerJoin(invoices, eq(invoices.id, invoiceLineItems.invoiceId))
+          .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, invoiceLineItems.reconciliationId))
+          .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+          .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void'), gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd)));
+        accruedWeek = await tx.select({ id: depositAccruals.id, equipmentId: edtr.equipmentId, amount: depositAccruals.amount, hours: depositAccruals.hours, rate: depositAccruals.unitPrice, invoiceId: depositAccruals.invoiceId })
+          .from(depositAccruals).innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
+          .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+          .where(and(eq(depositAccruals.tenantId, ctx.tenantId), eq(depositAccruals.rentalId, rentalId), gte(edtr.reportDate, weekStart), lte(edtr.reportDate, weekEnd)));
+      }
+      const usageLines = logs.units.filter((unit) => scheduled.some((day) => day.equipmentId === unit.equipmentId))
+        .sort((a, b) => a.name.localeCompare(b.name) || a.serialNo.localeCompare(b.serialNo))
+        .map((unit) => {
+        const deducted = deductedWeek.filter((row) => row.equipmentId === unit.equipmentId);
+        const accrued = accruedWeek.filter((row) => row.equipmentId === unit.equipmentId);
+        const all = [...deducted, ...accrued];
+        const hours = round2HalfUp(all.reduce((sum, row) => sum + Number(row.hours), 0));
+        const depositApplied = round2HalfUp(deducted.reduce((sum, row) => sum + Number(row.amount), 0));
+        const net = round2HalfUp(accrued.reduce((sum, row) => sum + Number(row.amount), 0));
+        const rates = [...new Set(all.map((row) => Number(row.rate)))];
+        if (rates.length > 1) throw new ConflictException({ error: 'weekly_rate_mismatch', equipmentId: unit.equipmentId });
+        return { equipmentId: unit.equipmentId, label: unit.name, serialNo: unit.serialNo, hours, unitPrice: rates[0] ?? 0,
+          gross: round2HalfUp(depositApplied + net), depositApplied, net };
+      });
+      const [snapshot] = await tx.insert(rentalBillingWeeks).values({ tenantId: ctx.tenantId, rentalId, weekStart,
+        noWorkDays: noWork, usageLines, billToSnapshot: company,
+        siteSnapshot: { projectSiteId: rental.projectSiteId, display: [site.line1, site.barangay, site.city, site.province].filter(Boolean).join(', ') },
+        closedBy: ctx.userId }).returning();
+      if (!snapshot) throw new Error('billing week snapshot insert returned no row');
+      if (result) await tx.update(rentalBillingWeeks).set({ invoiceId: result.invoiceId }).where(eq(rentalBillingWeeks.id, snapshot.id));
 
       // Every billed week tells the customer what it used, even when the deposit paid for all of it.
-      const weekEnd = addDays(weekStart, 6);
       const fromDeposit = await tx
         .select({ invoiceId: invoices.id, amount: invoiceLineItems.amount })
         .from(invoiceLineItems)

@@ -68,6 +68,21 @@ export async function renderStatementPdf(
     ],
     [0.23, 0.08, 0.14, 0.14, 0.14, 0.13, 0.14],
   );
+  for (const week of soa.weeks) {
+    if (!week.machines?.length) continue;
+    doc.heading(`${pdfDate(week.weekStart)} - ${pdfDate(week.weekEnd)} by machine`);
+    doc.paragraph(week.invoiceId ? `Shared weekly invoice: ${week.invoiceId}` : 'Covered by deposit or awaiting weekly invoice');
+    doc.table(
+      ['Machine', 'Gross', 'Deposit', 'Invoiced', 'Paid', 'Outstanding', 'Deposit left'],
+      week.machines.map((unit) => [
+        `${unit.label} SN ${unit.serialNo}${unit.invoiceId ? ` / ${unit.invoiceId}` : ''}${unit.correctionInvoiceIds?.length ? ` / correction ${unit.correctionInvoiceIds.join(', ')}` : ''}`,
+        pdfMoney(unit.amount), pdfMoney(unit.fromDeposit), pdfMoney(unit.invoiced),
+        pdfMoney(unit.paid), pdfMoney(unit.outstanding),
+        unit.depositRemaining === null ? 'Shared' : pdfMoney(unit.depositRemaining),
+      ]),
+      [0.25, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125],
+    );
+  }
   doc.heading('Invoices');
   doc.table(
     ['Type', 'Issued', 'Due', 'Status', 'Amount'],
@@ -80,10 +95,16 @@ export async function renderStatementPdf(
     ]),
     [0.22, 0.18, 0.18, 0.14, 0.28],
   );
+  if (soa.corrections?.length) {
+    doc.heading('Reviewed late EDTR corrections');
+    doc.table(['Machine / day', 'Gross', 'Deposit', 'Invoice', 'Reason'],
+      soa.corrections.map((c) => [`${c.label} SN ${c.serialNo} / ${pdfDate(c.day)}`, pdfMoney(c.gross), pdfMoney(c.fromDeposit), c.invoiceId ?? 'Covered', c.reason]),
+      [0.26, 0.14, 0.14, 0.18, 0.28]);
+  }
   doc.heading('Payments');
   doc.table(
     ['Method', 'Date', 'Status', 'Amount'],
-    soa.payments.map((p) => [p.method, pdfDate(p.createdAt), p.status, pdfMoney(p.amount)]),
+    soa.payments.map((p) => [p.method, pdfDate(p.createdAt), p.status, `${p.status === 'refunded' ? '-' : ''}${pdfMoney(p.amount)}`]),
   );
   doc.heading('Summary');
   doc.facts([

@@ -20,6 +20,7 @@ import { Tabs } from '../components/tabs.js';
 import { companiesQueries, customerSitesQueries, MY_TRUCK_REQUESTS, trucksQueries } from '../lib/queries.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { EstimateRange, PriceBreakdown, TruckRequestCard } from '../components/truck-trip.js';
+import { ActivePastSwitch } from '../components/active-past-switch.js';
 import { EMPTY_LOCATION, LocationPicker, locationLabel } from '../components/location-picker.js';
 
 interface Side {
@@ -490,27 +491,7 @@ function YourRequests({ openId, openCode }: { openId: string | null; openCode: s
   return (
     <div className="flex flex-col gap-4">
       {linkedTrip && <TruckRequestCard key={`linked-${linkedTrip.id}`} request={linkedTrip} initiallyOpen />}
-      <div role="radiogroup" aria-label="Show" className="inline-flex w-fit rounded-md border border-border p-0.5">
-        {(['open', 'closed'] as const).map((s) => (
-          <button
-            key={s}
-            type="button"
-            role="radio"
-            aria-checked={status === s}
-            onClick={() => {
-              setStatus(s);
-              setOffset(0);
-            }}
-            className={[
-'min-h-9 rounded-sm px-4 text-sm font-semibold',
-              'focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring',
-              status === s ? 'bg-text text-text-inverse' : 'text-text-muted hover:text-text',
-            ].join(' ')}
-          >
-            {s === 'open' ? 'Active' : 'Past'}
-          </button>
-        ))}
-      </div>
+      <ActivePastSwitch value={status === 'open' ? 'active' : 'past'} onChange={(next) => { setStatus(next === 'active' ? 'open' : 'closed'); setOffset(0); }} />
       {list.isPending && <Skeleton label="Loading your trips" rows={3} className="xl:grid xl:grid-cols-2" />}
       {list.isError && (
         <p role="alert" className="text-sm text-error">

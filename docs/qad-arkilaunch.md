@@ -377,6 +377,10 @@ The thesis was inconsistent (4-point in some places, 5-point in others). **The t
 - [x] AGENTS hard bans applied (no em-dashes anywhere).
 
 
+## Machine and weekly billing acceptance (2026-11-15)
+
+[CR](cr-arkilaunch-machine-week-billing.md), PRD-F2/F3/F8. Test two same-site machines on one rental invoice and two different project-site IDs on separate rentals. Test identical models with different equipment IDs/serials, percentage and minimum deposits per machine, funded cap and refund gates, no cross-machine deposit use, full deposit coverage without a payable invoice, exact cents allocation of a partial shared-invoice payment, extension days without an upfront charge, closure before Sunday or with missing/pending days, explicit no-work confirmation, late reviewed correction after a paid week, legacy shared deposits and historical extension invoice cleanup with pending checkout races. Verify invoice and SOA screen/PDF parity and the Admin Active/Past switch at desktop and phone widths for both services, including search, filters and booking actions.
+
 ## Rental QA acceptance scenarios (2026-10-20)
 
 [CR](cr-arkilaunch-rental-qa-documents.md), PRD-F4/F7/F8:

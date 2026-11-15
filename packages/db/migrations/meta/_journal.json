@@ -666,6 +666,13 @@
       "when": 1794700800000,
       "tag": "0095_weather_evidence_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1794787200000,
+      "tag": "0096_rental_machine_billing",
+      "breakpoints": true
     }
   ]
 }

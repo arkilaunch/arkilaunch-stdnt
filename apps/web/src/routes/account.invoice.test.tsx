@@ -25,3 +25,24 @@ it('labels an extension invoice and offers the existing checkout flow', async ()
   const call = fetcher.mock.calls.find(([url]) => String(url).endsWith('/checkout'))!;
   expect(JSON.parse(String(call[1]?.body))).toEqual({ cash: true });
 });
+
+it('shows one numbered weekly usage row per machine and the deposit offset', async () => {
+  setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+  const id = '11111111-1111-4111-8111-111111111112';
+  const invoice = { id, rentalId: id, truckRequestId: null, bookingCode: 'EQR-2026-0002',
+    invoiceType: 'weekly', amount: 6000, status: 'issued', dueDate: new Date(), createdAt: new Date(),
+    lineItems: [], billTo: { companyName: 'Ronald De Jesus', tin: null, billingAddress: null }, edtrEvidence: null, receiptNo: null, auditTrail: [],
+    rentalStatement: { jobSite: 'San Jose, Antipolo', equipment: ['Backhoe MS70 (SN B-1)', 'Road Roller SV20 (SN R-1)'],
+      weekStart: '2026-11-02', weekEnd: '2026-11-08', usageLines: [
+        { equipmentId: '00000000-0000-4000-8000-000000000001', label: 'Backhoe MS70', serialNo: 'B-1', hours: 8, unitPrice: 1000, gross: 8000, depositApplied: 5000, net: 3000 },
+        { equipmentId: '00000000-0000-4000-8000-000000000002', label: 'Road Roller SV20', serialNo: 'R-1', hours: 6, unitPrice: 500, gross: 3000, depositApplied: 0, net: 3000 },
+      ] } };
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify(invoice), { status: 200 }))));
+  await renderRoute(`/account/invoices/${id}`);
+  expect(await screen.findByText('San Jose, Antipolo')).toBeVisible();
+  expect(screen.getByRole('columnheader', { name: 'No.' })).toBeVisible();
+  expect(screen.getByRole('columnheader', { name: 'Particulars' })).toBeVisible();
+  expect(screen.getAllByText(/Backhoe MS70/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Road Roller SV20/).length).toBeGreaterThan(0);
+  expect(screen.getByText(/Deposit applied: Backhoe MS70/)).toBeVisible();
+});

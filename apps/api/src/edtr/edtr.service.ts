@@ -13,6 +13,7 @@ import {
   crossesLowBalance,
   depositAccruals,
   getBillingSettings,
+  fundedEquipmentDeposits,
   edtr,
   edtrLineItems,
   edtrReconciliations,
@@ -22,6 +23,8 @@ import {
   projectSites,
   invoiceLineItems,
   invoices,
+  rentalEquipmentDeposits,
+  rentalBillingWeeks,
   notifications,
   quotationItems,
   quotations,
@@ -30,7 +33,7 @@ import {
   siteReadingsOn,
   reconcileEdtr,
   rentals,
-  resolveDepositLedger,
+  resolveEquipmentDepositLedger,
   splitDeduction,
   timekeeperSiteAssignments,
   withTenantTx,
@@ -223,12 +226,13 @@ function dayHoursFor(
 }
 
 // RFC-2 fail closed: a deduction draws only on a paid deposit or booking invoice.
-async function depositSplit(tx: Tx, ctx: RequestContext, rentalId: string, amount: number) {
+async function depositSplit(tx: Tx, ctx: RequestContext, rentalId: string, equipmentId: string, amount: number) {
   const [depositPaid] = await tx
     .select({ id: invoices.id })
     .from(invoices)
     .where(
       and(
+        eq(invoices.tenantId, ctx.tenantId),
         eq(invoices.rentalId, rentalId),
         inArray(invoices.invoiceType, ['deposit', 'booking']),
         eq(invoices.status, 'paid'),
@@ -236,10 +240,19 @@ async function depositSplit(tx: Tx, ctx: RequestContext, rentalId: string, amoun
     )
     .limit(1);
   if (!depositPaid) throw new ConflictException({ error: 'deposit_not_paid' });
-  const ledger = await resolveDepositLedger(tx, rentalId, ctx.tenantId);
+  const [rental] = await tx.select({ mode: rentals.depositMode }).from(rentals)
+    .where(and(eq(rentals.tenantId, ctx.tenantId), eq(rentals.id, rentalId))).limit(1);
+  let fundedAmount: number | null = null;
+  if (rental?.mode === 'per_machine') {
+    const [cap] = await tx.select({ required: rentalEquipmentDeposits.required }).from(rentalEquipmentDeposits)
+      .where(and(eq(rentalEquipmentDeposits.tenantId, ctx.tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId), eq(rentalEquipmentDeposits.equipmentId, equipmentId))).for('update').limit(1);
+    if (!cap) throw new ConflictException({ error: 'equipment_deposit_missing', equipmentId });
+    fundedAmount = (await fundedEquipmentDeposits(tx, ctx.tenantId, rentalId)).get(equipmentId) ?? 0;
+  }
+  const ledger = await resolveEquipmentDepositLedger(tx, rentalId, ctx.tenantId, equipmentId);
   // The office's switch (Settings > Deposit and billing): every approved hour waits for the weekly invoice.
   const { skipDepositForEdtr } = await getBillingSettings(tx, ctx.tenantId);
-  const balanceBefore = skipDepositForEdtr ? 0 : round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted));
+  const balanceBefore = skipDepositForEdtr ? 0 : round2HalfUp(Math.max(0, (fundedAmount ?? ledger.depositRequired) - ledger.totalDeducted));
   return { ledger, balanceBefore, split: splitDeduction(balanceBefore, amount) };
 }
 
@@ -698,7 +711,7 @@ export class EdtrService {
       const { billable } = classifyHours(dayHoursFor(lineItems, query));
       const { hourlyRate } = await this.hourlyRateFor(tx, ctx, record);
       const amount = round2HalfUp(billable * hourlyRate);
-      const { balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, amount);
+      const { balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, record.equipmentId, amount);
       return {
         billableHours: billable,
         hourlyRate,
@@ -926,7 +939,13 @@ export class EdtrService {
       .where(eq(rentals.id, record.rentalId))
       .for('update');
     const bookingCode = lockedRental?.code ?? null;
-    const { ledger, balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, deductedAmount);
+    const reportDay = new Date(`${record.reportDate}T00:00:00Z`);
+    reportDay.setUTCDate(reportDay.getUTCDate() - ((reportDay.getUTCDay() + 6) % 7));
+    const reportWeekStart = reportDay.toISOString().slice(0, 10);
+    const [closedWeek] = await tx.select({ id: rentalBillingWeeks.id }).from(rentalBillingWeeks)
+      .where(and(eq(rentalBillingWeeks.tenantId, ctx.tenantId), eq(rentalBillingWeeks.rentalId, record.rentalId), eq(rentalBillingWeeks.weekStart, reportWeekStart))).limit(1);
+    if (closedWeek && !body.correctionReason) throw new ConflictException({ error: 'late_edtr_correction_review_required', weekStart: reportWeekStart });
+    const { ledger, balanceBefore, split } = await depositSplit(tx, ctx, record.rentalId, record.equipmentId, deductedAmount);
     const balanceAfter = split.balanceAfter;
     // Hours split in the same ratio, so hours-used adds up across both.
     const deductedHours =
@@ -953,6 +972,7 @@ export class EdtrService {
         invoiceId: inserted.id,
         // The evidence link to the reconciliation; the description is for humans only.
         reconciliationId: reconciliation.id,
+        equipmentId: record.equipmentId,
         description: [
           bookingCode,
           equipmentRow?.model ?? 'Equipment',
@@ -966,16 +986,32 @@ export class EdtrService {
         amount: String(split.deducted),
       });
     }
+    let correctionInvoiceId: string | null = null;
     if (split.accrued > 0) {
-      await tx.insert(depositAccruals).values({
+      const [accrual] = await tx.insert(depositAccruals).values({
         tenantId: ctx.tenantId,
         rentalId: record.rentalId,
         reconciliationId: reconciliation.id,
         hours: String(round2HalfUp(billableHoursActive - deductedHours)),
         unitPrice: String(hourlyRate),
         amount: String(split.accrued),
-      });
+      }).returning();
+      if (closedWeek && accrual) {
+        const [correction] = await tx.insert(invoices).values({ tenantId: ctx.tenantId, rentalId: record.rentalId,
+          invoiceType: 'weekly_correction', billingWeekStart: reportWeekStart, amount: String(split.accrued),
+          status: 'issued', dueDate: new Date(Date.now() + 7 * 86_400_000) }).returning();
+        if (!correction) throw new Error('correction invoice insert returned no row');
+        correctionInvoiceId = correction.id;
+        await tx.insert(invoiceLineItems).values({ tenantId: ctx.tenantId, invoiceId: correction.id, reconciliationId: reconciliation.id,
+          equipmentId: record.equipmentId, description: `Reviewed late EDTR correction: ${equipmentRow?.model ?? 'Equipment'} (SN ${equipmentRow?.serialNo ?? record.equipmentId}), ${record.reportDate}. ${body.correctionReason}`,
+          quantity: String(round2HalfUp(billableHoursActive - deductedHours)), unitPrice: String(hourlyRate), amount: String(split.accrued) });
+        await tx.update(depositAccruals).set({ invoiceId: correction.id }).where(eq(depositAccruals.id, accrual.id));
+      }
     }
+    if (closedWeek) await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'APPROVE',
+      entity: 'edtr_late_correction', entityId: correctionInvoiceId ?? reconciliation.id,
+      reason: JSON.stringify({ reason: body.correctionReason, rentalId: record.rentalId, equipmentId: record.equipmentId, day: record.reportDate,
+        grossPhp: deductedAmount, depositAppliedPhp: split.deducted, invoiceId: correctionInvoiceId }) });
 
     const { lowBalancePct } = await getBillingSettings(tx, ctx.tenantId);
     if (crossesLowBalance(ledger.depositRequired, balanceBefore, balanceAfter, lowBalancePct)) {

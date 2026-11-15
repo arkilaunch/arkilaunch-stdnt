@@ -76,13 +76,14 @@ describe('Coupons at checkout', () => {
       await sql`delete from invoice_line_items where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rental_equipment_deposits where rental_id = any(${ids})`;
       await sql`delete from rental_contracts where quotation_id in (select id from quotations where rental_id = any(${ids}))`;
       await sql`delete from quotation_items where quotation_id in (select id from quotations where rental_id = any(${ids}))`;
+      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`update quotations set parent_quotation_id = null where rental_id = any(${ids})`;
       await sql`delete from quotations where rental_id = any(${ids})`;
       await sql`delete from negotiation_messages where rental_id = any(${ids})`;
       await sql`delete from equipment_assignments where rental_id = any(${ids})`;
-      await sql`delete from rental_agreements where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql.end();
@@ -109,7 +110,7 @@ describe('Coupons at checkout', () => {
 
   // A booking with an accepted quote, ready to pay. The price book quotes a
   // booking the moment it is made; staff quote by hand only when it could not.
-  async function acceptedBooking() {
+  async function acceptedBooking(mobilizationPhp?: number) {
     const offset = nextDay++;
     const created = await bookings.create(customerCtx, {
       customerId: fixtureCustomerId,
@@ -130,6 +131,8 @@ describe('Coupons at checkout', () => {
       });
       await quotes.approve(adminCtx, quote.id);
     }
+    if (mobilizationPhp) await withTenantTx(adminCtx, (tx) => tx.update(quotations)
+      .set({ mobilizationPhp: String(mobilizationPhp) }).where(eq(quotations.id, quote.id)));
     await quotes.accept(customerCtx, quote.id);
     const [contract] = await withTenantTx(adminCtx, (tx) =>
       tx.select().from(rentalContracts).where(eq(rentalContracts.quotationId, quote.id)),
@@ -153,59 +156,46 @@ describe('Coupons at checkout', () => {
     return { amount: Number(invoice?.amount), mob, deposit: Number(deposit?.amount ?? 0), depositText: deposit?.description };
   }
 
-  it('takes a percent coupon off the upfront deposit + mob/demob, deposit line first', async () => {
+  it('never applies a rental coupon to the consumable deposit at checkout', async () => {
     const code = `TEN${run}`;
     await couponsService.create(adminCtx, { code, discountType: 'percent', discountValue: 10, oncePerCustomer: false });
     const booking = await acceptedBooking();
-    const discount = Math.round(booking.upfront * 10) / 100;
-
-    const preview = await paymentsService.previewCoupon(customerCtx, booking.id, code);
-    expect(preview.discountPhp).toBeCloseTo(discount, 2);
-    expect(preview.depositPhp).toBeCloseTo(booking.deposit, 2);
-    expect(preview.totalPhp).toBeCloseTo(booking.upfront - discount, 2);
-
-    const checkout = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code });
+    await expect(paymentsService.previewCoupon(customerCtx, booking.id, code)).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
+    await expect(paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code })).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
+    const checkout = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph' });
     const inv = await invoiceLines(checkout.invoiceId);
-    const offDeposit = Math.min(discount, booking.deposit);
-    expect(inv.deposit).toBeCloseTo(booking.deposit - offDeposit, 2);
-    expect(inv.depositText).toContain(code);
-    expect(inv.mob).toBeCloseTo(booking.mob - (discount - offDeposit), 2);
-    expect(inv.amount).toBeCloseTo(booking.upfront - discount, 2);
-    expect(inv.amount).toBeCloseTo(preview.totalPhp, 2);
-
-    // A retry with the same code is the same invoice at the same price, one use.
-    const retry = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code });
-    expect(retry.invoiceId).toBe(checkout.invoiceId);
-    expect((await invoiceLines(checkout.invoiceId)).amount).toBeCloseTo(inv.amount, 2);
+    expect(inv.deposit).toBeCloseTo(booking.deposit, 2);
+    expect(inv.mob).toBeCloseTo(booking.mob, 2);
+    expect(inv.amount).toBeCloseTo(booking.upfront, 2);
     const [coupon] = await withTenantTx(adminCtx, (tx) => tx.select().from(coupons).where(eq(coupons.code, code)));
-    expect(coupon?.redeemedCount).toBe(1);
+    expect(coupon?.redeemedCount).toBe(0);
   });
 
-  it('re-prices an issued invoice once and expires the session opened at the old amount', async () => {
+  it('keeps an issued booking invoice and its checkout session intact when a coupon is refused', async () => {
     const code = `FIX${run}`;
     await couponsService.create(adminCtx, { code, discountType: 'fixed', discountValue: 100, oncePerCustomer: false });
     const booking = await acceptedBooking();
 
     const first = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph' });
     const before = await invoiceLines(first.invoiceId);
-    const second = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code });
-    expect(second.invoiceId).toBe(first.invoiceId);
-    expect((await invoiceLines(first.invoiceId)).amount).toBeCloseTo(before.amount - 100, 2);
+    await expect(paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code }))
+      .rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
+    expect((await invoiceLines(first.invoiceId)).amount).toBeCloseTo(before.amount, 2);
 
     const rows = await withTenantTx(adminCtx, (tx) => tx.select().from(payments).where(eq(payments.invoiceId, first.invoiceId)));
     const old = rows.find((row) => 'paymentId' in first && row.id === first.paymentId);
-    expect(old?.status).toBe('failed');
-    expect(expired).toContain(old?.providerRef);
+    expect(old?.status).toBe('pending');
+    expect(expired).not.toContain(old?.providerRef);
 
     // One coupon per invoice.
     const other = `OTH${run}`;
     await couponsService.create(adminCtx, { code: other, discountType: 'fixed', discountValue: 50, oncePerCustomer: false });
     await expect(
       paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: other }),
-    ).rejects.toMatchObject({ response: { error: 'coupon_already_applied' } });
+    ).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
   });
 
-  it('refuses expired, inactive, used-up and unknown codes with one answer', async () => {
+  it('refuses all rental checkout codes before they can reduce a deposit', async () => {
     const expiredCode = `EXP${run}`;
     const inactiveCode = `OFF${run}`;
     const oneUse = `ONE${run}`;
@@ -223,43 +213,45 @@ describe('Coupons at checkout', () => {
     const booking = await acceptedBooking();
     for (const code of [expiredCode, inactiveCode, `NOPE${run}`]) {
       await expect(paymentsService.previewCoupon(customerCtx, booking.id, code)).rejects.toMatchObject({
-        response: { error: 'coupon_invalid' },
+        response: { error: 'coupon_not_applicable_to_deposit' },
       });
       await expect(
         paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: code }),
-      ).rejects.toMatchObject({ response: { error: 'coupon_invalid' } });
+      ).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
     }
 
-    await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: oneUse });
+    await expect(paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph', couponCode: oneUse }))
+      .rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
     const another = await acceptedBooking();
     await expect(
       paymentsService.checkout(customerCtx, another.id, { ...SIGNED, method: 'qrph', couponCode: oneUse }),
-    ).rejects.toMatchObject({ response: { error: 'coupon_invalid' } });
+    ).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
   });
 
-  it('lets a once-per-customer code be used once per company', async () => {
+  it('does not redeem a once-per-customer code against a rental deposit', async () => {
     const code = `ONCE${run}`;
     await couponsService.create(adminCtx, { code, discountType: 'fixed', discountValue: 20, oncePerCustomer: true });
     const first = await acceptedBooking();
-    const checkout = await paymentsService.checkout(customerCtx, first.id, { ...SIGNED, method: 'qrph', couponCode: code });
+    await expect(paymentsService.checkout(customerCtx, first.id, { ...SIGNED, method: 'qrph', couponCode: code }))
+      .rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
     const second = await acceptedBooking();
     await expect(paymentsService.previewCoupon(customerCtx, second.id, code)).rejects.toMatchObject({
-      response: { error: 'coupon_used' },
+      response: { error: 'coupon_not_applicable_to_deposit' },
     });
     await expect(
       paymentsService.checkout(customerCtx, second.id, { ...SIGNED, method: 'qrph', couponCode: code }),
-    ).rejects.toMatchObject({ response: { error: 'coupon_used' } });
+    ).rejects.toMatchObject({ response: { error: 'coupon_not_applicable_to_deposit' } });
     // The refused checkout rolled its claim back: still one use.
     const [coupon] = await withTenantTx(adminCtx, (tx) => tx.select().from(coupons).where(eq(coupons.code, code)));
-    expect(coupon?.redeemedCount).toBe(1);
+    expect(coupon?.redeemedCount).toBe(0);
     const redemptions = await withTenantTx(adminCtx, (tx) =>
       tx.select().from(couponRedemptions).where(eq(couponRedemptions.couponId, coupon!.id)),
     );
-    expect(redemptions.map((r) => r.invoiceId)).toEqual([checkout.invoiceId]);
+    expect(redemptions).toHaveLength(0);
   });
 
-  it('lets staff lower an unpaid invoice to PHP 5: mob/demob first, deposit last, old session closed, never raised', async () => {
-    const booking = await acceptedBooking();
+  it('lets staff lower only non-deposit charges and leaves the deposit intact', async () => {
+    const booking = await acceptedBooking(2000);
     const first = await paymentsService.checkout(customerCtx, booking.id, { ...SIGNED, method: 'qrph' });
     const before = await invoiceLines(first.invoiceId);
 
@@ -267,12 +259,14 @@ describe('Coupons at checkout', () => {
       paymentsService.adjustAmount(adminCtx, first.invoiceId, { amountPhp: before.amount + 1, reason: 'raise it' }),
     ).rejects.toMatchObject({ response: { error: 'amount_above_invoice' } });
 
-    await paymentsService.adjustAmount(adminCtx, first.invoiceId, { amountPhp: 5, reason: 'capstone live test' });
+    await expect(paymentsService.adjustAmount(adminCtx, first.invoiceId, { amountPhp: 5, reason: 'capstone live test' }))
+      .rejects.toMatchObject({ response: { error: 'deposit_cannot_be_discounted' } });
+    await paymentsService.adjustAmount(adminCtx, first.invoiceId, { amountPhp: booking.deposit, reason: 'waive delivery fees' });
     const after = await invoiceLines(first.invoiceId);
-    expect(after.amount).toBe(5);
+    expect(after.amount).toBeCloseTo(booking.deposit, 2);
     // The whole mob/demob went before the deposit was touched.
     expect(after.mob).toBe(0);
-    expect(after.deposit).toBeCloseTo(5, 2);
+    expect(after.deposit).toBeCloseTo(booking.deposit, 2);
 
     const rows = await withTenantTx(adminCtx, (tx) => tx.select().from(payments).where(eq(payments.invoiceId, first.invoiceId)));
     const old = rows.find((row) => 'paymentId' in first && row.id === first.paymentId);
@@ -285,7 +279,7 @@ describe('Coupons at checkout', () => {
     const [payment] = await withTenantTx(adminCtx, (tx) =>
       tx.select().from(payments).where(eq(payments.id, 'paymentId' in again ? again.paymentId : '')),
     );
-    expect(Number(payment?.amount)).toBe(5);
+    expect(Number(payment?.amount)).toBeCloseTo(booking.deposit, 2);
   });
 
   it("keeps one tenant's coupons invisible to another", async () => {

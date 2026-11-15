@@ -45,73 +45,26 @@ describe('extension approval', () => {
     expect(client.getQueryState(unrelated)?.isInvalidated).toBe(false);
   });
 
-  it('keeps the reason field usable when the API requires a reason for an unchanged suggestion', async () => {
-    const fetcher = vi.fn()
-      .mockResolvedValueOnce(new Response('{"error":"charge_reason_required"}', { status: 422 }))
-      .mockResolvedValueOnce(new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetcher);
-    renderRequests();
-    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    const dialog = screen.getByRole('alertdialog');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    await within(dialog).findByText('Explain why the charge differs from the suggestion.');
-    await userEvent.type(within(dialog).getByLabelText(/Reason for change/), 'Previously agreed price');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
-    expect(JSON.parse(String(fetcher.mock.calls[1]![1].body))).toEqual({
-      decision: 'approved', chargePhp: 1200, chargeReason: 'Previously agreed price',
-    });
-  });
-
-  it('requires an override reason and sends the edited amount', async () => {
+  it('approves an extension without a charge or checkout request', async () => {
     const fetcher = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
     vi.stubGlobal('fetch', fetcher);
     renderRequests();
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
     const dialog = screen.getByRole('alertdialog');
-    const charge = within(dialog).getByLabelText(/Extra charge/);
-    expect(charge).toHaveValue(1200);
-    await userEvent.clear(charge);
-    await userEvent.type(charge, '1500');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('Explain why');
-    await userEvent.type(within(dialog).getByLabelText(/Reason for change/), 'Agreed with customer');
+    expect(within(dialog).queryByLabelText(/Extra charge/)).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
     const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
-    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved', chargePhp: 1500, chargeReason: 'Agreed with customer' });
+    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved' });
   });
 
-  it('requires an amount when the suggestion is missing and shows server errors inline', async () => {
-    const fetcher = vi.fn(() => Promise.resolve(new Response('{"error":"extension_charge_required"}', { status: 422 })));
-    vi.stubGlobal('fetch', fetcher);
-    renderRequests({ ...booking, changeRequests: [{ ...booking.changeRequests[0]!, suggestedChargePhp: null }] });
-    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    const dialog = screen.getByRole('alertdialog');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(within(dialog).getByLabelText(/Reason for change/)).not.toBeRequired();
-    await userEvent.type(within(dialog).getByLabelText(/Extra charge/), '0');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    expect(await within(dialog).findByText('Enter the extra charge.')).toBeInTheDocument();
-    const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
-    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved', chargePhp: 0 });
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
-  });
-
-  it('approves an explicit amount without a reason when no suggestion exists', async () => {
+  it('approves without a suggested charge when no quotation exists', async () => {
     const fetcher = vi.fn(() => Promise.resolve(new Response('{}', { status: 200 })));
     vi.stubGlobal('fetch', fetcher);
     renderRequests({ ...booking, changeRequests: [{ ...booking.changeRequests[0]!, suggestedChargePhp: null }] });
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    const dialog = screen.getByRole('alertdialog');
-    expect(within(dialog).getByLabelText(/Reason for change/)).not.toBeRequired();
-    await userEvent.type(within(dialog).getByLabelText(/Extra charge/), '125');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+    await userEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
-    const init = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1];
-    expect(JSON.parse(String(init.body))).toEqual({ decision: 'approved', chargePhp: 125 });
   });
 });
 

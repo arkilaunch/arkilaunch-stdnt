@@ -997,6 +997,14 @@ Azure DI is an OCR/IDP service rather than a generative LLM, so the OWASP-LLM ca
 - [x] AGENTS hard bans applied (no em-dashes anywhere, including Mermaid labels)
 
 
+## Machine and weekly billing implementation amendment (2026-11-15)
+
+See [CR](cr-arkilaunch-machine-week-billing.md). Migration 0096 adds `rentals.deposit_mode DEFAULT 'shared'`, per-machine frozen caps in `rental_equipment_deposits`, immutable closed snapshots in `rental_billing_weeks`, `invoice_line_items.equipment_id`, and `invoices.billing_week_start`. The two new tables have tenant policies and forced RLS; triggers check tenant references and prevent closed-week snapshot edits. Existing rentals retain the shared ledger. New rental deposits use each quote item's estimated hours and rate, with the tenant minimum per machine when percentage is zero.
+
+EDTR approval locks the rental and the machine cap, checks a paid deposit line for that equipment ID and rejects unfunded or refunded credit. The split writes a machine-linked deduction line and a machine-linked accrual. Week closure uses the rental ID and stored project-site ID, checks all assigned machine-days after Sunday, saves a company/site/usage snapshot, and issues one net weekly invoice. The Monday job only processes closed weeks. Late EDTR approval on a closed week requires a correction reason and creates a separately labeled payable correction without editing the original snapshot.
+
+Invoice detail and PDF read the saved closed-week header, machine labels, serials, rates and gross/deposit/net figures. SOA groups approved charges by equipment and week while leaving the legacy shared deposit untouched. The tenant admin cleanup endpoint `POST /invoices/legacy-extension-cleanup` expires and checks pending payment sessions before voiding only issued historical extension fees; paid fees remain. Booking checkout coupons are rejected because the upfront invoice has no rental usage line, and staff adjustment cannot cross the deposit floor.
+
 ## Rental QA implementation amendment (2026-10-20)
 
 See [approved CR](cr-arkilaunch-rental-qa-documents.md). Migration 0093 adds nullable `equipment_assignments.return_condition`, tenant-owned `storefront_promotions` and `damage_assessments`. Both new tables have forced RLS and the canonical tenant policy. Damage assessment records link the booking, returned assignment, signed agreement, staff evidence, amount and Owner decision; approval and invoice creation are atomic and serialized. Servicing categories cannot become damage candidates; legacy repair flags remain readable. No deposit movement is introduced.
