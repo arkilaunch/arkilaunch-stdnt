@@ -8,7 +8,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **IDEA:** [idea-arkilaunch.md](idea-arkilaunch.md)
 **Mode:** Product Mode (task-first); the public catalog and landing borrow a thin Brand-Mode layer, noted where it applies.
@@ -402,6 +402,8 @@ No `backdrop-filter: blur()` on content surfaces (perf on cheap Android); the mo
 **Gauge Readout**; the framed mono numeric tile for a single key figure (diesel price, deposit balance, utilization %, recovered billable hours). Bezelled with `--color-border-strong`, big tabular mono, a small overline label, an optional trend/stale marker. This is the interface's signature moment. **Built:** `apps/web/src/components/gauge-readout.tsx`.
 
 **Weather Banner**; full-width strip (§4.1) driven by the weather scale; leads with a condition icon and short label, then site name, timestamp and a stale marker when cached. Forecast rows and per-machine levels also lead with an icon and short label. A cached reading renders as the dedicated `weather-stale` tone rather than keeping its last-known severity color. **Built:** `apps/web/src/components/weather-banner.tsx`.
+
+**Field-log weather evidence (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** Show saved-reading coverage for AM and PM, with “Insufficient saved weather data” when a comparison cannot be made. “No mismatch found” requires adequate coverage and a weather tick on the sheet. Label reviewer-requested historical reanalysis as modelled supporting evidence; it never appears as a live reading or a finding.
 
 **Evidence Split View**; the reconciliation review surface (§4.1); the original handwritten image beside the extracted, editable fields. **Not yet built** (no consumer screen exists; S7/S8 unbuilt).
 

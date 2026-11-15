@@ -7,6 +7,7 @@ import {
 import { OpenMeteoAdapter, WeatherObservationError } from './open-meteo-adapter.js';
 
 export { OpenMeteoAdapter, WeatherObservationError };
+export { getHistoricalWeatherDay } from './historical.js';
 
 // Fail-closed factory: production code resolves a weather adapter here, never a test double.
 // Free tier is keyless, so ENABLE_WEATHER_POLL is the only gate.

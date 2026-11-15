@@ -19,6 +19,7 @@ import {
   events,
   equipment,
   equipmentAssignments,
+  projectSites,
   invoiceLineItems,
   invoices,
   notifications,
@@ -26,6 +27,7 @@ import {
   quotations,
   rateCards,
   flagEdtrWeather,
+  siteReadingsOn,
   reconcileEdtr,
   rentals,
   resolveDepositLedger,
@@ -63,6 +65,10 @@ import {
   type OcrPayload,
   type ReconciliationReason,
   reportedWeatherDay,
+  weatherCoverage,
+  DEFAULT_AM_WINDOW,
+  DEFAULT_PM_WINDOW,
+  type EdtrWeatherEvidence,
   type WeatherCode,
   type RequestContext,
 } from '@arkilaunch/shared';
@@ -72,6 +78,7 @@ import { notifyBookingCustomer, notifyStaff } from '../common/notify-customer.js
 import { num, unitReportSpan } from '../common/field-logs.js';
 import { countRows } from '../common/count-rows.js';
 import { isOcrPipelineEnabled } from '../ports/document-intelligence.port.js';
+import { getHistoricalWeatherDay } from '@arkilaunch/weather';
 
 // RFC-2 gate: model output may drive a deduction only with an attested accuracy measurement; fails closed without one.
 function attestedOcrAccuracyFailure(): string | null {
@@ -559,6 +566,55 @@ export class EdtrService {
           : null,
       };
     });
+  }
+
+  async weatherEvidence(ctx: RequestContext, id: string): Promise<EdtrWeatherEvidence> {
+    const detail = await this.get(ctx, id); // Reuses the field log's tenant and timekeeper-site checks.
+    const amWindow = detail.weather?.amWindow ?? DEFAULT_AM_WINDOW;
+    const pmWindow = detail.weather?.pmWindow ?? DEFAULT_PM_WINDOW;
+    return withTenantTx(ctx, async (tx) => {
+      const [row] = await tx.select({ rentalId: edtr.rentalId }).from(edtr).where(eq(edtr.id, id)).limit(1);
+      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      const readings = detail.reportDate
+        ? (await siteReadingsOn(tx, ctx.tenantId, row.rentalId, detail.reportDate))?.readings ?? []
+        : [];
+      const [stored] = await tx.select({ properties: events.properties }).from(events)
+        .where(and(eq(events.name, 'edtr_weather_history'), sql`${events.properties} ->> 'edtr_id' = ${id}`)).limit(1);
+      const historical = stored?.properties as EdtrWeatherEvidence['historical'] & { edtr_id: string } | undefined;
+      const am = weatherCoverage(readings, amWindow);
+      const pm = weatherCoverage(readings, pmWindow);
+      return {
+        reportDate: detail.reportDate,
+        am: { window: amWindow, usedDefaultHours: !detail.weather?.amWindow, ...am },
+        pm: { window: pmWindow, usedDefaultHours: !detail.weather?.pmWindow, ...pm },
+        historicalAvailable: process.env.ENABLE_WEATHER_HISTORY === 'true' && Boolean(detail.reportDate) && (!am.sufficient || !pm.sufficient),
+        historical: historical ? { source: historical.source, model: historical.model, fetchedAt: historical.fetchedAt, readings: historical.readings } : null,
+      };
+    });
+  }
+
+  async fetchHistoricalWeather(ctx: RequestContext, id: string): Promise<EdtrWeatherEvidence> {
+    const evidence = await this.weatherEvidence(ctx, id);
+    if (evidence.historical) return evidence;
+    if (!evidence.historicalAvailable || !evidence.reportDate) throw new ConflictException({ error: 'historical_weather_not_available' });
+    const site = await withTenantTx(ctx, async (tx) => {
+      const [row] = await tx.select({ latitude: projectSites.latitude, longitude: projectSites.longitude })
+        .from(edtr).innerJoin(rentals, eq(rentals.id, edtr.rentalId))
+        .innerJoin(projectSites, eq(projectSites.id, rentals.projectSiteId))
+        .where(eq(edtr.id, id)).limit(1);
+      if (!row) throw new NotFoundException({ error: 'edtr_not_found' });
+      return row;
+    });
+    const readings = await getHistoricalWeatherDay(Number(site.latitude), Number(site.longitude), evidence.reportDate);
+    await withTenantTx(ctx, (tx) => tx.insert(events).values({
+      tenantId: ctx.tenantId,
+      name: 'edtr_weather_history',
+      properties: {
+        edtr_id: id, source: 'Open-Meteo Historical Weather API', model: 'best_match',
+        fetchedAt: new Date().toISOString(), requested_by: ctx.userId, readings,
+      },
+    }).onConflictDoNothing());
+    return this.weatherEvidence(ctx, id);
   }
 
   // RLS, not a client-supplied key, decides visibility; another tenant's id reads as 404.
