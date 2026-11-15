@@ -10,6 +10,7 @@ enable_ocr_pipeline  = true
 enable_ocr_kyc       = false
 # Dev only; prod flips it after checking active sites against the ~200-site free-tier ceiling.
 enable_weather_poll  = true
+enable_weather_history = true # development review only; historical data is modelled
 enable_diesel_scrape = true
 enable_payments      = true
 enable_turnstile     = true

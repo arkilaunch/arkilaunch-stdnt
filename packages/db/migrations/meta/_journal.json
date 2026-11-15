@@ -659,6 +659,13 @@
       "when": 1794355200000,
       "tag": "0094_booking_expired_status",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1794700800000,
+      "tag": "0095_weather_evidence_retention",
+      "breakpoints": true
     }
   ]
 }

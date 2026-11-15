@@ -7,6 +7,7 @@ import {
   reportedWeatherDay,
   WEATHER_CODES,
   workedInReportedWeather,
+  weatherCoverage,
   type TimedReading,
 } from './weather-attestation.js';
 import { TICK_CONFIDENCE_GATE } from './edtr.js';
@@ -35,7 +36,10 @@ const at = (hh: number, observed: Partial<TimedReading['observed']>): TimedReadi
   minute: hh * 60,
   observed: { tempC: 30, windKph: 5, precipMm: 0, code: 0, ...observed },
 });
-const dry = [at(8, {}), at(10, {}), at(14, {}), at(16, {})];
+const dry = [
+  ...Array.from({ length: 10 }, (_, i) => at(7 + i / 2, {})),
+  ...Array.from({ length: 8 }, (_, i) => at(13 + i / 2, {})),
+];
 const base = { weatherAm: 'C' as const, weatherPm: 'C' as const, idleHours: 0, idleReason: null, hoursActive: 8 };
 
 describe('compareReportedWeather', () => {
@@ -44,11 +48,11 @@ describe('compareReportedWeather', () => {
     expect(flags.map((f) => f.rule)).toEqual(['D1']);
   });
   it('no D1 when the site really was wet', () => {
-    const wet = [at(8, {}), at(14, { precipMm: 20 })];
+    const wet = dry.map((r) => r.minute === 14 * 60 ? at(14, { precipMm: 20 }) : r);
     expect(compareReportedWeather({ ...base, idleHours: 3, idleReason: 'weather', hoursActive: 5 }, wet)).toEqual([]);
   });
   it('D2: full day worked through a warning the sheet calls clear', () => {
-    const storm = [at(8, {}), at(14, { windKph: 70 })];
+    const storm = dry.map((r) => r.minute === 14 * 60 ? at(14, { windKph: 70 }) : r);
     const flags = compareReportedWeather(base, storm);
     expect(flags.map((f) => [f.rule, f.half])).toEqual([['D2', 'pm']]);
   });
@@ -58,6 +62,16 @@ describe('compareReportedWeather', () => {
   it('D1 fires on a v3 day: weather hours stand in for the idle reason', () => {
     const day = reportedWeatherDay({ weatherAm: 'C', weatherPm: 'C', hoursActive: 5, weatherHours: 3 });
     expect(compareReportedWeather(day, dry).map((f) => f.rule)).toEqual(['D1']);
+  });
+  it('does not call a sparse dry or storm day a mismatch', () => {
+    expect(compareReportedWeather({ ...base, idleHours: 3, idleReason: 'weather' }, [at(8, {}), at(14, {})])).toEqual([]);
+    expect(compareReportedWeather(base, [at(14, { windKph: 70 })])).toEqual([]);
+  });
+  it('allows one missed scheduled reading, but not two', () => {
+    const oneMissed = dry.filter((r) => r.minute !== 8 * 60);
+    const twoMissed = oneMissed.filter((r) => r.minute !== 9 * 60);
+    expect(weatherCoverage(oneMissed, [7 * 60, 12 * 60]).sufficient).toBe(true);
+    expect(weatherCoverage(twoMissed, [7 * 60, 12 * 60]).sufficient).toBe(false);
   });
 });
 

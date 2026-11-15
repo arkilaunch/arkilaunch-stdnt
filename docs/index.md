@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-11-11
+**Last updated:** 2026-11-15
 **Built on FMD:** v1.28.1
 
 ---
@@ -23,13 +23,13 @@
 | WRAP · Next Steps | [wrap-arkilaunch.md](wrap-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BRD · Business Requirements | [brd-arkilaunch.md](brd-arkilaunch.md) | 0.1 | Draft | 2026-07-25 | N/A |
 | UES · Unit Economics Sheet | [ues-arkilaunch.md](ues-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-11-11 | 2026-11-11 |
-| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-11-11 | 2026-11-11 |
-| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-11-11 | 2026-11-11 |
-| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-11-11 | 2026-11-11 |
+| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
 | SAD · Subagents | [sad-arkilaunch.md](sad-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BUILD · Build Guide | [build-arkilaunch.md](build-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
+| CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-11-15 | N/A |
 | AIA · AI Assurance Dossier | [aia-arkilaunch.md](aia-arkilaunch.md) | 0.1 | Draft | 2026-09-19 | N/A |
 | GTM · Go-To-Market | [gtm-arkilaunch.md](gtm-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | OPS · Ops & Observability | [ops-arkilaunch.md](ops-arkilaunch.md) | 0.1 | Draft | 2026-09-29 | N/A |
@@ -92,6 +92,7 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-weather-evidence-coverage | 2026-11-15 | Near-complete saved-reading coverage before weather mismatch or machine stop-work evidence; labelled reviewer-requested historical reanalysis in development; 24-month detailed-reading retention target, disabled cleanup by default; free plan and client production weather remain off | Owner weather-evidence review | PRD/SDD/DSD/QAD/CLR; index | [cr-arkilaunch-weather-evidence-coverage.md](cr-arkilaunch-weather-evidence-coverage.md) |
 | cr-arkilaunch-admin-operations-clarity | 2026-11-11 | Dashboard fleet counts, expired booking history, invoices by company and location, ticket layout, registration submitter | Admin workflow feedback | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-admin-operations-clarity.md](cr-arkilaunch-admin-operations-clarity.md) |
 | cr-arkilaunch-rental-qa-documents | 2026-10-20 | Agreement modal, return condition and approved damage billing, individual deployment, tenant promotions, branded PDFs | Owner QA | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-rental-qa-documents.md](cr-arkilaunch-rental-qa-documents.md) |
 | cr-arkilaunch-return-reminders | 2026-10-15 | Daily 08:00 Manila job reminds customer and admins/owners (in-app + email) before each machine's return date at per-tenant points from 7/5/3/2/1 days (baseline 5, 3, 1) and once when overdue; extensions re-arm; Returns due dashboard panel, countdown badges, settings card; table `return_reminder_settings` (migration 0091). Notify only | Stakeholder panel feedback, QA §2 (Dra. Domingo) | PRD-F8, §5.2; SDD §2/§5; index | [cr-arkilaunch-return-reminders.md](cr-arkilaunch-return-reminders.md) |

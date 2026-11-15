@@ -28,6 +28,7 @@ import type {
   InvoiceDetailResponse,
   InvoiceListResponse,
   EdtrDetailResponse,
+  EdtrWeatherEvidence,
   EdtrBillPreviewQuery,
   EdtrBillPreviewResponse,
   SiteHubResponse,
@@ -502,6 +503,11 @@ export const edtrQueries = {
     queryOptions({
       queryKey: ['edtr', id] as const,
       queryFn: () => apiGet<EdtrDetailResponse>(`/edtr/${id}`),
+    }),
+  weatherEvidence: (id: string) =>
+    queryOptions({
+      queryKey: ['edtr', id, 'weather-evidence'] as const,
+      queryFn: () => apiGet<EdtrWeatherEvidence>(`/edtr/${id}/weather-evidence`),
     }),
 };
 

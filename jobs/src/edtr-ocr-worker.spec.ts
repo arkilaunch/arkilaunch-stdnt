@@ -437,10 +437,14 @@ describe('edtr-ocr-worker', () => {
     const [rental] = await db.select({ siteId: rentals.projectSiteId }).from(rentals).where(eq(rentals.id, rentalId));
     const siteId = rental!.siteId!;
     // Dry, calm polls through the shift, Manila time.
+    const halfHourSlots = (startHour: number, endHour: number) =>
+      Array.from({ length: (endHour - startHour) * 2 }, (_, i) =>
+        `${String(startHour + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 === 0 ? '00' : '30'}`,
+      );
     const alertRows = await db
       .insert(weatherAlerts)
       .values(
-        ['08:00', '10:00', '14:00', '16:00'].map((hm) => ({
+        [...halfHourSlots(7, 12), ...halfHourSlots(13, 17)].map((hm) => ({
           tenantId,
           projectSiteId: siteId,
           severity: 'none',

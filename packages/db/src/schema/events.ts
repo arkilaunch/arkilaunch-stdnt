@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { tenantIsolationPolicy } from '../rls.js';
 import { tenants } from './tenancy.js';
 
@@ -19,5 +19,8 @@ export const events = pgTable(
     index('events_used_despite_warning_rental_idx')
       .on(table.tenantId, sql`(${table.properties} ->> 'rental_id')`)
       .where(sql`${table.name} = 'equipment_used_despite_warning'`),
+    uniqueIndex('events_edtr_weather_history_unique_idx')
+      .on(table.tenantId, sql`(${table.properties} ->> 'edtr_id')`)
+      .where(sql`${table.name} = 'edtr_weather_history'`),
   ],
 );

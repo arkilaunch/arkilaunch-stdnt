@@ -48,6 +48,16 @@ variable "enable_weather_poll" {
   default = false
 }
 
+variable "enable_weather_history" {
+  type    = bool
+  default = false
+}
+
+variable "enable_weather_retention" {
+  type    = bool
+  default = false
+}
+
 variable "enable_diesel_scrape" {
   type    = bool
   default = false

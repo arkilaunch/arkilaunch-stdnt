@@ -8,5 +8,7 @@ supabase_url       = "https://<prod-project-ref>.supabase.co" # fill in against 
 enable_ocr_pipeline  = false
 enable_ocr_kyc       = false
 enable_weather_poll  = false
+enable_weather_history = false
+enable_weather_retention = false
 enable_diesel_scrape = true
 enable_payments      = false

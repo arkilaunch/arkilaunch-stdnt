@@ -309,6 +309,28 @@ export const EdtrDetailResponseSchema = z.object({
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
 
+const WeatherEvidenceHalfSchema = z.object({
+  window: z.tuple([z.number(), z.number()]),
+  usedDefaultHours: z.boolean(),
+  expected: z.number().int(),
+  recorded: z.number().int(),
+  sufficient: z.boolean(),
+});
+
+export const EdtrWeatherEvidenceSchema = z.object({
+  reportDate: z.string().nullable(),
+  am: WeatherEvidenceHalfSchema,
+  pm: WeatherEvidenceHalfSchema,
+  historicalAvailable: z.boolean(),
+  historical: z.object({
+    source: z.literal('Open-Meteo Historical Weather API'),
+    model: z.literal('best_match'),
+    fetchedAt: z.string(),
+    readings: z.array(z.object({ time: z.string(), precipMm: z.number(), windKph: z.number(), code: z.number() })),
+  }).nullable(),
+});
+export type EdtrWeatherEvidence = z.infer<typeof EdtrWeatherEvidenceSchema>;
+
 // Downtime causes are null when not recorded (pre-v3 rows), which is NOT zero.
 export interface DayHours {
   running: number;

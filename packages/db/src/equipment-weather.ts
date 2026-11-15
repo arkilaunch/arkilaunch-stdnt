@@ -18,6 +18,7 @@ import {
   type WeatherLevel,
   type WeatherObservation,
   workedInReportedWeather,
+  weatherCoverage,
 } from '@arkilaunch/shared';
 import { customers } from './schema/customers.js';
 import { equipment, equipmentTypes } from './schema/fleet.js';
@@ -189,7 +190,7 @@ async function logUsedDespiteWarning(
   return true;
 }
 
-// Returns the halves the machine worked while a stop_work warning was up, once per EDTR.
+// Returns the halves with a recorded stop-work level during work, once per EDTR.
 export async function flagUsedDespiteWarning(
   ex: Executor,
   tenantId: string,
@@ -199,38 +200,36 @@ export async function flagUsedDespiteWarning(
   const ctx = await edtrIncidentContext(ex, tenantId, edtrId);
   if (!ctx || ctx.hoursActive <= 0) return [];
 
-  const { from, to } = manilaDay(ctx.reportDate);
-  const warnings = await ex
-    .select()
-    .from(events)
-    .where(
-      and(
-        eq(events.tenantId, tenantId),
-        eq(events.name, 'equipment_weather_warning'),
-        sql`${events.properties} ->> 'equipment_id' = ${ctx.equipmentId}`,
-        sql`${events.properties} ->> 'level' = 'stop_work'`,
-        gte(events.occurredAt, from),
-        lt(events.occurredAt, to),
-      ),
-    )
-    .orderBy(events.occurredAt)
-    .limit(1);
-  const first = warnings[0];
-  if (!first) return [];
-  // ponytail: a stop_work counts as up from its event to end of day; the poller logs rises, not clears. Log clears if half-day false positives show up.
-  const warnedMinute = Math.floor((first.occurredAt.getTime() - from.getTime()) / 60_000);
+  const site = await siteReadingsOn(ex, tenantId, ctx.rentalId, ctx.reportDate);
+  if (!site) return [];
   const worked: [WorkHalf, [number, number]][] = [
     ['am', windows.am ?? DEFAULT_AM_WINDOW],
     ['pm', windows.pm ?? DEFAULT_PM_WINDOW],
   ];
-  const halves = worked.filter(([, [, end]]) => warnedMinute < end).map(([half]) => half);
+  const machineReadings = site.readings.filter((reading) =>
+    ((reading.observed as WeatherObservation & { equipment?: EquipmentWeather[] }).equipment ?? [])
+      .some((machine) => machine.equipmentId === ctx.equipmentId),
+  );
+  const warned = machineReadings.filter((reading) => {
+    const machines = (reading.observed as WeatherObservation & { equipment?: EquipmentWeather[] }).equipment ?? [];
+    return machines.some((machine) => machine.equipmentId === ctx.equipmentId && machine.level === 'stop_work');
+  });
+  const halves = worked
+    .filter(([, window]) => weatherCoverage(machineReadings, window).sufficient && warned.some((reading) => reading.minute >= window[0] && reading.minute < window[1]))
+    .map(([half]) => half);
   if (halves.length === 0) return [];
 
-  const properties = first.properties as { reasons?: string[] };
+  const first = warned.find((reading) => halves.some((half) => {
+    const window = half === 'am' ? worked[0]![1] : worked[1]![1];
+    return reading.minute >= window[0] && reading.minute < window[1];
+  }))!;
+  const machine = ((first.observed as WeatherObservation & { equipment?: EquipmentWeather[] }).equipment ?? [])
+    .find((item) => item.equipmentId === ctx.equipmentId);
+  const { from } = manilaDay(ctx.reportDate);
   const logged = await logUsedDespiteWarning(ex, tenantId, edtrId, ctx, 'system', {
     level: 'stop_work',
-    reasons: properties.reasons ?? [],
-    warned_at: first.occurredAt.toISOString(),
+    reasons: machine?.reasons ?? [],
+    warned_at: new Date(from.getTime() + first.minute * 60_000).toISOString(),
     half: halves.length === 2 ? 'day' : halves[0]!,
     halves,
   });

@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **BRD:** [brd-arkilaunch.md](brd-arkilaunch.md)
 
 ---
@@ -107,6 +107,8 @@ Acceptance Criteria:
 Acceptance Criteria:
 - Given a project site with lat/long, when the cron scheduler polls Open-Meteo and a risk threshold is crossed, then the system SHALL raise a site advisory and MUST auto-log an environmental liability incident with the observed conditions and a timestamp.
 - Given Open-Meteo is unavailable, when a scheduled poll runs, then the system SHALL serve the last cached reading, SHALL mark the advisory as stale, and MUST NOT drop the polling cycle silently (it SHALL retry and alert).
+
+**Weather-evidence addendum (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** Field-log comparisons identify insufficient saved-reading coverage instead of calling an unobserved day clear. A reviewer may request labelled modelled historical weather for a gap in development; it is supporting evidence only. Detailed readings have a 24-month retention target, while incident evidence remains. Client polling and historical lookup remain disabled on the free plan.
 
 **US-06; OCR-assisted KYC with human-in-the-loop verification (PRD-F6, Must-Have)**
 > As the Platform Admin, I want SEC number and TIN extracted from corporate documents and confirmed against government portals, so that only verified rental firms reach production.

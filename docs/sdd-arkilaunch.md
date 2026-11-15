@@ -7,7 +7,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
@@ -514,6 +514,8 @@ erDiagram
 | `GET` | `/api/v1/incidents` | Liability incident log, read from `events` (no new table) | PRD-F5 |
 | `GET` | `/api/v1/incidents/companies` | Used-despite-warning incidents per renting company, dismissed left out (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `PATCH` | `/api/v1/incidents/:id` | Review status `open/acknowledged/dismissed` + note (a dismissal needs one), audit-logged; never money (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
+| `GET` | `/api/v1/edtr/:id/weather-evidence` | Saved-reading coverage per AM/PM work window, plus any labelled historical snapshot; same tenant/site access as field-log detail | PRD-F5 |
+| `POST` | `/api/v1/edtr/:id/weather-evidence/historical` | Approver-only, rate-limited, development-only historical reanalysis fetch when coverage is insufficient; cached in a tenant event, never money | PRD-F5 |
 | `GET` | `/api/v1/notifications`, `PATCH /api/v1/notifications/:id/read` | The caller's own notifications feed (`cr-arkilaunch-f9-read-surface.md`) | cross-cutting |
 | `GET` | `/api/v1/bookings/returns-due` | Machines due back within the tenant's widest reminder point, overdue first (`cr-arkilaunch-return-reminders.md`) | PRD-F8 |
 | `GET`/`PUT` | `/api/v1/bookings/return-reminders` | Tenant return reminder points (7/5/3/2/1 days) and overdue switch; `PUT` needs `tenant:manage` | PRD-F8 |
@@ -635,6 +637,8 @@ Response 200:
 }
 ```
 The `POST /internal/jobs/weather-poll` cron writes `weather_alerts` and auto-logs a liability incident when a risk threshold is crossed. Open-Meteo down returns the cached last-known Luzon reading with `is_stale: true`; the cycle retries and alerts rather than dropping silently (US-05). **Addendum (2026-08-20, `cr-arkilaunch-open-meteo-free-tier.md`):** the real `OpenMeteoAdapter` itself does not retry within a cycle -- the next 30-minute cycle is the retry (`jobs/src/weather-poll.ts` is the direct entrypoint, per the prior `cr-arkilaunch-f4-f5-fleet-weather.md` addendum on this endpoint's shape). Runs against the FREE Open-Meteo tier, not the commercial plan; see the CR for the accepted licensing exposure.
+
+**Evidence and retention addendum (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** D1/D2 and system stop-work matching require near-complete saved 30-minute readings during the reported work window; missing coverage is neither a mismatch nor an all-clear. Historical reanalysis is opt-in, labelled and never drives an automatic finding. `weather_alerts` rows older than 24 months are eligible for tenant-batched cleanup only when the retention flag is enabled; incident events stay. Production weather and history flags remain off while the free plan is used before client deployment.
 
 ### `POST /api/v1/bookings` · PRD-F8
 
