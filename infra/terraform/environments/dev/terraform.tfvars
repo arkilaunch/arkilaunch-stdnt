@@ -1,6 +1,6 @@
 # Non-secret config only; secrets come via TF_VAR_* in CI.
 
-location           = "southeastasia"
+location           = "japaneast"
 # Exact origin, no trailing slash: enableCors compares strings; a mismatch shows as "incorrect email or password".
 web_origin         = "https://arkilaunch.app"
 supabase_url       = "https://ydalnvzyeseycdakofgp.supabase.co"
