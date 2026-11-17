@@ -13,4 +13,4 @@ enable_weather_poll  = true
 enable_weather_history = true # development review only; historical data is modelled
 enable_diesel_scrape = true
 enable_payments      = true
-enable_turnstile     = true
+enable_turnstile     = false # TEMP: Turnstile secret unavailable after the Azure move; set true once TURNSTILE_SECRET_KEY is in the dev env
