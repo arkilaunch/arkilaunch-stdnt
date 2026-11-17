@@ -4,7 +4,7 @@
 **Project:** ArkiLaunch
 **Date:** 2026-11-17
 **Version:** 0.1
-**Status:** Applied to Azure for Students (dev). Frontend redeploy and prod are outstanding
+**Status:** Applied to Azure for Students (dev), deployed from the org repo with the web worker redeployed. Prod is outstanding
 **Trigger:** The Visual Studio Enterprise subscription became inaccessible.
 **Docs touched by this record:** [index.md](index.md) §2
 
@@ -47,15 +47,28 @@ Findings that changed the plan:
 - **Turnstile is off in dev** (`enable_turnstile = false`) because the secret could not be recovered. Re-enable it once the secret is available. Until then the API does not verify Turnstile tokens.
 - **Payments secrets.** The API refuses to boot with `ENABLE_PAYMENTS=true` and no PayMongo secrets. They were supplied from the local environment as test-mode keys.
 
+## Applied 2026-11-17 (GitHub org move)
+
+Actions on `r0undy/arkilaunch` is billing-locked, so CI/CD moves to the public repo `arkilaunch/arkilaunch-stdnt` in the `arkilaunch` org (Free plan).
+
+- **History is kept.** The org repo's `main` is the personal repo's `main` at `a03c78e`, with all commits. Feature branches were not moved.
+- **OIDC.** Federated credentials `arkilaunch-stdnt-github-{dev,prod}` were added to `id-arkilaunch-github-deploy` with `az identity federated-credential create`. Subject: `repo:arkilaunch@357659016/arkilaunch-stdnt@1461121871:environment:<env>`, from `gh api repos/arkilaunch/arkilaunch-stdnt/actions/oidc/customization/sub`. The old repo's two credentials stay. The bootstrap Terraform state is local and not in this checkout, so these two credentials are **drift from `infra/terraform/bootstrap`**. Import them, or add a second subject prefix, before the next bootstrap apply.
+- **GitHub environments.**
+  - `dev` carries the Azure/state variables, `VITE_API_BASE_URL`, `VITE_TURNSTILE_SITE_KEY` and `CLOUDFLARE_ACCOUNT_ID`, plus the 11 `deploy.yml` secrets.
+  - `prod` carries only the Azure/state variables.
+- **Deploy.** A push to `dev` builds and pushes the image, migrates, applies dev Terraform, and redeploys the `arkilaunch-web` worker against the Japan East API.
+
 ## Still open
 
-- The web worker still needs a redeploy against the new API address. The GitHub variable is updated, but Actions is billing-locked.
+- **Two repos can deploy.** The old repo's credentials still trust `r0undy/arkilaunch` by owner decision. If its Actions unlocks, the two repos can overwrite each other's image tags.
+- **PayMongo webhook** still points at the old `southeastasia` FQDN, so payment confirmations do not arrive. Fix it by re-registering at `…japaneast.azurecontainerapps.io/api/v1/webhooks/paymongo` and updating `PAYMONGO_WEBHOOK_SECRET`.
+- **VAPID.** `deploy.yml` does not pass `TF_VAR_vapid_private_key`, so push notifications stay off.
 - Prod is not provisioned.
 
 ## Not claimed
 
 - No end-to-end user flow was exercised. Only health, CORS and Document Intelligence were probed.
-- GitHub Actions is billing-locked (`startup_failure`), so the first deploy is manual. CI is unchanged.
+- The first deploy was manual because GitHub Actions on the personal repo is billing-locked (`startup_failure`). Later deploys run from the org repo. CI is unchanged.
 - Secrets were not rotated, by owner decision: access was lost, not known to be breached.
 - AIA-R7 (cross-border processing) is unchanged. If the region changes, it needs revisiting.
 - Prod remains unprovisioned.
