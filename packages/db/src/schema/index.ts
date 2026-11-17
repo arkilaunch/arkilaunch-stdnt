@@ -9,3 +9,5 @@ export * from './events.js';
 export * from './testimonials.js';
 export * from './trucks.js';
 export * from './support.js';
+
+export * from './rental-qa.js';

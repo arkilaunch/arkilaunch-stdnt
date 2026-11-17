@@ -1,11 +1,13 @@
 # System Design Document (SDD)
 
+> **Admin operations amendment (2026-11-11):** [Change Record](cr-arkilaunch-admin-operations-clarity.md) adds `expired` booking/truck statuses and `bucket=active|history` list filters. Tenant-scoped reads materialize elapsed unpaid bookings, void unpaid payment intents and release scheduled rental assignments; checkout refuses elapsed windows and payment settlement cannot reopen expired records. Staff invoice rows include billed company, booking actor from the rental CREATE audit or truck requester, and site or dropoff location. Migration 0094 expands the truck status CHECK constraint; rental status is unconstrained text.
+
 **Project:** ArkiLaunch (Web-Based Construction Equipment Rental Management System)
 **Date:** 2026-07-25
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-saas-landing); previous: 2026-09-29 (CR: qa-truck-routing, §3/§4 truck route and dispatch); §3's `delta_hours` definition and §4's 409 body corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; frontend prerender amendment recorded via Change Record `docs/cr-arkilaunch-frontend-storefront-shell.md`; §2/§4/§5/§6/§7 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **Event / context:** FMD engine v1.28.1; Scale Full.
 
@@ -83,7 +85,7 @@ graph TD
 | Client | React 19.2 + Vite 8, TanStack Router v1 + Query v5, Tailwind, Zod, native fetch | Role-aware SPA (admin/owner/timekeeper/customer/platform); client-side image compression and resumable upload queue; printable quote output; never sees another tenant's data. Serves PRD-F1, F2, F3, F4, F5, F6, F7, F8 screens. |
 | Edge / Gateway | Cloudflare (WAF, L3/L4/L7 DDoS, DNS), Cloudflare Workers static assets for frontend delivery | TLS 1.3 termination at the edge, WAF rules, DDoS absorption, bot mitigation on the public booking portal (`/t/:tenantSlug`). **Addendum (2026-09-27, `cr-arkilaunch-turnstile.md`):** the API is not behind Cloudflare (it stays on the ACA ingress FQDN), so the WAF covers the frontend only; bot mitigation for the API is Cloudflare Turnstile verified server-side on signup, company registration, forgot-password, and login after repeated failures. |
 | API | NestJS 11.1 on Node 24 LTS (Azure Container Apps, persistent) | REST API, Passport-JWT identity authority, RBAC guard, per-request tenant transaction that sets the RLS GUC, PayMongo session creation and webhook verification, Azure DI extraction dispatch. Serves every PRD-F#. |
-| Service / Compute | ACA Jobs (cron) on Node 24 | Weather poll per active site (PRD-F5), PM-threshold notifications (PRD-F4), diesel-price refresh (PRD-F1), async OCR + reconciliation workers (PRD-F3). Guards overlapping runs via replica/parallelism limit or an advisory lock. |
+| Service / Compute | ACA Jobs (cron) on Node 24 | Weather poll per active site (PRD-F5), PM-threshold notifications (PRD-F4), diesel-price refresh (PRD-F1), async OCR + reconciliation workers (PRD-F3), daily return reminders (PRD-F8, `cr-arkilaunch-return-reminders.md`). Guards overlapping runs via replica/parallelism limit or an advisory lock. |
 | Data | Supabase managed PostgreSQL + Supabase Storage; Drizzle ORM | Multi-tenant relational store with RLS by `tenant_id`; Storage holds EDTR and KYC image blobs behind short-TTL signed URLs. Not used as the session-auth authority. |
 | Infrastructure | Cloudflare Workers (frontend), Azure Container Apps (API + Jobs), Supabase (DB + Storage), Cloudflare (edge); external Azure DI, PayMongo, Open-Meteo, diesel source | Hosting, private DB networking, static egress IPs, secrets in env, CI/CD from `dev`/`staging`/`main`. Detailed in §6. |
 
@@ -512,7 +514,11 @@ erDiagram
 | `GET` | `/api/v1/incidents` | Liability incident log, read from `events` (no new table) | PRD-F5 |
 | `GET` | `/api/v1/incidents/companies` | Used-despite-warning incidents per renting company, dismissed left out (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
 | `PATCH` | `/api/v1/incidents/:id` | Review status `open/acknowledged/dismissed` + note (a dismissal needs one), audit-logged; never money (`cr-arkilaunch-edtr-weather-incidents.md`) | PRD-F5 |
+| `GET` | `/api/v1/edtr/:id/weather-evidence` | Saved-reading coverage per AM/PM work window, plus any labelled historical snapshot; same tenant/site access as field-log detail | PRD-F5 |
+| `POST` | `/api/v1/edtr/:id/weather-evidence/historical` | Approver-only, rate-limited, development-only historical reanalysis fetch when coverage is insufficient; cached in a tenant event, never money | PRD-F5 |
 | `GET` | `/api/v1/notifications`, `PATCH /api/v1/notifications/:id/read` | The caller's own notifications feed (`cr-arkilaunch-f9-read-surface.md`) | cross-cutting |
+| `GET` | `/api/v1/bookings/returns-due` | Machines due back within the tenant's widest reminder point, overdue first (`cr-arkilaunch-return-reminders.md`) | PRD-F8 |
+| `GET`/`PUT` | `/api/v1/bookings/return-reminders` | Tenant return reminder points (7/5/3/2/1 days) and overdue switch; `PUT` needs `tenant:manage` | PRD-F8 |
 | `GET` | `/api/v1/reports/financial` | Invoiced/paid/deducted totals by period (QAD-T8's financial half) | PRD-F4 |
 
 ### Must-Have endpoint contracts
@@ -631,6 +637,8 @@ Response 200:
 }
 ```
 The `POST /internal/jobs/weather-poll` cron writes `weather_alerts` and auto-logs a liability incident when a risk threshold is crossed. Open-Meteo down returns the cached last-known Luzon reading with `is_stale: true`; the cycle retries and alerts rather than dropping silently (US-05). **Addendum (2026-08-20, `cr-arkilaunch-open-meteo-free-tier.md`):** the real `OpenMeteoAdapter` itself does not retry within a cycle -- the next 30-minute cycle is the retry (`jobs/src/weather-poll.ts` is the direct entrypoint, per the prior `cr-arkilaunch-f4-f5-fleet-weather.md` addendum on this endpoint's shape). Runs against the FREE Open-Meteo tier, not the commercial plan; see the CR for the accepted licensing exposure.
+
+**Evidence and retention addendum (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** D1/D2 and system stop-work matching require near-complete saved 30-minute readings during the reported work window; missing coverage is neither a mismatch nor an all-clear. Historical reanalysis is opt-in, labelled and never drives an automatic finding. `weather_alerts` rows older than 24 months are eligible for tenant-batched cleanup only when the retention flag is enabled; incident events stay. Production weather and history flags remain off while the free plan is used before client deployment.
 
 ### `POST /api/v1/bookings` · PRD-F8
 
@@ -987,3 +995,24 @@ Azure DI is an OCR/IDP service rather than a generative LLM, so the OWASP-LLM ca
 - [x] This document answers *how* to build, not *what* (that is the PRD)
 - [x] Cross-linked to idea/prd/scrutiny; forward-linked to RFC-1/2/3; traced to PRD-F1..F8
 - [x] AGENTS hard bans applied (no em-dashes anywhere, including Mermaid labels)
+
+
+## Machine and weekly billing implementation amendment (2026-11-15)
+
+See [CR](cr-arkilaunch-machine-week-billing.md). Migration 0096 adds `rentals.deposit_mode DEFAULT 'shared'`, per-machine frozen caps in `rental_equipment_deposits`, immutable closed snapshots in `rental_billing_weeks`, `invoice_line_items.equipment_id`, and `invoices.billing_week_start`. The two new tables have tenant policies and forced RLS; triggers check tenant references and prevent closed-week snapshot edits. Existing rentals retain the shared ledger. New rental deposits use each quote item's estimated hours and rate, with the tenant minimum per machine when percentage is zero.
+
+EDTR approval locks the rental and the machine cap, checks a paid deposit line for that equipment ID and rejects unfunded or refunded credit. The split writes a machine-linked deduction line and a machine-linked accrual. Week closure uses the rental ID and stored project-site ID, checks all assigned machine-days after Sunday, saves a company/site/usage snapshot, and issues one net weekly invoice. The Monday job only processes closed weeks. Late EDTR approval on a closed week requires a correction reason and creates a separately labeled payable correction without editing the original snapshot.
+
+Invoice detail and PDF read the saved closed-week header, machine labels, serials, rates and gross/deposit/net figures. SOA groups approved charges by equipment and week while leaving the legacy shared deposit untouched. The tenant admin cleanup endpoint `POST /invoices/legacy-extension-cleanup` expires and checks pending payment sessions before voiding only issued historical extension fees; paid fees remain. Booking checkout coupons are rejected because the upfront invoice has no rental usage line, and staff adjustment cannot cross the deposit floor.
+
+## Rental QA implementation amendment (2026-10-20)
+
+See [approved CR](cr-arkilaunch-rental-qa-documents.md). Migration 0093 adds nullable `equipment_assignments.return_condition`, tenant-owned `storefront_promotions` and `damage_assessments`. Both new tables have forced RLS and the canonical tenant policy. Damage assessment records link the booking, returned assignment, signed agreement, staff evidence, amount and Owner decision; approval and invoice creation are atomic and serialized. Servicing categories cannot become damage candidates; legacy repair flags remain readable. No deposit movement is introduced.
+
+- `POST /bookings/:id/deliver`: optional unique `assignmentIds`; omitted selects all due scheduled assignments. Active bookings may deploy remaining units. Date/availability/ownership checks execute within the locked tenant transaction.
+- Existing return APIs accept an optional condition category alongside retained notes/legacy repair flags. Whole-booking return accepts `cancelScheduled` with a required reason to explicitly close undeployed assignments.
+- `GET/POST /bookings/:id/damage-assessments` requires fleet management; `PATCH .../:assessmentId` additionally enforces Owner identity. Create requires the exact stored contract clause and recorded customer agreement. Approval creates one issued damage invoice, due in seven days; rejection creates none.
+- `GET/PATCH /tenants/me/promotions` requires tenant management. `GET /catalog/promotions` exposes only enabled promotional values through an active-slug SECURITY DEFINER lookup; tenant identifiers never come from write input.
+- Staff/customer invoice and receipt downloads use `[/me]/invoices/:id/pdf` and `[/me]/invoices/:id/receipt/pdf`. Signed agreements use `[/me]/rentals/:id/agreement/pdf`. Downloads retain the existing base64 response envelope and enforce tenant/customer ownership. Receipt output requires successful payment records; agreement output uses immutable stored signing evidence.
+
+The shared pdf-lib renderer measures text, wraps long tokens, repeats table headers, reserves footer space and groups signature blocks. Inter/IBM Plex static font assets are embedded with licenses and copied into the API build. Each render receives its own tenant branding; no cross-tenant branding cache exists. Existing EDTR scanner geometry and all calculations remain unchanged. Additive schema rollout precedes API deployment; rollback leaves the expanded schema intact.

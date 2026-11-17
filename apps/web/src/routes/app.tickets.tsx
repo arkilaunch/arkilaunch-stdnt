@@ -33,9 +33,11 @@ function TicketModal({ ticket, edit, close }: { ticket: TicketResponse; edit: bo
   function save(event: FormEvent) { event.preventDefault(); if (patch.isPending) return; patch.mutate(TicketPatchSchema.parse({ status, priority, assignedTo: assignedTo || null })); }
   return <Modal open onClose={close} title={`${edit ? 'Edit' : 'View'} #${ticket.code}`} closeDisabled={patch.isPending}>
     <div className="flex min-w-0 flex-col gap-4">
-      <p className="break-words font-semibold">{ticket.subject}</p>
-      <p className="text-sm text-text-muted">{TICKET_CATEGORY_LABELS[ticket.category]} · {formatDate(ticket.createdAt)}</p>
-      <p className="whitespace-pre-wrap break-words text-base">{ticket.message}</p>
+      <div className="min-w-0 rounded-md border border-border p-4">
+        <p className="break-words font-semibold">{ticket.subject}</p>
+        <p className="mt-1 text-sm text-text-muted">{TICKET_CATEGORY_LABELS[ticket.category]} · {formatDate(ticket.createdAt)}</p>
+        <p className="mt-3 whitespace-pre-wrap break-words text-base [overflow-wrap:anywhere]">{ticket.message}</p>
+      </div>
       {ticket.bookingId && <p className="break-all text-sm">Booking: {ticket.bookingId}</p>}
       {edit ? <form className="flex flex-col gap-4" onSubmit={save}>
         <Select label="Status" value={status} onChange={(event) => setStatus(event.target.value as TicketResponse['status'])}>{TICKET_STATUSES.map((value) => <option key={value} value={value}>{formatStatus(value)}</option>)}</Select>
@@ -45,7 +47,7 @@ function TicketModal({ ticket, edit, close }: { ticket: TicketResponse; edit: bo
         </Select>
         {agents.isError && <p role="alert">{apiErrorText(agents.error)} <Button type="button" onClick={() => void agents.refetch()}>Retry agents</Button></p>}
         {patch.isError && <p role="alert" className="text-error">{apiErrorText(patch.error)}</p>}
-        <Button variant="primary" type="submit" loading={patch.isPending} disabled={patch.isPending || agents.isError || agents.isPending}>Save changes</Button>
+        <div className="flex justify-end"><Button variant="primary" type="submit" loading={patch.isPending} disabled={patch.isPending || agents.isError || agents.isPending}>Save changes</Button></div>
       </form> : <p>{formatStatus(ticket.status)} · {formatStatus(ticket.priority)} priority · {ticket.agentName ?? 'Unassigned'}</p>}
     </div>
   </Modal>;
@@ -61,14 +63,14 @@ export function TicketsPage() {
   const resolve = useMutation({ mutationFn: (id: string) => apiPatch(`/tickets/${id}`, { status: 'resolved' }), onSuccess: () => void client.invalidateQueries({ queryKey: ['support'] }) });
   const columns: TableColumn<TicketResponse>[] = [
     { header: 'Ticket ID', kind: 'text', cell: (ticket) => `#${ticket.code}` },
-    { header: 'Issue type / Inquiry', kind: 'text', cell: (ticket) => <div className="break-words"><p className="font-semibold">{ticket.subject}</p><p className="text-sm text-text-muted">{TICKET_CATEGORY_LABELS[ticket.category]}</p></div> },
+    { header: 'Issue type / Inquiry', kind: 'text', cell: (ticket) => <div className="min-w-0 max-w-sm break-words [overflow-wrap:anywhere]"><p className="font-semibold">{ticket.subject}</p><p className="text-sm text-text-muted">{TICKET_CATEGORY_LABELS[ticket.category]}</p></div> },
     { header: 'Priority', kind: 'text', cell: (ticket) => <span className={`rounded-xs px-2 py-1 text-sm ${ticket.priority === 'high' ? 'bg-error/10 text-error' : ticket.priority === 'medium' ? 'bg-warning/10 text-text' : 'bg-surface-sunk text-text'}`}>{formatStatus(ticket.priority)}</span> },
-    { header: 'Status', kind: 'status', cell: (ticket) => <div><span>{formatStatus(ticket.status)}</span><progress aria-label={`Progress for ${ticket.code}`} max={100} value={ticket.status === 'open' ? 0 : ticket.status === 'in_progress' ? 50 : 100} className="mt-1 block h-2 w-24 max-w-full accent-[var(--color-primary)]" /></div> },
+    { header: 'Status', kind: 'status', cell: (ticket) => <div className="flex flex-col items-center gap-1"><span>{formatStatus(ticket.status)}</span><progress aria-label={`Progress for ${ticket.code}`} max={100} value={ticket.status === 'open' ? 0 : ticket.status === 'in_progress' ? 50 : 100} className="block h-2 w-24 max-w-full accent-[var(--color-primary)]" /></div> },
     { header: 'Support agent', kind: 'text', cell: (ticket) => <span className="break-all">{ticket.agentName ?? 'Unassigned'}</span> },
-    { header: 'Actions', kind: 'action', cell: (ticket) => <div className="flex flex-wrap gap-2">
-      <Button onClick={() => setSelected({ ticket, edit: false })}>View</Button>
-      <Button onClick={() => setSelected({ ticket, edit: true })}>Edit</Button>
-      <Button disabled={resolve.isPending || ticket.status === 'resolved'} onClick={() => resolve.mutate(ticket.id)}>Resolve</Button>
+    { header: 'Actions', kind: 'action', cell: (ticket) => <div className="flex flex-wrap items-center justify-center gap-2">
+      <Button variant="secondary" className="px-3" onClick={() => setSelected({ ticket, edit: false })}>View</Button>
+      <Button variant="secondary" className="px-3" onClick={() => setSelected({ ticket, edit: true })}>Edit</Button>
+      <Button variant="primary" className="px-3" disabled={resolve.isPending || ticket.status === 'resolved'} onClick={() => resolve.mutate(ticket.id)}>Resolve</Button>
     </div> },
   ];
   const total = tickets.data?.total ?? 0;
@@ -80,7 +82,7 @@ export function TicketsPage() {
     </div>
     {tickets.isError && <p role="alert">{apiErrorText(tickets.error)} <Button onClick={() => void tickets.refetch()}>Retry</Button></p>}
     {resolve.isError && <p role="alert" className="text-error">{apiErrorText(resolve.error)}</p>}
-    <Table columns={columns} rows={tickets.data?.items ?? []} rowKey={(ticket) => ticket.id} loading={tickets.isPending} empty="No tickets match your search." footer={<div className="flex flex-wrap items-center justify-between gap-3">
+    <Table cardUntil={1199} columns={columns} rows={tickets.data?.items ?? []} rowKey={(ticket) => ticket.id} loading={tickets.isPending} empty="No tickets match your search." footer={<div className="flex flex-wrap items-center justify-between gap-3">
       <p>Showing {total ? offset + 1 : 0}-{Math.min(offset + limit, total)} of {total} tickets</p>
       <div className="flex gap-2"><Button disabled={offset === 0 || tickets.isFetching} onClick={() => setOffset(Math.max(0, offset - limit))}>Previous</Button><Button disabled={offset + limit >= total || tickets.isFetching} onClick={() => setOffset(offset + limit)}>Next</Button></div>
     </div>} />

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { notificationsQueries } from '../lib/queries.js';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isWeatherNotice, weatherNoticeText, type NotificationResponse, type WeatherAudience, type WeatherNoticeType } from '@arkilaunch/shared';
+import { isWeatherNotice, returnDueLabel, weatherNoticeText, type NotificationResponse, type WeatherAudience, type WeatherNoticeType } from '@arkilaunch/shared';
 import { apiPatch } from '../lib/api-client.js';
 import { getCurrentRole } from '../lib/guards.js';
 import { Surface } from './surface.js';
@@ -27,6 +27,15 @@ function payloadLines(payload: unknown): string[] {
       return `${label}: ${String(value)}`;
     });
 }
+
+// "CAT 320 · SN 1 and 1 more" from a return reminder's machine list.
+function reminderMachines(p: Record<string, unknown>): string {
+  const machines = Array.isArray(p.machines) ? (p.machines as { label?: unknown }[]) : [];
+  const first = typeof machines[0]?.label === 'string' ? machines[0].label : 'A machine';
+  return machines.length > 1 ? `${first} and ${machines.length - 1} more` : first;
+}
+
+const reminderWhen = (p: Record<string, unknown>) => returnDueLabel(typeof p.days_left === 'number' ? p.days_left : 0);
 
 interface Described {
   title: string;
@@ -82,6 +91,12 @@ function describeForStaff(type: string, p: Record<string, unknown>): Described |
   const ref = typeof p.booking_code === 'string' ? p.booking_code : 'a booking';
   const trip = typeof p.truck_request_id === 'string';
   switch (type) {
+    case 'equipment_needs_repair':
+      return {
+        title: 'Equipment sent for repair',
+        body: 'Returned equipment was marked unavailable for repair. Check its condition notes in the booking.',
+        action: staffBooking(p),
+      };
     case 'support_ticket_created':
       return { title: 'New support ticket', body: `Ticket #${String(p.ticket_code ?? '')} was submitted.`, action: { label: 'Open tickets', to: '/app/tickets', params: {} } };
     case 'booking_requested':
@@ -198,6 +213,14 @@ function describeForStaff(type: string, p: Record<string, unknown>): Described |
           params: {},
           ...(typeof p.serial_no === 'string' ? { search: { q: p.serial_no } } : {}),
         },
+      };
+    case 'return_reminder':
+      return { title: 'Return coming up', body: `${reminderMachines(p)} on ${ref} is ${reminderWhen(p)}.`, action: staffBooking(p) };
+    case 'return_overdue':
+      return {
+        title: 'Return overdue',
+        body: `${reminderMachines(p)} on ${ref} is past its return date and not yet returned.`,
+        action: staffBooking(p),
       };
     case 'hold_expired':
       return {
@@ -435,10 +458,24 @@ export function describeNotification(type: string, payload: unknown, area: FeedA
         body: `Booking ${ref} is confirmed. You can pay for it now.`,
         action: { label: 'Pay now', to: '/account/checkout/$bookingId', params: { bookingId: rentalId } },
       };
+    case 'damage_charge_approved':
+      return {title:'Damage assessment approved',body:'The rental company approved a documented damage charge. Review the invoice or contact the rental team.',action:typeof p.invoice_id==='string'?{label:'View invoice',to:'/account/invoices/$invoiceId',params:{invoiceId:p.invoice_id}}:{label:'View booking',...toBooking}};
     case 'booking_cancelled':
       return {
         title: 'Booking cancelled',
         body: `The rental team cancelled booking ${ref}. Any refund due is handled by the billing team.`,
+        action: { label: 'View booking', ...toBooking },
+      };
+    case 'return_reminder':
+      return {
+        title: 'Return reminder',
+        body: `${reminderMachines(p)} on booking ${ref} is ${reminderWhen(p)}. Need it longer? Request an extension before then.`,
+        action: { label: 'View booking', ...toBooking },
+      };
+    case 'return_overdue':
+      return {
+        title: 'Return overdue',
+        body: `${reminderMachines(p)} on booking ${ref} is past its return date. Please return it or request an extension.`,
         action: { label: 'View booking', ...toBooking },
       };
     case 'hold_expired':
@@ -488,9 +525,9 @@ export function describeNotification(type: string, payload: unknown, area: FeedA
 export type NotificationTone = 'success' | 'danger' | 'warning' | 'neutral';
 
 function toneOf(type: string): NotificationTone {
-  if (/(failed|rejected|mismatch|disputed|cancelled|declined)$/.test(type)) return 'danger';
+  if (/(failed|rejected|mismatch|disputed|cancelled|declined|overdue)$/.test(type)) return 'danger';
   if (/(approved|verified|confirmed|accepted|delivered|paid|received)$/.test(type)) return 'success';
-  if (type === 'deposit_low' || type === 'edtr_needs_correction' || type.startsWith('maintenance_') || type.includes('weather'))
+  if (type === 'deposit_low' || type === 'edtr_needs_correction' || type === 'return_reminder' || type.startsWith('maintenance_') || type.includes('weather'))
     return 'warning';
   return 'neutral';
 }
@@ -503,7 +540,7 @@ function categoryOf(type: string): string {
   if (/^(customer_message|negotiation_reply|company_review_comment)$/.test(type)) return 'Message';
   if (type.startsWith('edtr_') || type === 'daily_log_approved') return 'Field log';
   if (/^(company_|document_)/.test(type)) return 'Verification';
-  if (/^(booking_|quote_|change_request_|call_|equipment_)/.test(type)) return 'Booking';
+  if (/^(booking_|quote_|change_request_|call_|equipment_|return_)/.test(type)) return 'Booking';
   return 'Update';
 }
 

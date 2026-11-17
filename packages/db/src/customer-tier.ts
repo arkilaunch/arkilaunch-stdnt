@@ -17,7 +17,7 @@ import type { Tx } from './with-tenant-tx.js';
 
 // Only invoices billed after the work can go overdue. Upfront booking/deposit invoices are
 // pay-to-confirm (due at once), and deposit deductions are drawn from the deposit.
-const OWED_TYPES = sql`('weekly', 'final')`;
+const OWED_TYPES = sql`('weekly', 'final', 'extension')`;
 
 export async function getTierPolicy(tx: Tx, tenantId: string): Promise<TierPolicy> {
   const [row] = await tx

@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
 import type {
-  CatalogRateListResponse,
   BookingDetailResponse,
   RentPart,
   RateBreakdown,
@@ -29,6 +28,7 @@ import type {
   InvoiceDetailResponse,
   InvoiceListResponse,
   EdtrDetailResponse,
+  EdtrWeatherEvidence,
   EdtrBillPreviewQuery,
   EdtrBillPreviewResponse,
   SiteHubResponse,
@@ -41,6 +41,9 @@ import type {
   AvailabilityResponse,
   EdtrSheetContext,
   EdtrSettings,
+  ReturnReminderSettings,
+  RentalTerms,
+  ReturnsDueResponse,
   FieldSheetListResponse,
   ScanTargetsResponse,
   EquipmentReportResponse,
@@ -125,13 +128,6 @@ export const catalogQueries = {
       queryKey: ['catalog', 'equipment', id] as const,
       queryFn: () => apiGet<CatalogEquipment>(`/catalog/equipment/${id}`),
     }),
-  // 403 kyc_required for anyone but a verified customer: callers gate it on useCatalogRates().
-  rates: () =>
-    queryOptions({
-      queryKey: ['catalog', 'rates'] as const,
-      queryFn: () => apiGet<CatalogRateListResponse>('/catalog/rates'),
-      retry: false,
-    }),
   testimonials: () =>
     queryOptions({
       queryKey: ['catalog', 'testimonials'] as const,
@@ -193,11 +189,11 @@ export const truckBanRulesQuery = {
 };
 
 export const trucksQueries = {
-  list: (limit: number, offset: number, q = '', status?: 'open' | 'closed') =>
+  list: (limit: number, offset: number, q = '', status?: 'open' | 'closed', bucket?: 'active' | 'history') =>
     queryOptions({
-      queryKey: ['truck-requests', limit, offset, q, status ?? 'all'] as const,
+      queryKey: ['truck-requests', limit, offset, q, status ?? 'all', bucket ?? 'all'] as const,
       queryFn: () =>
-        apiGet<TruckRequestListResponse>(withParams('/truck-requests', { limit, offset, q, status })),
+        apiGet<TruckRequestListResponse>(withParams('/truck-requests', { limit, offset, q, status, bucket })),
     }),
   route: (id: string) =>
     queryOptions({
@@ -257,6 +253,7 @@ export const incidentsQueries = {
 };
 
 export interface BookingListFilters {
+  bucket?: 'active' | 'history';
   status?: BookingStatus[];
   from?: string;
   to?: string;
@@ -264,6 +261,13 @@ export interface BookingListFilters {
 }
 
 export const bookingsQueries = {
+  // Under ['bookings'] so any booking change refreshes the countdowns.
+  returnsDue: () =>
+    queryOptions({ queryKey: ['bookings', 'returns-due'] as const, queryFn: () => apiGet<ReturnsDueResponse>('/bookings/returns-due') }),
+  returnReminders: () =>
+    queryOptions({ queryKey: ['return-reminders'] as const, queryFn: () => apiGet<ReturnReminderSettings>('/bookings/return-reminders') }),
+  rentalTerms: () =>
+    queryOptions({ queryKey: ['rental-terms'] as const, queryFn: () => apiGet<RentalTerms>('/bookings/rental-terms') }),
   edtrSheet: (bookingId: string) =>
     queryOptions({
       queryKey: ['booking', bookingId, 'edtr-sheet'] as const,
@@ -276,6 +280,7 @@ export const bookingsQueries = {
         const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
         if (q) params.set('q', q);
         if (filters.status?.length) params.set('status', filters.status.join(','));
+        if (filters.bucket) params.set('bucket', filters.bucket);
         if (filters.from) params.set('from', filters.from);
         if (filters.to) params.set('to', filters.to);
         if (filters.sort) params.set('sort', filters.sort);
@@ -498,6 +503,11 @@ export const edtrQueries = {
     queryOptions({
       queryKey: ['edtr', id] as const,
       queryFn: () => apiGet<EdtrDetailResponse>(`/edtr/${id}`),
+    }),
+  weatherEvidence: (id: string) =>
+    queryOptions({
+      queryKey: ['edtr', id, 'weather-evidence'] as const,
+      queryFn: () => apiGet<EdtrWeatherEvidence>(`/edtr/${id}/weather-evidence`),
     }),
 };
 

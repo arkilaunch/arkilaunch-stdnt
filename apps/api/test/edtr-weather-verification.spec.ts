@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, vi } from 'vitest';
 import { NotFoundException } from '@nestjs/common';
 import postgres from 'postgres';
 import { and, eq, sql } from 'drizzle-orm';
@@ -206,10 +206,39 @@ describe('EDTR weather verification (digital entry)', () => {
     expect((await sites.incidentCompanies(ctxB)).items.some((c) => c.customerId === incident.customerId)).toBe(false);
   });
 
-  it('an entry that matches the recorded weather is not flagged', async () => {
+  it('missing readings stay unverified and a reviewer can cache labelled history', async () => {
     const created = await capture('2022-07-07', { hoursActive: 8, hoursIdle: 0 });
     const { reviewFlags, logged } = await flagsAndIncidents(created.id);
     expect(reviewFlags.filter((f) => f.startsWith('weather_D'))).toEqual([]);
     expect(logged).toHaveLength(0);
+    const evidence = await service.weatherEvidence(ctx, created.id);
+    expect(evidence.am).toMatchObject({ recorded: 0, sufficient: false });
+    expect(evidence.pm).toMatchObject({ recorded: 0, sufficient: false });
+    await expect(service.weatherEvidence(ctxB, created.id)).rejects.toThrow(NotFoundException);
+
+    const prior = process.env.ENABLE_WEATHER_HISTORY;
+    process.env.ENABLE_WEATHER_HISTORY = 'true';
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        hourly_units: { wind_speed_10m: 'km/h', precipitation: 'mm' },
+        hourly: {
+          time: Array.from({ length: 24 }, (_, i) => `2022-07-07T${String(i).padStart(2, '0')}:00`),
+          wind_speed_10m: Array(24).fill(10), precipitation: Array(24).fill(0), weather_code: Array(24).fill(1),
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const fetched = await service.fetchHistoricalWeather(ctx, created.id);
+      expect(fetched.historical).toMatchObject({ model: 'best_match', readings: expect.arrayContaining([{ time: '2022-07-07T00:00', windKph: 10, precipMm: 0, code: 1 }]) });
+      await service.fetchHistoricalWeather(ctx, created.id);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await expect(service.fetchHistoricalWeather(ctxB, created.id)).rejects.toThrow(NotFoundException);
+    } finally {
+      vi.unstubAllGlobals();
+      if (prior === undefined) delete process.env.ENABLE_WEATHER_HISTORY;
+      else process.env.ENABLE_WEATHER_HISTORY = prior;
+    }
   });
 });

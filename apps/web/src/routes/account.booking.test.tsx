@@ -19,12 +19,17 @@ describe('leaseProgress', () => {
     expect(leaseProgress(start, end, now)).toEqual({ pct: 50, daysRemaining: 5 });
   });
 
-  it('clamps to the window rather than reporting past 100% or negative days', () => {
+  it('clamps progress to the window and counts overdue days past the return date', () => {
     const afterwards = new Date('2026-11-01T00:00:00.000Z');
-    expect(leaseProgress(start, end, afterwards)).toEqual({ pct: 100, daysRemaining: 0 });
+    expect(leaseProgress(start, end, afterwards)).toEqual({ pct: 100, daysRemaining: -21 });
 
     const beforehand = new Date('2026-09-01T00:00:00.000Z');
     expect(leaseProgress(start, end, beforehand)?.pct).toBe(0);
+  });
+
+  it('counts Manila calendar days, so a return later today is due today', () => {
+    // 08:00 Manila; the machine is due back at 17:00 Manila the same day.
+    expect(leaseProgress(start, '2026-10-06T09:00:00.000Z', new Date('2026-10-06T00:00:00.000Z'))?.daysRemaining).toBe(0);
   });
 
   it('returns null when the window cannot be measured, instead of a made-up zero', () => {
@@ -56,6 +61,8 @@ function booking(overrides: Partial<BookingDetailResponse> = {}): BookingDetailR
         start: new Date('2026-10-01T08:00:00Z'),
         end: new Date('2026-10-05T17:00:00Z'),
         status: 'scheduled',
+        returnConditionNotes: null,
+        returnNeedsRepair: false,
       },
     ],
     quotation: null,

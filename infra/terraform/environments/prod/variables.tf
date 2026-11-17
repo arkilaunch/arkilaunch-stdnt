@@ -1,6 +1,6 @@
 variable "location" {
   type    = string
-  default = "southeastasia" # PH data residency; RA 10173 cross-border basis still open
+  default = "japaneast" # Azure for Students allows only centralindia/japaneast/koreacentral/malaysiawest/japanwest; RA 10173 cross-border basis still open
 }
 
 variable "image_tag" {
@@ -44,6 +44,16 @@ variable "enable_ocr_kyc" {
 }
 
 variable "enable_weather_poll" {
+  type    = bool
+  default = false
+}
+
+variable "enable_weather_history" {
+  type    = bool
+  default = false
+}
+
+variable "enable_weather_retention" {
   type    = bool
   default = false
 }
@@ -121,6 +131,12 @@ variable "maintenance_notify_cron" {
 variable "hold_expiry_cron" {
   type    = string
   default = "5 * * * *"
+}
+
+# 00:00 UTC = 08:00 Manila.
+variable "return_reminders_cron" {
+  type    = string
+  default = "0 0 * * *"
 }
 
 # --- Secrets: TF_VAR_* from GitHub encrypted secrets, never committed. ---

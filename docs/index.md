@@ -2,7 +2,7 @@
 
 **Project slug:** `arkilaunch`
 **Maintained by:** ArkiLaunch Team (Almara Construction capstone)
-**Last updated:** 2026-10-07
+**Last updated:** 2026-11-15
 **Built on FMD:** v1.28.1
 
 ---
@@ -23,13 +23,13 @@
 | WRAP · Next Steps | [wrap-arkilaunch.md](wrap-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BRD · Business Requirements | [brd-arkilaunch.md](brd-arkilaunch.md) | 0.1 | Draft | 2026-07-25 | N/A |
 | UES · Unit Economics Sheet | [ues-arkilaunch.md](ues-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-19 |
-| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-10-04 | 2026-10-04 |
-| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-09-27 | 2026-09-07 |
+| PRD · Product Requirements | [prd-arkilaunch.md](prd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| DSD · Design System | [dsd-arkilaunch.md](dsd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| SDD · System Design | [sdd-arkilaunch.md](sdd-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
+| QAD · QA & Test Plan | [qad-arkilaunch.md](qad-arkilaunch.md) | 0.1 | Locked | 2026-11-15 | 2026-11-15 |
 | SAD · Subagents | [sad-arkilaunch.md](sad-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | BUILD · Build Guide | [build-arkilaunch.md](build-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
-| CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-09-27 | N/A |
+| CLR · Compliance & Legal | [clr-arkilaunch.md](clr-arkilaunch.md) | 0.1 | Draft | 2026-11-15 | N/A |
 | AIA · AI Assurance Dossier | [aia-arkilaunch.md](aia-arkilaunch.md) | 0.1 | Draft | 2026-09-19 | N/A |
 | GTM · Go-To-Market | [gtm-arkilaunch.md](gtm-arkilaunch.md) | 0.1 | Draft | 2026-08-01 | N/A |
 | OPS · Ops & Observability | [ops-arkilaunch.md](ops-arkilaunch.md) | 0.1 | Draft | 2026-09-29 | N/A |
@@ -58,6 +58,8 @@ Change Record or is explicitly deferred there.
 | Figma route alignment | [report-figma-route-alignment.md](report-figma-route-alignment.md) | frame-by-frame diff behind `cr-arkilaunch-figma-ia-alignment.md` | Report (2026-09-17) |
 
 **Materialized at project root (not in `docs/`):** `BRAND.md`, `DESIGN.md` (from DSD §9), `AGENTS.md` (from BUILD §6), `MODEL_CARD.md` (from AIA §1). `README.md` is **not** a materialized artifact -- it is maintained by hand; the three files that used to disagree about this (this section, `CLAUDE.md` §Materialized-files, and README's own footer) were reconciled by `cr-arkilaunch-repo-cleanup-audit.md`. `AGENTS.md` §5.2 was re-materialized 2026-09-13 after sitting 13 months behind BUILD. `BRAND.md` and `MODEL_CARD.md` are current. `DESIGN.md` was **not**: it had been hand-edited away from the Locked DSD (build-status annotations, a `weather-stale` behavioural rule, and an admission at `:405` that it was hand-updated rather than regenerated), which this section asserted was not the case from 2026-09-13 until `cr-arkilaunch-doc-reconcile-2026-09-19.md` folded that content back into the DSD and re-materialized it.
+
+**Rental QA visual verification:** [Screenshots and document evidence](qa/rental-qa/README.md), synthetic fixtures dated 2026-10-20.
 
 ### RFCs (one per major feature)
 
@@ -90,6 +92,16 @@ Every material change to a Locked document is recorded as a Change Record. Newes
 
 | CR ID | Date | Summary | Trigger doc | Docs touched | File |
 |-------|------|---------|-------------|--------------|------|
+| cr-arkilaunch-azure-students-migration | 2026-11-17 | Moves the backend off the inaccessible Visual Studio Enterprise subscription onto Azure for Students. Auth to the old tenant fails with `AADSTS5000224`, its Terraform state is unreachable, and the globally unique names (state account, registry, dev Document Intelligence) still resolve in DNS, so they get a `2` suffix. No app, schema or flag change. Deliberately not claimed: nothing applied yet, first deploy is manual because Actions is billing-locked, secrets not rotated, AIA-R7 unchanged | owner request | index.md §2 | [cr-arkilaunch-azure-students-migration.md](cr-arkilaunch-azure-students-migration.md) |
+| cr-arkilaunch-machine-week-billing | 2026-11-15 | Per-machine deposits, usage-only extensions, closed multi-machine weekly invoices and SOA, rental document layout, Admin Active/Past switch | Owner billing and UI requirements | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-machine-week-billing.md](cr-arkilaunch-machine-week-billing.md) |
+| cr-arkilaunch-weather-evidence-coverage | 2026-11-15 | Near-complete saved-reading coverage before weather mismatch or machine stop-work evidence; labelled reviewer-requested historical reanalysis in development; 24-month detailed-reading retention target, disabled cleanup by default; free plan and client production weather remain off | Owner weather-evidence review | PRD/SDD/DSD/QAD/CLR; index | [cr-arkilaunch-weather-evidence-coverage.md](cr-arkilaunch-weather-evidence-coverage.md) |
+| cr-arkilaunch-admin-operations-clarity | 2026-11-11 | Dashboard fleet counts, expired booking history, invoices by company and location, ticket layout, registration submitter | Admin workflow feedback | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-admin-operations-clarity.md](cr-arkilaunch-admin-operations-clarity.md) |
+| cr-arkilaunch-rental-qa-documents | 2026-10-20 | Agreement modal, return condition and approved damage billing, individual deployment, tenant promotions, branded PDFs | Owner QA | PRD/SDD/DSD/QAD; index | [cr-arkilaunch-rental-qa-documents.md](cr-arkilaunch-rental-qa-documents.md) |
+| cr-arkilaunch-return-reminders | 2026-10-15 | Daily 08:00 Manila job reminds customer and admins/owners (in-app + email) before each machine's return date at per-tenant points from 7/5/3/2/1 days (baseline 5, 3, 1) and once when overdue; extensions re-arm; Returns due dashboard panel, countdown badges, settings card; table `return_reminder_settings` (migration 0091). Notify only | Stakeholder panel feedback, QA §2 (Dra. Domingo) | PRD-F8, §5.2; SDD §2/§5; index | [cr-arkilaunch-return-reminders.md](cr-arkilaunch-return-reminders.md) |
+| cr-arkilaunch-deferred-kyc | 2026-10-15 | Customers browse, see prices and fill a cart before company verification: sign-up lands on `/equipment`, public catalog returns rates (`GET /catalog/rates` removed), pending companies can fill the cart and are stopped at request submit with a Finish verification link. Server KYC gates on booking, quote and checkout unchanged. No migration | Stakeholder panel feedback, QA §3 (Mr. Violeta) | index; supersedes price gate and cart-validation §2 | [cr-arkilaunch-deferred-kyc.md](cr-arkilaunch-deferred-kyc.md) |
+| cr-arkilaunch-rental-agreement | 2026-10-15 | Customer signs the tenant's rental agreement at checkout (tick, typed name, drawn signature pad) once per quotation before payment; tenant-editable versioned text with platform template; append-only `rental_agreements` snapshot (migration 0092); `GET/PUT /bookings/rental-terms`; 409 `agreement_required` / `terms_changed` | Stakeholder panel feedback, QA §3 (Mr. Violeta) | index | [cr-arkilaunch-rental-agreement.md](cr-arkilaunch-rental-agreement.md) |
+| cr-arkilaunch-storefront-landing | 2026-10-16 | Tenant storefront home: skeleton/retry/empty states replace the blank search miss; hero waits for the tenant, single-column without an image, About as subhead; one Browse CTA plus Create account when signed out; search and See all carry `?q=` to `/equipment`; new How renting works strip; live footer year | Stakeholder panel feedback, QA §3 (Mr. Violeta) | DSD §5; index | [cr-arkilaunch-storefront-landing.md](cr-arkilaunch-storefront-landing.md) |
+| cr-arkilaunch-rental-return-extension | 2026-10-15 | Pro-rata extension charge with an audited override and seven-day invoice term; Returned keeps completed status and checks field logs; per-unit condition notes and Needs repair keep machines Unavailable (repair) using maintenance; no damage deduction | Stakeholder panel feedback (Dra. Domingo, Mr. Violeta) | PRD-F4/F8; SDD §3/§5; index | [cr-arkilaunch-rental-return-extension.md](cr-arkilaunch-rental-return-extension.md) |
 | cr-arkilaunch-timekeeper-sheet-context | 2026-10-07 | Timekeeper capture shows the printed sheet's full header ("On the sheet": booking, charge to, equipment, location, operator, site rep, rental period, week, start meter) via the existing `GET /bookings/:id/edtr-sheet`; after submit the modal just confirms and closes (no polling, OCR readout or status). Notifications unchanged. Amends site-hub-approval §2 #5 | Owner request 2026-10-07 | site-hub-approval CR; index | [cr-arkilaunch-timekeeper-sheet-context.md](cr-arkilaunch-timekeeper-sheet-context.md) |
 | cr-arkilaunch-edtr-demo-fixes | 2026-10-07 | Capture keeps the whole photo when sheet marks are not found (no edge crop); bigger previews; photo beside its readings (ScanReview top-aligned, site hub drawer side by side); hour meter cells cleaned like other comb cells (6 digits = 5+1); no QR-missing gate; timekeeper paper send closes the modal (no on-site retake); admin `DELETE /edtr/:id` removes an unbilled log (409 `already_billed`). Amends timekeeper-sheet-context §2 | Owner request 2026-10-07 | timekeeper-sheet-context CR; index | [cr-arkilaunch-edtr-demo-fixes.md](cr-arkilaunch-edtr-demo-fixes.md) |
 | cr-arkilaunch-truck-tier-cap | 2026-10-07 | Customer tier discount caps now gate the truck agreed price: a discount off the route price above the cap is Owner-only (`409 truck_cap_needs_owner` for others), audited; drawer shows the tier note. No migration | Owner request 2026-10-07 | index | [cr-arkilaunch-truck-tier-cap.md](cr-arkilaunch-truck-tier-cap.md) |

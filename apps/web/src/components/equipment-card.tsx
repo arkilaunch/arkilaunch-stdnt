@@ -3,6 +3,7 @@ import { EquipmentSchematic } from './equipment-schematic.js';
 import { formatPeso } from '../lib/format.js';
 
 export interface EquipmentCardProps {
+  showPrice?: boolean;
   imageAlt: string;
   imageUrl?: string;
   model: string;
@@ -16,6 +17,7 @@ export interface EquipmentCardProps {
 }
 
 export function EquipmentCard({
+  showPrice = true,
   imageAlt,
   imageUrl,
   model,
@@ -56,11 +58,11 @@ export function EquipmentCard({
             )}
           </h3>
           <p className="text-sm text-text-muted">{make}</p>
-          <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
+          {showPrice && <p className="mt-1 font-mono text-sm tabular-nums text-text" data-testid="equipment-card-price">
             {rateValue != null
               ? `${formatPeso(rateValue)} / hour`
               : priceNote}
-          </p>
+          </p>}
         </div>
         <Button size="default" variant="primary" className="mt-auto self-start" disabled={unavailable} onClick={onRent}>
           {rentLabel}

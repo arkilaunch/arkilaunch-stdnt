@@ -268,7 +268,7 @@ export async function buildLeakageReport(
     const discounts = [
       ...redemptions.map((r) => ({ label: `Coupon on ${customerName.get(r.customerId) ?? 'a customer'}`, detail: `redeemed ${manilaDate(r.createdAt)}`, amountPhp: Number(r.discountPhp) })),
       ...tripRows
-        .filter((t) => t.agreedPricePhp !== null && Number(t.agreedPricePhp) < (t.price as { totalPhp: number }).totalPhp && t.status !== 'cancelled')
+        .filter((t) => t.agreedPricePhp !== null && Number(t.agreedPricePhp) < (t.price as { totalPhp: number }).totalPhp && t.status !== 'cancelled' && t.status !== 'expired')
         .map((t) => {
           const list = (t.price as { totalPhp: number }).totalPhp;
           return { label: `Truck ${t.code ?? ''}`.trim(), detail: `agreed ${php(Number(t.agreedPricePhp))} vs routed ${php(list)}`, amountPhp: round2HalfUp(list - Number(t.agreedPricePhp)) };

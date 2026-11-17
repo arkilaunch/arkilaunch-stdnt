@@ -15,6 +15,7 @@ import {
   notifications,
   projectSites,
   rentals,
+  weatherAlerts,
   warnOnEquipmentEscalation,
 } from '@arkilaunch/db';
 import { makeJobDb } from './db-client.js';
@@ -98,14 +99,18 @@ describe('per-equipment weather (warning -> used despite warning)', () => {
         .limit(1);
       expect(warned).toBeDefined();
 
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
-      const [row] = await db.insert(edtr).values({ tenantId, rentalId, equipmentId: craneId, source: 'digital_entry', reportDate: today, status: 'extracted' }).returning();
+      const day = '2021-03-10';
+      const minutes = [...Array.from({ length: 10 }, (_, i) => 420 + i * 30), ...Array.from({ length: 8 }, (_, i) => 780 + i * 30)];
+      await db.insert(weatherAlerts).values(minutes.map((minute) => ({
+        tenantId, projectSiteId: siteId, severity: 'warning', status: 'active',
+        effectiveAt: new Date(new Date(`${day}T00:00:00+08:00`).getTime() + minute * 60_000),
+        observed: { tempC: 30, windKph: 30, precipMm: 0, code: 2, equipment: levels.equipment },
+      })));
+      const [row] = await db.insert(edtr).values({ tenantId, rentalId, equipmentId: craneId, source: 'digital_entry', reportDate: day, status: 'extracted' }).returning();
       await db.insert(edtrLineItems).values({ tenantId, edtrId: row!.id, hoursActive: '6' });
-      // Whole-day windows: the warning fired "now", whatever the hour the suite runs.
-      const allDay = { am: [0, 720] as [number, number], pm: [720, 1440] as [number, number] };
-      expect((await flagUsedDespiteWarning(db, tenantId, row!.id, allDay)).length).toBeGreaterThan(0);
+      expect(await flagUsedDespiteWarning(db, tenantId, row!.id)).toEqual(['am', 'pm']);
       // Once per EDTR.
-      expect(await flagUsedDespiteWarning(db, tenantId, row!.id, allDay)).toEqual([]);
+      expect(await flagUsedDespiteWarning(db, tenantId, row!.id)).toEqual([]);
       const [incident] = await db
         .select()
         .from(events)
@@ -117,16 +122,17 @@ describe('per-equipment weather (warning -> used despite warning)', () => {
     }
   });
 
-  it('flags only the halves worked after a stop_work warning went up', async () => {
+  it('flags only covered halves with a recorded machine stop-work level, not the rest of the day', async () => {
     const { db, client } = makeJobDb();
     try {
       const flagFor = async (date: string, warnedAt: string) => {
-        await db.insert(events).values({
-          tenantId,
-          name: 'equipment_weather_warning',
-          occurredAt: new Date(`${date}T${warnedAt}:00+08:00`),
-          properties: { equipment_id: rollerId, level: 'stop_work', reasons: ['test'] },
-        });
+        const warnedMinute = Number(warnedAt.slice(0, 2)) * 60 + Number(warnedAt.slice(3));
+        const minutes = [...Array.from({ length: 10 }, (_, i) => 420 + i * 30), ...Array.from({ length: 8 }, (_, i) => 780 + i * 30)];
+        await db.insert(weatherAlerts).values(minutes.map((minute) => ({
+          tenantId, projectSiteId: siteId, severity: 'warning', status: 'active',
+          effectiveAt: new Date(new Date(`${date}T00:00:00+08:00`).getTime() + minute * 60_000),
+          observed: { tempC: 30, windKph: 10, precipMm: 0, code: 2, equipment: [{ equipmentId: rollerId, level: minute >= warnedMinute ? 'stop_work' : 'normal', reasons: ['test'] }] },
+        })));
         const [row] = await db
           .insert(edtr)
           .values({ tenantId, rentalId, equipmentId: rollerId, source: 'digital_entry', reportDate: date, status: 'extracted' })
@@ -138,6 +144,16 @@ describe('per-equipment weather (warning -> used despite warning)', () => {
       expect(await flagFor('2021-03-02', '14:00')).toEqual(['pm']);
       // After the 17:00 knock-off: the machine had already stopped.
       expect(await flagFor('2021-03-03', '18:00')).toEqual([]);
+      const clearDate = '2021-03-04';
+      const minutes = [...Array.from({ length: 10 }, (_, i) => 420 + i * 30), ...Array.from({ length: 8 }, (_, i) => 780 + i * 30)];
+      await db.insert(weatherAlerts).values(minutes.map((minute) => ({
+        tenantId, projectSiteId: siteId, severity: 'none', status: 'cleared',
+        effectiveAt: new Date(new Date(`${clearDate}T00:00:00+08:00`).getTime() + minute * 60_000),
+        observed: { tempC: 30, windKph: 10, precipMm: 0, code: 2, equipment: [{ equipmentId: rollerId, level: minute === 600 ? 'stop_work' : 'normal', reasons: ['test'] }] },
+      })));
+      const [cleared] = await db.insert(edtr).values({ tenantId, rentalId, equipmentId: rollerId, source: 'digital_entry', reportDate: clearDate, status: 'extracted' }).returning();
+      await db.insert(edtrLineItems).values({ tenantId, edtrId: cleared!.id, hoursActive: '8' });
+      expect(await flagUsedDespiteWarning(db, tenantId, cleared!.id)).toEqual(['am']);
     } finally {
       await client.end();
     }

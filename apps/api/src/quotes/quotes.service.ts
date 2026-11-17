@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, desc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
+  createEquipmentDeposits,
   type Tx,
   auditLogs,
   customers,
@@ -323,12 +324,14 @@ export class QuotesService {
         .select({ value: sql<string | null>`sum(${quotationItems.estimatedHours} * ${quotationItems.quantity} * ${quotationItems.hourlyRatePhp})` })
         .from(quotationItems)
         .where(eq(quotationItems.quotationId, quotationId));
+      const [rental] = await tx.select({ depositMode: rentals.depositMode }).from(rentals).where(eq(rentals.id, quotation.rentalId)).limit(1);
+      const depositRequired = rental?.depositMode === 'per_machine'
+        ? await createEquipmentDeposits(tx, ctx.tenantId, quotation.rentalId, quotationId)
+        : depositForQuote(await getBillingSettings(tx, ctx.tenantId), rentedHoursValue?.value != null ? Number(rentedHoursValue.value) : null);
       await tx.insert(rentalContracts).values({
         tenantId: ctx.tenantId,
         quotationId,
-        depositRequired: String(
-          depositForQuote(await getBillingSettings(tx, ctx.tenantId), rentedHoursValue?.value != null ? Number(rentedHoursValue.value) : null),
-        ),
+        depositRequired: String(depositRequired),
         status: 'active',
       });
       await tx.insert(auditLogs).values({

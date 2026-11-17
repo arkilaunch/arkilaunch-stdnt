@@ -1,14 +1,17 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RequirePermission } from '../common/decorators/require-permission.decorator.js';
 import { BookingsService } from './bookings.service.js';
 import {
   BookingCreateDto,
   BookingDeliverDto,
+  BookingReturnDto,
   BookingListQueryDto,
   ChangeRequestCreateDto,
   ChangeRequestResolveDto,
   NegotiationMessageCreateDto,
+  ReturnReminderSettingsDto,
+  RentalTermsUpdateDto,
 } from './dto.js';
 import type { CtxRequest } from '../common/request.js';
 
@@ -26,6 +29,38 @@ export class BookingsController {
   @RequirePermission('booking:read')
   list(@Query() query: BookingListQueryDto, @Req() req: CtxRequest) {
     return this.bookings.list(req.ctx, query);
+  }
+
+  // Declared before ':id' so these paths are not read as a booking id. Staff only: report:read.
+  @Get('returns-due')
+  @RequirePermission('report:read')
+  returnsDue(@Req() req: CtxRequest) {
+    return this.bookings.returnsDue(req.ctx);
+  }
+
+  @Get('return-reminders')
+  @RequirePermission('report:read')
+  returnReminders(@Req() req: CtxRequest) {
+    return this.bookings.getReturnReminders(req.ctx);
+  }
+
+  @Put('return-reminders')
+  @RequirePermission('tenant:manage')
+  saveReturnReminders(@Body() body: ReturnReminderSettingsDto, @Req() req: CtxRequest) {
+    return this.bookings.saveReturnReminders(req.ctx, body);
+  }
+
+  // Customers read it at checkout; the tenant comes from the JWT (RFC-1).
+  @Get('rental-terms')
+  @RequirePermission('booking:read')
+  rentalTerms(@Req() req: CtxRequest) {
+    return this.bookings.getRentalTerms(req.ctx);
+  }
+
+  @Put('rental-terms')
+  @RequirePermission('tenant:manage')
+  saveRentalTerms(@Body() body: RentalTermsUpdateDto, @Req() req: CtxRequest) {
+    return this.bookings.saveRentalTerms(req.ctx, body);
   }
 
   @Get(':id/edtr-sheet')
@@ -60,8 +95,8 @@ export class BookingsController {
 
   @Post(':id/return')
   @RequirePermission('site:manage')
-  markReturned(@Param('id') id: string, @Req() req: CtxRequest) {
-    return this.bookings.markReturned(req.ctx, id);
+  markReturned(@Param('id') id: string, @Body() body: BookingReturnDto, @Req() req: CtxRequest) {
+    return this.bookings.markReturned(req.ctx, id, body);
   }
 
   @Get(':id/reschedule-suggestion')

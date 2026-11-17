@@ -24,10 +24,9 @@ import {
 } from '@arkilaunch/shared';
 import { toBranding } from '../common/branding.js';
 
-// photo_uri is a storage key, not something an <img> can load.
-// Prices never leave a public route: they come from the gated GET /catalog/rates.
-function withPhotoUrl<T extends { photoUri: string | null; rateValue: number | null }>(row: T): T {
-  return { ...row, photoUri: publicPhotoUrl(row.photoUri), rateValue: null };
+// photo_uri is a storage key, not something an <img> can load. Rates are public: verification gates booking, not browsing.
+function withPhotoUrl<T extends { photoUri: string | null }>(row: T): T {
+  return { ...row, photoUri: publicPhotoUrl(row.photoUri) };
 }
 
 // The SQL functions match only an ACTIVE tenant and expose an allowlist of safe columns.

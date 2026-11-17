@@ -1,10 +1,13 @@
+import { RETURN_CONDITIONS, type ReturnCondition } from '@arkilaunch/shared';
+import { ReturnConditionFields } from './return-condition-fields.js';
+import { DamageAssessments } from './damage-assessments.js';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { BookingDetailResponse, RescheduleSuggestion } from '@arkilaunch/shared';
-import { localPhMobile } from '@arkilaunch/shared';
+import type { BookingDetailResponse, ChangeRequestResolve, RescheduleSuggestion } from '@arkilaunch/shared';
+import { BookingReturnRequestSchema, ChangeRequestResolveSchema, localPhMobile } from '@arkilaunch/shared';
 import { bookingsQueries, sitesQueries } from '../lib/queries.js';
-import { apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
+import { ApiError, apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatPeso, formatStatus } from '../lib/format.js';
 import { Container } from './container.js';
 import { Alert } from './alert.js';
@@ -12,6 +15,7 @@ import { Button, buttonClass } from './button.js';
 import { ConfirmDialog } from './confirm-dialog.js';
 import { Input } from './input.js';
 import { Select } from './select.js';
+import { StatusBadge } from './status-badge.js';
 import { SiteProofAdmin } from './site-proof.js';
 import { SiteEquipmentWeather } from './equipment-weather.js';
 import { EdtrSheetCard } from './edtr-sheet-card.js';
@@ -19,23 +23,27 @@ import { OfficePaymentButton } from './office-payment.js';
 import { useToast } from './toast.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
 
-function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
+export function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const resolve = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: 'approved' | 'rejected' }) =>
-      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, { decision }),
-    onSuccess: async (_data, { decision }) => {
+    mutationFn: ({ id, body }: { id: string; body: ChangeRequestResolve }) =>
+      apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
+    onSuccess: async (_data, { body: { decision } }) => {
       setAsk(null);
-      await queryClient.invalidateQueries({ queryKey: ['booking', booking.id] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['booking', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'staff', booking.id] }),
+        queryClient.invalidateQueries({ queryKey: ['statement', 'me', booking.id] }),
+      ]);
       toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
     },
-    onError: (err) => {
-      setAsk(null);
-      toast.error('Could not resolve the request', apiErrorText(err));
-    },
+    onError: (err) => toast.error('Could not resolve the request', apiErrorText(err)),
   });
   const [ask, setAsk] = useState<{ request: BookingDetailResponse['changeRequests'][number]; decision: 'approved' | 'rejected' } | null>(null);
+  function openRequest(request: BookingDetailResponse['changeRequests'][number], decision: 'approved' | 'rejected') {
+    setAsk({ request, decision });
+  }
 
   return (
     <Container header={{ title: 'Change requests' }}>
@@ -52,10 +60,10 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
           {request.reason && <p className="text-sm text-text-muted">{request.reason}</p>}
           {request.status === 'pending' && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="approve" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'approved' })}>
+              <Button variant="approve" disabled={resolve.isPending} onClick={() => openRequest(request, 'approved')}>
                 Approve
               </Button>
-              <Button variant="secondary" disabled={resolve.isPending} onClick={() => setAsk({ request, decision: 'rejected' })}>
+              <Button variant="secondary" disabled={resolve.isPending} onClick={() => openRequest(request, 'rejected')}>
                 Decline
               </Button>
             </div>
@@ -78,14 +86,15 @@ function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
         body={
           ask?.decision === 'approved'
             ? ask.request.kind === 'extend'
-              ? `${booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to ${formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.`
+              ? <p>{booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to {formatDate(ask.request.requestedEnd)}. Approved hours continue through the deposit and weekly billing. The customer is notified.</p>
               : 'The booking is cancelled for good. The customer is notified.'
             : 'The booking stays as it is. The customer is notified that you declined.'
         }
         confirmLabel={ask?.decision === 'approved' ? 'Approve' : 'Decline'}
         pending={resolve.isPending}
         onConfirm={() => {
-          if (ask) resolve.mutate({ id: ask.request.id, decision: ask.decision });
+          if (!ask) return;
+          resolve.mutate({ id: ask.request.id, body: ChangeRequestResolveSchema.parse({ decision: ask.decision }) });
         }}
         onCancel={() => setAsk(null)}
       />
@@ -152,7 +161,7 @@ function CallCard({ booking }: { booking: BookingDetailResponse }) {
             ? 'The customer asked for a call.'
             : 'Call the customer before they pay.'}
       </p>
-      {!booking.callConfirmedAt && booking.status !== 'cancelled' && (
+      {!booking.callConfirmedAt && booking.status !== 'cancelled' && booking.status !== 'expired' && (
         <Button variant="secondary" loading={confirm.isPending} onClick={() => setAsking(true)}>
           Confirmed by phone
         </Button>
@@ -202,7 +211,7 @@ function HoldCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
-const PAID_OR_CLOSED = ['confirmed', 'active', 'completed', 'cancelled'];
+const PAID_OR_CLOSED = ['confirmed', 'active', 'completed', 'cancelled', 'expired'];
 
 function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
   const queryClient = useQueryClient();
@@ -225,21 +234,40 @@ function OfficePaymentCard({ booking }: { booking: BookingDetailResponse }) {
   );
 }
 
-function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
+export function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [operatorName, setOperatorName] = useState('');
   const [timekeeperUserId, setTimekeeperUserId] = useState('');
+  const [units, setUnits] = useState<Record<string, { conditionNotes: string; condition: ReturnCondition | "" }>>({});
+  const [incomplete, setIncomplete] = useState(false);
+  const [confirmIncompleteLogs, setConfirmIncompleteLogs] = useState(false);
+  const [reason, setReason] = useState('');
+  const [cancelScheduled, setCancelScheduled] = useState(false);
+  const [returnError, setReturnError] = useState<string>();
+  const [deploymentIds, setDeploymentIds] = useState<string[] | null>(null);
+  const activeUnits = booking.items.filter((item) => item.status === 'active');
+  const scheduledUnits = booking.items.filter((item) => item.status === 'scheduled');
+  const calendar = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const today = calendar.format(new Date());
+  const isDue = (item: BookingDetailResponse['items'][number]) => calendar.format(new Date(item.start)) <= today
+    && item.end !== null && calendar.format(new Date(item.end)) >= today;
+  const dueUnits = scheduledUnits.filter(isDue);
   const move = useMutation({
     mutationFn: (step: 'deliver' | 'return') =>
       apiPost(
         `/bookings/${booking.id}/${step}`,
         step === 'deliver'
           ? {
+              assignmentIds: deploymentIds ?? [],
               ...(operatorName.trim() ? { operatorName: operatorName.trim() } : {}),
               ...(timekeeperUserId ? { timekeeperUserId } : {}),
             }
-          : {},
+          : BookingReturnRequestSchema.parse({
+              ...(cancelScheduled ? {cancelScheduled:true,reason} : {}),
+              units: activeUnits.map((item) => ({ assignmentId: item.id, ...units[item.id] })),
+              ...(incomplete ? { confirmIncompleteLogs, reason } : {}),
+            }),
       ),
     onSuccess: (_data, step) => {
       setAsking(false);
@@ -248,32 +276,63 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
       toast.success(step === 'deliver' ? 'Deployed' : 'Marked returned');
     },
     onError: (e) => {
-      setAsking(false);
+      if (e instanceof ApiError && e.status === 409 && e.message === 'field_logs_incomplete') {
+        setIncomplete(true);
+        setConfirmIncompleteLogs(false);
+        setReturnError(undefined);
+        return;
+      }
       toast.error('Not saved', apiErrorText(e));
     },
   });
   const [asking, setAsking] = useState(false);
-  const deliverable = booking.status === 'confirmed';
-  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking });
+  const deliverable = booking.status === 'confirmed' || booking.status === 'active';
+  const hub = useQuery({ ...sitesQueries.hub(booking.projectSiteId), enabled: deliverable && asking && deploymentIds !== null });
   const timekeepers = [...(hub.data?.personnel.timekeepers ?? []), ...(hub.data?.personnel.availableTimekeepers ?? [])];
   if (booking.status !== 'confirmed' && booking.status !== 'active') return null;
-  const deliver = booking.status === 'confirmed';
+  const deliver = deploymentIds !== null;
+  const openDeployment = (ids: string[]) => {
+    setDeploymentIds(ids); setOperatorName(''); setTimekeeperUserId(''); setAsking(true);
+  };
   return (
-    <Container header={{ title: deliver ? 'Deploy' : 'Delivery' }}>
+    <Container header={{ title: 'Deployment and return' }}>
       <div className="flex flex-col gap-3">
       <p className="text-sm text-text-muted">
-        {deliver ? 'Paid. Deploy once the machines are on site.' : 'On site. Mark returned once every machine is back.'}
+        Deploy each machine when it arrives within its booked dates (Manila time).
       </p>
-      <Button variant="primary" onClick={() => setAsking(true)}>
-        {deliver ? 'Deploy now' : 'Mark returned'}
-      </Button>
+      {scheduledUnits.map((item) => (
+        <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+          <div>
+            <p className="text-sm font-semibold">{item.equipmentName ?? 'Machine'}</p>
+            <p className="text-sm text-text-muted">{formatDate(item.start)} - {formatDate(item.end)}</p>
+            {!isDue(item) && <p className="text-sm text-text-muted">Deployment is available during these booked dates.</p>}
+          </div>
+          <Button variant="secondary" disabled={!isDue(item) || move.isPending} onClick={() => openDeployment([item.id])}>
+            Deploy {item.equipmentName ?? 'machine'}
+          </Button>
+        </div>
+      ))}
+      {scheduledUnits.length > 0 && <Button variant="primary" disabled={dueUnits.length === 0 || move.isPending}
+        onClick={() => openDeployment(dueUnits.map((item) => item.id))}>
+        Deploy all due equipment ({dueUnits.length})
+      </Button>}
+      {booking.status === 'active' && <Button variant="secondary" onClick={() => {
+        setDeploymentIds(null);
+        setCancelScheduled(false); setUnits({}); setIncomplete(false); setConfirmIncompleteLogs(false); setReason('');
+        setReturnError(undefined); setAsking(true);
+      }}>
+        {activeUnits.length ? 'Mark returned' : 'Close undeployed remainder'}
+      </Button>}
       <ConfirmDialog
         open={asking}
-        title={deliver ? 'Deploy this booking?' : 'Mark this booking returned?'}
+        title={deliver ? 'Deploy selected equipment?' : 'Mark this booking returned?'}
         body={
           deliver ? (
             <div className="flex flex-col gap-4">
-              <p>Only once every machine is on site: this starts the rental on site and opens the field sheet.</p>
+              <p>Confirm these machines are on site. Other machines keep their booked dates and deployment status.</p>
+              <ul className="list-disc pl-5 text-sm">{booking.items.filter((item) => deploymentIds?.includes(item.id)).map((item) => (
+                <li key={item.id}>{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</li>
+              ))}</ul>
               <Input
                 label="Operator name"
                 hint="Optional. Who operates the machines on site."
@@ -296,12 +355,43 @@ function DeliveryCard({ booking }: { booking: BookingDetailResponse }) {
               </Select>
             </div>
           ) : (
-            'Only once every machine is back: this closes the booking.'
+            <div className="flex flex-col gap-4">
+              <p>Confirm all deployed machines are back. Machines scheduled for later keep the booking open.</p>
+              {activeUnits.map((item) => (
+                <fieldset key={item.id} className="flex min-w-0 flex-col gap-2 border-t border-border pt-3">
+                  <legend className="text-sm font-semibold">{item.equipmentName ?? 'Machine'}</legend>
+                  <ReturnConditionFields id={item.id} condition={units[item.id]?.condition ?? ''} notes={units[item.id]?.conditionNotes ?? ''}
+                    onChange={(condition,conditionNotes)=>setUnits((current)=>({...current,[item.id]:{condition,conditionNotes}}))} />
+                </fieldset>
+              ))}
+              {scheduledUnits.length > 0 && <div className="flex flex-col gap-3"><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={cancelScheduled} onChange={e=>setCancelScheduled(e.target.checked)} />Cancel the remaining undeployed machines and close this booking</label><p className="text-xs text-text-muted">Otherwise the booking stays open for later deployment. Any refund is reviewed separately.</p>{cancelScheduled && <Input label="Reason for cancelling undeployed equipment" required value={reason} maxLength={500} onChange={e=>setReason(e.target.value)} />}</div>}
+              {returnError && !incomplete && <Alert type="error">{returnError}</Alert>}
+              {incomplete && <div className="flex flex-col gap-3">
+                <Alert type="warning">Field logs are incomplete. Return anyway only once every machine is back, and record why the logs are still missing.</Alert>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={confirmIncompleteLogs}
+                    aria-describedby={returnError ? `return-reason-${booking.id}-error` : undefined}
+                    onChange={(e) => { setConfirmIncompleteLogs(e.target.checked); setReturnError(undefined); }} />
+                  Confirm return with incomplete field logs
+                </label>
+                <Input label="Reason for returning with incomplete logs" required maxLength={500} value={reason}
+                  error={returnError} id={`return-reason-${booking.id}`}
+                  onChange={(e) => { setReason(e.target.value); setReturnError(undefined); }} />
+              </div>}
+            </div>
           )
         }
         confirmLabel={deliver ? 'Deploy now' : 'Mark returned'}
         pending={move.isPending}
-        onConfirm={() => move.mutate(deliver ? 'deliver' : 'return')}
+        onConfirm={() => {
+          if (!deliver && ((cancelScheduled && reason.trim().length < 3) || (!activeUnits.length && !cancelScheduled))) { setReturnError('Confirm cancellation of the undeployed remainder and give a reason.'); return; }
+          if (!deliver && activeUnits.some((item)=>!units[item.id]?.condition)) { setReturnError('Select a condition for every returned machine.'); return; }
+          if (!deliver && incomplete && (!confirmIncompleteLogs || reason.trim().length < 3)) {
+            setReturnError('Confirm the return and enter a reason of at least 3 characters.');
+            return;
+          }
+          move.mutate(deliver ? 'deliver' : 'return');
+        }}
         onCancel={() => setAsking(false)}
       />
       </div>
@@ -346,7 +436,7 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
         {quote && quote.status === 'approved' && !quote.inNegotiation && (
           <p className="text-sm text-text-muted">Priced from the price book and sent. You can revise it once the customer negotiates.</p>
         )}
-        {booking.status !== 'cancelled' && (!quote || quote.inNegotiation) && (
+        {booking.status !== 'cancelled' && booking.status !== 'expired' && (!quote || quote.inNegotiation) && (
           <Link to="/app/quotes" search={{ bookingId: booking.id }} className={buttonClass('primary')}>{quote ? 'Revise quote' : 'Quote this booking'}</Link>
         )}
         {quote && (
@@ -366,14 +456,18 @@ export function BookingSide({ booking }: { booking: BookingDetailResponse }) {
         <SiteProofAdmin siteId={booking.projectSiteId} />
         {booking.status === 'active' && <SiteEquipmentWeather siteId={booking.projectSiteId} />}
         {booking.items.map((item) => (
-          <p key={`${item.equipmentId}-${String(item.start)}`} className="text-text-muted">
-            {item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}
-          </p>
+          <div key={item.id} className="flex flex-col gap-1">
+            <p className="text-text-muted">{item.equipmentName ?? 'Machine'}: {formatDate(item.start)} - {formatDate(item.end)}</p>
+            {item.returnCondition && <p className="text-sm">Returned: {RETURN_CONDITIONS[item.returnCondition]}</p>}
+            {item.returnConditionNotes && <p className="whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
+            {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
+          </div>
         ))}
         </div>
       </Container>
       <DeliveryCard booking={booking} />
       {['active', 'completed'].includes(booking.status) && <EdtrSheetCard bookingId={booking.id} printable />}
+      <DamageAssessments booking={booking} />
       <PendingRequests booking={booking} />
       {booking.status === 'confirmed' && <RescheduleCard booking={booking} />}
     </div>

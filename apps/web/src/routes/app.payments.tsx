@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +30,13 @@ import {
 
 const COLUMNS: TableColumn<InvoiceSummaryResponse>[] = [
   {
+    header: 'Transaction', kind: 'text',
+    cell: (row) => <div className="min-w-0">
+      <p className="font-mono text-sm">{row.bookingCode ?? 'No booking code'}</p>
+      {row.bookedBy && <p className="break-words text-xs text-text-muted">Booked by {row.bookedBy}</p>}
+    </div>,
+  },
+  {
     header: 'Invoice', kind: 'text',
     cell: (row) => (
       <div className="flex flex-col">
@@ -47,6 +55,9 @@ const COLUMNS: TableColumn<InvoiceSummaryResponse>[] = [
 
 export function InvoiceDetail({ invoice, onDone }: { invoice: InvoiceSummaryResponse; onDone: () => void }) {
   const rows: [string, ReactNode][] = [
+    ...(invoice.customerName ? [['Company', invoice.customerName] as [string, ReactNode]] : []),
+    ...(invoice.location ? [['Location', invoice.location] as [string, ReactNode]] : []),
+    ...(invoice.bookedBy ? [['Booked by', invoice.bookedBy] as [string, ReactNode]] : []),
     [
       'Reference',
       <span key="ref" className="inline-flex items-center gap-1">
@@ -75,10 +86,12 @@ export function InvoiceDetail({ invoice, onDone }: { invoice: InvoiceSummaryResp
         ))}
       </dl>
       <div className="flex flex-wrap gap-2 border-t border-border pt-3 empty:hidden">
+        <DocumentDownload path={`/invoices/${invoice.id}/pdf`} label="Download invoice (PDF)" />
+        {invoice.status === 'paid' && <DocumentDownload path={`/invoices/${invoice.id}/receipt/pdf`} label="Download receipt (PDF)" />}
         {invoice.status === 'issued' && <RecordCash invoice={invoice} onDone={onDone} />}
         {invoice.status === 'issued' && ADJUSTABLE.has(invoice.invoiceType) && <ChangeAmount invoice={invoice} onDone={onDone} />}
         {invoice.status === 'paid' && invoice.invoiceType !== 'deposit_deduction' && <RefundPayment invoice={invoice} />}
-        {((invoice.invoiceType === 'weekly' && invoice.status === 'issued') ||
+        {((['weekly', 'weekly_correction'].includes(invoice.invoiceType) && invoice.status === 'issued') ||
           (invoice.invoiceType === 'deposit_deduction' && invoice.status !== 'void')) && <VoidBill invoice={invoice} onDone={onDone} />}
       </div>
     </div>
@@ -389,16 +402,34 @@ function PaymentsPage() {
         emptyDescription="Invoices appear once a booking is confirmed or a reconciliation is approved and a deduction is posted."
 
         isEmpty={(data) => data.total === 0}
-        render={(data) => (
-          <Table
-            columns={COLUMNS}
-            rows={data.items}
-            rowKey={(row) => row.id}
-            onRowClick={setSelected}
-            rowLabel={(row) => `invoice ${shortCode('invoice', row.id)}`}
-            header={{ title: 'Invoices', count: data.total, pagination: <Pagination offset={offset} limit={PAGE_SIZE} total={data.total} onOffsetChange={setOffset} noun="invoices" /> }}
-          />
-        )}
+        render={(data) => {
+          const groups = new Map<string, { company: string; location: string; items: InvoiceSummaryResponse[] }>();
+          for (const invoice of data.items) {
+            const key = `${invoice.customerId ?? invoice.customerName ?? 'unknown'}|${invoice.projectSiteId ?? invoice.location ?? ''}`;
+            const group = groups.get(key) ?? {
+              company: invoice.customerName ?? 'Company not recorded',
+              location: invoice.location ?? 'Location not recorded',
+              items: [],
+            };
+            group.items.push(invoice);
+            groups.set(key, group);
+          }
+          return <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <span>{data.total} invoices</span>
+              <Pagination offset={offset} limit={PAGE_SIZE} total={data.total} onOffsetChange={setOffset} noun="invoices" />
+            </div>
+            {[...groups.entries()].map(([key, group]) => <Table
+              key={key}
+              columns={COLUMNS}
+              rows={group.items}
+              rowKey={(row) => row.id}
+              onRowClick={setSelected}
+              rowLabel={(row) => `invoice ${shortCode('invoice', row.id)}`}
+              header={{ title: `${group.company} · ${group.location}`, count: group.items.length }}
+            />)}
+          </div>;
+        }}
       />
       <Modal
         open={selected != null}

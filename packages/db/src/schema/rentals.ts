@@ -1,10 +1,12 @@
 import {
+  boolean,
   check,
   index,
   integer,
   jsonb,
   numeric,
   pgTable,
+  smallint,
   text,
   timestamp,
   unique,
@@ -18,6 +20,7 @@ import { addresses, customers } from './customers.js';
 import { equipment, equipmentTypes, rateCards } from './fleet.js';
 import { dieselPriceReadings, pricingParameters } from './pricing.js';
 import { truckRequests } from './trucks.js';
+import { invoices } from './billing.js';
 
 export const projectSites = pgTable(
   'project_sites',
@@ -75,6 +78,7 @@ export const rentals = pgTable(
     projectSiteId: uuid('project_site_id')
       .notNull()
       .references(() => projectSites.id),
+    depositMode: text('deposit_mode').notNull().default('shared'), // historical rentals keep their paid shared deposit
     // Assigned by the booking_code_assign trigger, immutable; the sql`NULL` default only makes
     // Drizzle omit the column (the trigger refuses a supplied code).
     code: text('code').notNull().default(sql`NULL`),
@@ -94,6 +98,7 @@ export const rentals = pgTable(
   (table) => [tenantIsolationPolicy(),
     index('rentals_tenant_id_idx').on(table.tenantId),
     check('rentals_site_contact_mobile_chk', sql`${table.siteContactMobile} IS NULL OR ${table.siteContactMobile} ~ '^[+]639[0-9]{9}$'`),
+    check('rentals_deposit_mode_chk', sql`${table.depositMode} IN ('shared', 'per_machine')`),
   ],
 );
 
@@ -220,10 +225,15 @@ export const equipmentAssignments = pgTable(
     operatorName: text('operator_name'),
     selectedOptions: jsonb('selected_options').$type<Record<string, string>>().notNull().default({}),
     bookedHours: numeric('booked_hours', { precision: 10, scale: 2 }),
+    returnCondition: text('return_condition'),
+    returnConditionNotes: text('return_condition_notes'),
+    returnNeedsRepair: boolean('return_needs_repair').notNull().default(false),
   },
   (table) => [tenantIsolationPolicy(),
+    check('equipment_assignments_return_condition_check',sql`${table.returnCondition} IN ('good','wear','servicing','damaged')`),
     index('equipment_assignments_tenant_id_idx').on(table.tenantId),
     index('equipment_assignments_operator_user_id_idx').on(table.operatorUserId),
+    check('equipment_assignments_return_condition_notes_len_chk', sql`${table.returnConditionNotes} IS NULL OR char_length(${table.returnConditionNotes}) <= 2000`),
   ],
 );
 
@@ -290,6 +300,8 @@ export const bookingChangeRequests = pgTable(
       .notNull()
       .references(() => users.id),
     resolvedBy: uuid('resolved_by').references(() => users.id),
+    chargePhp: numeric('charge_php', { precision: 14, scale: 2 }),
+    invoiceId: uuid('invoice_id').references((): AnyPgColumn => invoices.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   },
@@ -300,6 +312,7 @@ export const bookingChangeRequests = pgTable(
     check('booking_change_requests_kind_chk', sql`${t.kind} IN ('extend', 'cancel')`),
     check('booking_change_requests_status_chk', sql`${t.status} IN ('pending', 'approved', 'rejected')`),
     check('booking_change_requests_extend_end_chk', sql`${t.kind} <> 'extend' OR ${t.requestedEnd} IS NOT NULL`),
+    check('booking_change_requests_charge_nonneg_chk', sql`${t.chargePhp} IS NULL OR ${t.chargePhp} >= 0`),
   ],
 );
 
@@ -324,5 +337,71 @@ export const siteDocuments = pgTable(
     tenantIsolationPolicy(),
     index('site_documents_tenant_id_idx').on(t.tenantId),
     index('site_documents_project_site_id_idx').on(t.projectSiteId),
+  ],
+);
+
+// Return reminder points per tenant (0091); a tenant with no row gets DEFAULT_RETURN_REMINDERS.
+export const returnReminderSettings = pgTable(
+  'return_reminder_settings',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    daysBefore: smallint('days_before').array().notNull().default(sql`'{5,3,1}'`),
+    overdue: boolean('overdue').notNull().default(true),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    tenantIsolationPolicy(),
+    check('return_reminder_settings_days_chk', sql`${t.daysBefore} <@ '{7,5,3,2,1}'::smallint[]`),
+  ],
+);
+
+// Each tenant's current rental agreement text (0092); a tenant with no row gets DEFAULT_RENTAL_TERMS.
+export const rentalTermsSettings = pgTable(
+  'rental_terms_settings',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    body: text('body').notNull(),
+    version: integer('version').notNull().default(1),
+    updatedBy: uuid('updated_by').references(() => users.id),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [tenantIsolationPolicy(), check('rental_terms_settings_body_len_chk', sql`char_length(${t.body}) <= 50000`)],
+);
+
+// Append-only signing evidence (0092): the exact text signed, who, when, from where. One per rental + quotation.
+export const rentalAgreements = pgTable(
+  'rental_agreements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    rentalId: uuid('rental_id')
+      .notNull()
+      .references(() => rentals.id),
+    quotationId: uuid('quotation_id').references(() => quotations.id),
+    customerId: uuid('customer_id')
+      .notNull()
+      .references(() => customers.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    termsVersion: text('terms_version').notNull(),
+    termsBody: text('terms_body').notNull(),
+    signedName: text('signed_name').notNull(),
+    signaturePng: text('signature_png').notNull(),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (t) => [
+    tenantIsolationPolicy(),
+    unique('rental_agreements_rental_quotation_uq').on(t.tenantId, t.rentalId, t.quotationId).nullsNotDistinct(),
+    check('rental_agreements_name_chk', sql`char_length(${t.signedName}) between 2 and 120`),
+    check('rental_agreements_signature_chk', sql`char_length(${t.signaturePng}) <= 140000`),
   ],
 );

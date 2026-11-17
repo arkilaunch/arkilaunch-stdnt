@@ -845,6 +845,7 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
   const [adjActive, setAdjActive] = useState('');
   const [adjIdle, setAdjIdle] = useState('');
   const [adjWeather, setAdjWeather] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -869,6 +870,7 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
     try {
       const res = await apiPost<ApproveResult>(`/edtr/reconciliations/${recon.id}/approve`, {
         reconciliationId: recon.id,
+        ...(correctionReason.trim() ? { correctionReason: correctionReason.trim() } : {}),
         adjustments:
           adjusted || weatherAdjusted
             ? {
@@ -988,6 +990,8 @@ function ApproveModal({ item, machine, onClose, onApproved, toast }: ApproveModa
           )}
 
           <BillPreview query={preview} />
+          <Input id="correctionReason" label="Late correction reason (required if this week is closed)" value={correctionReason}
+            onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} />
 
           {explained && (
             <Surface radius="md" elevation="sm" className="border-error p-3">

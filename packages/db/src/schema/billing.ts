@@ -153,6 +153,7 @@ export const invoices = pgTable(
     rentalId: uuid('rental_id').references(() => rentals.id),
     truckRequestId: uuid('truck_request_id').references(() => truckRequests.id),
     invoiceType: text('invoice_type').notNull(), // deposit_deduction, weekly, final, booking, truck
+    billingWeekStart: date('billing_week_start'),
     amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
     status: text('status').notNull().default('draft'), // draft, issued, paid, void
     dueDate: timestamp('due_date', { withTimezone: true }).notNull(),
@@ -177,6 +178,7 @@ export const invoiceLineItems = pgTable(
       .notNull()
       .references(() => invoices.id),
     reconciliationId: uuid('reconciliation_id').references(() => edtrReconciliations.id),
+    equipmentId: uuid('equipment_id').references(() => equipment.id),
     description: text('description').notNull(),
     quantity: numeric('quantity', { precision: 10, scale: 2 }).notNull().default('1'),
     unitPrice: numeric('unit_price', { precision: 14, scale: 2 }).notNull(),
@@ -192,6 +194,49 @@ export const invoiceLineItems = pgTable(
     ),
   ],
 );
+
+// New rentals freeze a deposit cap for each assigned machine. Absence means the
+// rental predates per-machine deposits and keeps its original shared ledger.
+export const rentalEquipmentDeposits = pgTable('rental_equipment_deposits', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'restrict' }),
+  rentalId: uuid('rental_id').notNull().references(() => rentals.id),
+  equipmentId: uuid('equipment_id').notNull().references(() => equipment.id),
+  required: numeric('required', { precision: 14, scale: 2 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  tenantIsolationPolicy(),
+  unique('rental_equipment_deposits_unit_uq').on(t.tenantId, t.rentalId, t.equipmentId),
+  check('rental_equipment_deposits_nonneg_chk', sql`${t.required} >= 0`),
+]);
+
+export interface BillingWeekUsageLine {
+  equipmentId: string;
+  label: string;
+  serialNo: string;
+  hours: number;
+  unitPrice: number;
+  gross: number;
+  depositApplied: number;
+  net: number;
+}
+
+export const rentalBillingWeeks = pgTable('rental_billing_weeks', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'restrict' }),
+  rentalId: uuid('rental_id').notNull().references(() => rentals.id),
+  weekStart: date('week_start').notNull(),
+  noWorkDays: jsonb('no_work_days').$type<{ equipmentId: string; day: string; reason: string }[]>().notNull().default([]),
+  usageLines: jsonb('usage_lines').$type<BillingWeekUsageLine[]>().notNull().default([]),
+  billToSnapshot: jsonb('bill_to_snapshot').$type<{ companyName: string; tin: string | null; billingAddress: string | null }>().notNull(),
+  siteSnapshot: jsonb('site_snapshot').$type<{ projectSiteId: string; display: string }>().notNull(),
+  invoiceId: uuid('invoice_id').references(() => invoices.id),
+  closedAt: timestamp('closed_at', { withTimezone: true }).notNull().defaultNow(),
+  closedBy: uuid('closed_by').references(() => users.id),
+}, (t) => [
+  tenantIsolationPolicy(),
+  unique('rental_billing_weeks_rental_week_uq').on(t.tenantId, t.rentalId, t.weekStart),
+]);
 
 // No card/account data stored. provider_ref is globally unique (not per tenant) for
 // PayMongo webhook idempotency.

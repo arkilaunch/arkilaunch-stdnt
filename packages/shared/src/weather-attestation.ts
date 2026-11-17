@@ -16,6 +16,24 @@ export interface TimedReading {
   observed: WeatherObservation;
 }
 
+export interface WeatherCoverage {
+  expected: number;
+  recorded: number;
+  sufficient: boolean;
+}
+
+// A work interval needs almost every scheduled 30-minute reading before absence of weather is evidence.
+export function weatherCoverage(readings: TimedReading[], window: [number, number]): WeatherCoverage {
+  const expected = Math.ceil((window[1] - window[0]) / 30);
+  const slots = new Set(
+    readings
+      .filter((r) => r.minute >= window[0] && r.minute < window[1])
+      .map((r) => Math.floor((r.minute - window[0]) / 30)),
+  );
+  const recorded = slots.size;
+  return { expected, recorded, sufficient: expected > 0 && recorded > 0 && expected - recorded <= 1 };
+}
+
 export interface HalfDaySystemView {
   readingCount: number;
   maxWindKph: number;
@@ -30,7 +48,7 @@ export function summarizeReadings(
   window: [number, number],
   thresholds: WeatherThresholds = DEFAULT_WEATHER_THRESHOLDS,
 ): HalfDaySystemView {
-  const inside = readings.filter((r) => r.minute >= window[0] && r.minute <= window[1]);
+  const inside = readings.filter((r) => r.minute >= window[0] && r.minute < window[1]);
   let worstSeverity: WeatherSeverity = 'none';
   for (const r of inside) {
     const s = evaluateSeverity(r.observed, thresholds);
@@ -120,9 +138,11 @@ export function compareReportedWeather(
 ): WeatherDiscrepancy[] {
   const am = summarizeReadings(readings, day.amWindow ?? DEFAULT_AM_WINDOW, thresholds);
   const pm = summarizeReadings(readings, day.pmWindow ?? DEFAULT_PM_WINDOW, thresholds);
+  const amCoverage = weatherCoverage(readings, day.amWindow ?? DEFAULT_AM_WINDOW);
+  const pmCoverage = weatherCoverage(readings, day.pmWindow ?? DEFAULT_PM_WINDOW);
   const flags: WeatherDiscrepancy[] = [];
 
-  if (day.idleReason === 'weather' && (day.idleHours ?? 0) > 0 && am.readingCount + pm.readingCount > 0) {
+  if (day.idleReason === 'weather' && (day.idleHours ?? 0) > 0 && amCoverage.sufficient && pmCoverage.sufficient) {
     const whole: HalfDaySystemView = {
       readingCount: am.readingCount + pm.readingCount,
       maxWindKph: Math.max(am.maxWindKph, pm.maxWindKph),
@@ -140,7 +160,7 @@ export function compareReportedWeather(
       ['am', am, day.weatherAm],
       ['pm', pm, day.weatherPm],
     ] as const) {
-      if (view.worstSeverity === 'warning' && (reported === 'C' || reported === 'O')) {
+      if ((half === 'am' ? amCoverage : pmCoverage).sufficient && view.worstSeverity === 'warning' && (reported === 'C' || reported === 'O')) {
         flags.push({ rule: 'D2', half, reported, system: view });
       }
     }

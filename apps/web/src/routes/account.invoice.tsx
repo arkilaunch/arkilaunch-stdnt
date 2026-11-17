@@ -1,3 +1,4 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute, Link } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
 import { apiErrorText, apiPost, followCheckout } from '../lib/api-client.js';
@@ -67,10 +68,16 @@ function PayWeekly({ invoiceId }: { invoiceId: string }) {
 
 function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
   const meta = STATUS_META[invoice.status] ?? STATUS_META['draft']!;
-  const subtotal = invoice.lineItems.reduce((sum, line) => sum + line.amount, 0);
+  const weekly = invoice.rentalStatement?.usageLines ?? [];
+  const subtotal = weekly.length ? weekly.reduce((sum, line) => sum + line.gross, 0) : invoice.lineItems.reduce((sum, line) => sum + line.amount, 0);
+  const depositApplied = weekly.reduce((sum, line) => sum + line.depositApplied, 0);
+  const displayLines = weekly.length ? weekly.map((line) => ({ id: line.equipmentId, description: `${line.label} (SN ${line.serialNo})\nPeriod: ${invoice.rentalStatement!.weekStart} - ${invoice.rentalStatement!.weekEnd}`,
+    quantity: line.hours, unit: 'hrs', unitPrice: line.unitPrice, amount: line.gross }))
+    : invoice.lineItems.map((line) => ({ ...line, unit: invoice.rentalId && ['booking', 'deposit'].includes(invoice.invoiceType) ? 'item' : 'hrs' }));
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2" data-print-hide><DocumentDownload path={`/me/invoices/${invoice.id}/pdf`} label="Download invoice (PDF)" />{invoice.status==='paid' && <DocumentDownload path={`/me/invoices/${invoice.id}/receipt/pdf`} label="Download receipt (PDF)" />}</div>
       <PrintFrame
         title={invoice.status === 'paid' ? 'Invoice (paid)' : 'Invoice'}
         docRef={shortCode('invoice', invoice.id)}
@@ -83,6 +90,10 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
                 ['Billing address', invoice.billTo.billingAddress ?? '--'],
               ] as [string, string][])
             : []),
+          ...(invoice.rentalStatement ? ([
+            ['Heavy equipment', invoice.rentalStatement.equipment.join(', ') || '--'],
+            ['Job site', invoice.rentalStatement.jobSite],
+          ] as [string, string][]) : []),
           [invoice.truckRequestId ? 'Truck service' : 'Equipment rental', invoice.bookingCode ?? '--'],
           ['Type', formatInvoiceType(invoice.invoiceType)],
           ['Due', formatDate(invoice.dueDate)],
@@ -92,13 +103,13 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
         ]}
       />
       <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px)_1fr]">
-        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
+        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5 print:hidden">
           <div className="flex flex-col items-start gap-3">
             <StatusPill tone={meta.tone} label={formatStatus(invoice.status)} icon={meta.icon} />
             <div>
               <p className="font-mono text-display-md text-text">{formatPeso(invoice.amount)}</p>
               <p className="text-sm font-medium text-text-muted">
-                Total amount due
+                Invoice total
               </p>
             </div>
           </div>
@@ -111,10 +122,10 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             />
             <SummaryRow label="Due" value={formatDate(invoice.dueDate)} />
           </div>
-          {invoice.invoiceType === 'weekly' && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
+          {['weekly', 'weekly_correction', 'extension', 'damage'].includes(invoice.invoiceType) && invoice.status === 'issued' && <PayWeekly invoiceId={invoice.id} />}
         </Surface>
 
-        <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-4 p-5">
+        <Surface radius="md" elevation="sm" className={`flex min-w-0 flex-col gap-4 p-5 ${!invoice.edtrEvidence ? 'print:hidden' : ''}`}>
           <h2 className="text-sm font-medium text-text-muted">
             Evidence for this charge
           </h2>
@@ -146,33 +157,38 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
       <Surface radius="md" elevation="sm" className="overflow-hidden p-0">
         <div className="flex flex-wrap items-center justify-between gap-2 bg-success px-4 py-3 text-white">
           <h2 className="text-sm font-medium">
-            Itemized costs
+            Billing statement
           </h2>
           <p className="text-sm">Issued {formatDate(invoice.createdAt)}</p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] border-collapse text-sm">
+          <table className="w-full min-w-[680px] border-collapse text-sm">
+            <colgroup><col style={{width:'6%'}} /><col style={{width:'42%'}} /><col style={{width:'10%'}} /><col style={{width:'10%'}} /><col style={{width:'16%'}} /><col style={{width:'16%'}} /></colgroup>
             <thead>
               <tr className="border-b border-border text-left">
+                <th className="px-4 py-3 text-sm font-medium text-text-muted">No.</th>
                 <th className="px-4 py-3 text-sm font-medium text-text-muted">
-                  Description
+                  Particulars
                 </th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
-                  Qty
+                  Quantity
                 </th>
+                <th className="px-4 py-3 text-sm font-medium text-text-muted">Unit</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
                   Unit price
                 </th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-text-muted">
-                  Total
+                  Amount
                 </th>
               </tr>
             </thead>
             <tbody>
-              {invoice.lineItems.map((line) => (
+              {displayLines.map((line, index) => (
                 <tr key={line.id} className="border-b border-border last:border-b-0">
-                  <td className="px-4 py-3 text-text">{condenseIds(line.description)}</td>
+                  <td className="px-4 py-3 font-mono text-text">{index + 1}</td>
+                  <td className="whitespace-pre-line px-4 py-3 text-text">{condenseIds(line.description)}</td>
                   <td className="px-4 py-3 text-right font-mono text-text">{line.quantity}</td>
+                  <td className="px-4 py-3 text-text">{line.unit}</td>
                   <td className="px-4 py-3 text-right font-mono text-text">
                     {formatPeso(line.unitPrice)}
                   </td>
@@ -184,11 +200,18 @@ function InvoiceDetail({ invoice }: { invoice: InvoiceDetailResponse }) {
             </tbody>
           </table>
         </div>
-        <div className="flex flex-col items-end gap-2 border-t border-border bg-surface-sunk px-4 py-4">
+        <div className="flex flex-col items-end gap-2 print:break-inside-avoid border-t border-border bg-surface-sunk px-4 py-4">
           <div className="flex w-full max-w-xs items-center justify-between text-sm">
-            <span className="text-text-muted">Subtotal</span>
+            <span className="text-text-muted">Gross charges</span>
             <span className="font-mono text-text">{formatPeso(subtotal)}</span>
           </div>
+          {weekly.filter((line) => line.depositApplied > 0).map((line) => <div key={line.equipmentId} className="flex w-full max-w-xs items-center justify-between gap-3 text-sm">
+            <span className="text-text-muted">Deposit applied: {line.label} (SN {line.serialNo})</span>
+            <span className="font-mono text-text">-{formatPeso(line.depositApplied)}</span>
+          </div>)}
+          {depositApplied > 0 && <div className="flex w-full max-w-xs items-center justify-between text-sm font-medium">
+            <span>Deposit applied</span><span className="font-mono">-{formatPeso(depositApplied)}</span>
+          </div>}
           <div className="flex w-full max-w-xs items-center justify-between border-t border-border pt-2">
             <span className="text-sm font-medium text-text">
               Total
@@ -208,6 +231,7 @@ function AccountInvoicePage() {
 
   return (
     <div className="flex flex-col gap-5">
+      <div data-print-hide>
       <PageHeader
         title={`Invoice ${shortCode('invoice', invoiceId)}`}
         description="What was charged, and the evidence behind it."
@@ -215,11 +239,12 @@ function AccountInvoicePage() {
           <>
             <Link to="/account/bookings" data-print-hide className={buttonClass('ghost')}>Back</Link>
             <Button variant="secondary" data-print-hide onClick={() => window.print()}>
-              Print statement
+              Print invoice
             </Button>
           </>
         }
       />
+      </div>
       <DataPanel
         title="Invoice"
         options={invoicesQueries.detail(invoiceId)}

@@ -1,3 +1,4 @@
+import { RentalQaModule } from './rental-qa/rental-qa.module.js';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -32,6 +33,7 @@ import { PermissionsGuard } from './common/guards/permissions.guard.js';
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
     AuthModule,
     HealthModule,
+    RentalQaModule,
     TenantsModule,
     UsersModule,
     QuotesModule,

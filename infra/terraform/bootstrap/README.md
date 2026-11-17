@@ -54,3 +54,20 @@ storage account name isn't sensitive. Plus every app secret from
 provisions the Document Intelligence resource directly and feeds its
 `endpoint`/`primary_access_key` outputs into the Container App secrets (see
 `infra/terraform/modules/document_intelligence`).
+
+## 4. Re-bootstrapping into a new subscription
+
+Done once on 2026-11-17 when the Visual Studio Enterprise subscription became
+unreachable (`AADSTS5000224`) and the backend moved to Azure for Students.
+
+- Globally unique names stay taken for as long as the old subscription's
+  resources exist, whether or not we can reach them. That is why the state
+  account is `starkilaunchtfstate2`, the registry `acrarkilaunch<env>2` and
+  the dev Document Intelligence resource `di-arkilaunch-dev2`. Bump the
+  suffix again if this ever repeats.
+- This directory keeps **local** state. Before `terraform apply`, move the
+  existing `terraform.tfstate` / `terraform.tfstate.backup` aside (both are
+  gitignored and point at the dead subscription), or apply will try to refresh
+  resources it cannot reach.
+- `az login` with the account that owns the new subscription, then
+  `az account set --subscription <id>` before step 1.

@@ -21,6 +21,11 @@ export const InvoiceSummaryResponseSchema = z.object({
   rentalId: z.string().uuid().nullable(),
   truckRequestId: z.string().uuid().nullable(),
   bookingCode: z.string().nullable(),
+  customerId: z.string().uuid().nullable().optional(),
+  projectSiteId: z.string().uuid().nullable().optional(),
+  customerName: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  bookedBy: z.string().nullable().optional(),
   invoiceType: z.string(),
   amount: z.number(),
   status: z.string(),
@@ -62,6 +67,13 @@ export type AuditTrailEntry = z.infer<typeof AuditTrailEntrySchema>;
 
 export const InvoiceDetailResponseSchema = InvoiceSummaryResponseSchema.extend({
   lineItems: z.array(InvoiceLineItemResponseSchema),
+  rentalStatement: z.object({
+    jobSite: z.string(),
+    equipment: z.array(z.string()),
+    weekStart: z.string().nullable(),
+    weekEnd: z.string().nullable(),
+    usageLines: z.array(z.object({ equipmentId: z.string().uuid(), label: z.string(), serialNo: z.string(), hours: z.number(), unitPrice: z.number(), gross: z.number(), depositApplied: z.number(), net: z.number() })),
+  }).nullable().optional(),
   billTo: z
     .object({ companyName: z.string(), tin: z.string().nullable(), billingAddress: z.string().nullable() })
     .nullable(),
@@ -103,6 +115,10 @@ export interface StatementWeek {
   customerPays: number;
   paid: number;
   outstanding: number;
+  invoiceId?: string | null;
+  correctionInvoiceIds?: string[];
+  machines?: { equipmentId: string; label: string; serialNo: string; hours: number; amount: number; fromDeposit: number;
+    invoiced: number; unbilled: number; paid: number; outstanding: number; depositRemaining: number | null; invoiceId: string | null; correctionInvoiceIds?: string[] }[];
 }
 
 export interface StatementOfAccount {
@@ -115,6 +131,7 @@ export interface StatementOfAccount {
   weeks: StatementWeek[];
   invoices: { id: string; invoiceType: string; amount: number; status: string; createdAt: string; dueDate: string }[];
   payments: { id: string; invoiceId: string; method: string; amount: number; status: string; createdAt: string }[];
+  corrections?: { equipmentId: string; label: string; serialNo: string; day: string; gross: number; fromDeposit: number; invoiceId: string | null; reason: string }[];
   deposit: { required: number; deducted: number; remaining: number };
   totals: {
     // Excludes deposit deductions: those are paid from the deposit already on the booking invoice.

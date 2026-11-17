@@ -132,6 +132,36 @@ function WeeksTable({ statement }: { statement: StatementOfAccount }) {
           </tr>
         </tfoot>
       </table>
+      {statement.weeks.some((week) => (week.machines?.length ?? 0) > 0) && (
+        <div className="mt-5 space-y-4">
+          <h3 className="text-sm font-semibold text-text">Charges by machine</h3>
+          {statement.weeks.map((week) => <div key={week.weekStart} className="overflow-x-auto">
+            <p className="mb-2 text-xs font-medium text-text-muted">{range(week.weekStart, week.weekEnd)}{week.invoiceId ? ` · Invoice ${shortCode('invoice', week.invoiceId)}` : ' · Covered by deposit or awaiting billing'}</p>
+            <table className="w-full min-w-[900px] border-collapse text-sm">
+              <thead><tr className="border-b border-border text-left text-text-muted">
+                <th className="py-2 pr-3">Machine</th><th className="py-2 pr-3 text-right">Hours</th><th className="py-2 pr-3 text-right">Gross usage</th>
+                <th className="py-2 pr-3 text-right">Deposit applied</th><th className="py-2 pr-3 text-right">Invoiced</th>
+                <th className="py-2 pr-3 text-right">Unbilled</th><th className="py-2 pr-3 text-right">Paid</th>
+                <th className="py-2 pr-3 text-right">Outstanding</th><th className="py-2 text-right">Deposit remaining</th>
+              </tr></thead>
+              <tbody>{week.machines?.map((unit) => <tr key={unit.equipmentId} className="border-b border-border last:border-b-0">
+                <td className="py-2 pr-3 text-text">{unit.label} <span className="text-text-muted">SN {unit.serialNo}</span>
+                  {unit.invoiceId && <span className="block text-xs text-text-muted">Invoice {shortCode('invoice', unit.invoiceId)}</span>}
+                  {unit.correctionInvoiceIds?.map((id) => <span key={id} className="block text-xs text-text-muted">Correction {shortCode('invoice', id)}</span>)}
+                </td>
+                <td className="py-2 pr-3 text-right font-mono">{formatHours(unit.hours)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.amount)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.fromDeposit)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.invoiced)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.unbilled)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.paid)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{formatPeso(unit.outstanding)}</td>
+                <td className="py-2 text-right font-mono">{unit.depositRemaining === null ? 'Shared deposit' : formatPeso(unit.depositRemaining)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>) }
+        </div>
+      )}
     </div>
     </div>
   );
@@ -245,15 +275,23 @@ function StatementPage({ scope, rentalId }: { scope: Scope; rentalId: string }) 
               </tbody>
             </table>
           </Surface>
+          {!!s.corrections?.length && <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5 print:border-0 print:p-0 print:shadow-none">
+            <h2 className="text-heading-md text-text">Reviewed late EDTR corrections</h2>
+            {s.corrections.map((correction, index) => <div key={`${correction.equipmentId}-${correction.day}-${index}`} className="border-b border-border pb-2 text-sm last:border-b-0">
+              <p className="font-medium text-text">{correction.label} (SN {correction.serialNo}) · {formatDate(correction.day)}</p>
+              <p className="text-text-muted">{correction.reason}</p>
+              <p>Gross {formatPeso(correction.gross)} · Deposit applied {formatPeso(correction.fromDeposit)} · {correction.invoiceId ? `Correction invoice ${shortCode('invoice', correction.invoiceId)}` : 'Fully covered by deposit; no payable invoice'}</p>
+            </div>)}
+          </Surface>}
           <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-5 print:border-0 print:p-0 print:shadow-none">
             <h2 className="text-heading-md text-text">Payments</h2>
-            {s.payments.filter((p) => p.status === 'paid').length === 0 ? (
+            {s.payments.filter((p) => p.status === 'paid' || p.status === 'refunded').length === 0 ? (
               <p className="text-sm text-text-muted">No payments recorded.</p>
             ) : (
               s.payments
-                .filter((p) => p.status === 'paid')
+                .filter((p) => p.status === 'paid' || p.status === 'refunded')
                 .map((p) => (
-                  <Row key={p.id} label={`${formatDate(p.createdAt)} · ${formatStatus(p.method)} · ${shortCode('invoice', p.invoiceId)}`} value={formatPeso(p.amount)} />
+                  <Row key={p.id} label={`${formatDate(p.createdAt)} · ${formatStatus(p.method)} · ${formatStatus(p.status)} · ${shortCode('invoice', p.invoiceId)}`} value={`${p.status === 'refunded' ? '-' : ''}${formatPeso(p.amount)}`} />
                 ))
             )}
           </Surface>

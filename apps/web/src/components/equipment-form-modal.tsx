@@ -18,7 +18,7 @@ const FUEL_TYPES = ['Diesel', 'Gasoline', 'Electric', 'Hybrid', 'LPG'];
 const STATUSES = [
   { value: 'available', label: 'Available' },
   { value: 'deployed', label: 'Deployed' },
-  { value: 'maintenance', label: 'In maintenance' },
+  { value: 'maintenance', label: 'Unavailable (repair)' },
 ];
 
 const TEXTAREA_CLASSES =

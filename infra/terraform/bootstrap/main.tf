@@ -45,8 +45,8 @@ variable "github_subject_prefix" {
 
 variable "location" {
   type        = string
-  default     = "southeastasia"
-  description = "Southeast Asia (Singapore) region, per the PH data-residency intent in docs/clr-arkilaunch.md gap E1. Azure DI model/region availability confirmed (docs/cr-arkilaunch-azure-di-provisioning.md); RA 10173 cross-border transfer basis (AIA-R7) remains open."
+  default     = "japaneast"
+  description = "Japan East: the Azure for Students policy blocks southeastasia. Original intent was Southeast Asia (Singapore) for PH data residency in docs/clr-arkilaunch.md gap E1. Azure DI model/region availability confirmed (docs/cr-arkilaunch-azure-di-provisioning.md); RA 10173 cross-border transfer basis (AIA-R7) remains open."
 }
 
 resource "azurerm_resource_group" "state" {
@@ -56,7 +56,7 @@ resource "azurerm_resource_group" "state" {
 
 # GRS: state must survive a single-region outage.
 resource "azurerm_storage_account" "state" {
-  name                     = "starkilaunchtfstate"
+  name                     = "starkilaunchtfstate2"
   resource_group_name      = azurerm_resource_group.state.name
   location                 = azurerm_resource_group.state.location
   account_tier             = "Standard"

@@ -78,6 +78,8 @@ locals {
     ENABLE_OCR_PIPELINE          = tostring(var.enable_ocr_pipeline)
     ENABLE_OCR_KYC               = tostring(var.enable_ocr_kyc)
     ENABLE_WEATHER_POLL          = tostring(var.enable_weather_poll)
+    ENABLE_WEATHER_HISTORY       = tostring(var.enable_weather_history)
+    ENABLE_WEATHER_RETENTION     = tostring(var.enable_weather_retention)
     WEATHER_POLL_MAX_SITES       = tostring(var.weather_poll_max_sites)
     VAPID_PUBLIC_KEY             = var.vapid_public_key
     VAPID_SUBJECT                = var.vapid_subject
@@ -98,7 +100,7 @@ module "resource_group" {
 
 module "container_registry" {
   source              = "../../modules/container_registry"
-  name                = "acrarkilaunch${local.env}" # alphanumeric only, globally unique
+  name                = "acrarkilaunch${local.env}2" # alphanumeric only, globally unique; "2": old sub still holds the unsuffixed name
   resource_group_name = module.resource_group.name
   location            = var.location
   tags                = local.tags
@@ -114,7 +116,7 @@ module "log_analytics" {
 
 module "document_intelligence" {
   source              = "../../modules/document_intelligence"
-  name                = "di-${local.name}"
+  name                = "di-${local.name}2" # "2": old sub still holds di-arkilaunch-dev
   resource_group_name = module.resource_group.name
   location            = var.location
   sku_name            = "F0" # dev: smoke-test tier only, never a real multi-page document
@@ -195,6 +197,25 @@ module "weather_briefing_job" {
   depends_on                   = [module.acr_identity]
 }
 
+module "weather_retention_job" {
+  count                        = var.enable_weather_retention ? 1 : 0
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-weather-retention"
+  entrypoint                   = "weather-retention"
+  cron_expression              = "0 18 * * *" # 02:00 Manila
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
 module "edtr_ocr_worker_job" {
   source                       = "../../modules/cron_job"
   name                         = "${local.name}-edtr-ocr-worker"
@@ -255,6 +276,24 @@ module "hold_expiry_job" {
   name                         = "${local.name}-hold-expiry"
   entrypoint                   = "hold-expiry"
   cron_expression              = var.hold_expiry_cron
+  resource_group_name          = module.resource_group.name
+  location                     = var.location
+  container_app_environment_id = module.container_apps_environment.id
+  registry_login_server        = module.container_registry.login_server
+  identity_id                  = module.acr_identity.id
+  image_tag                    = var.image_tag
+  env_vars                     = local.common_env_vars
+  secrets                      = local.secrets
+  secret_env_vars              = local.secret_env_vars
+  tags                         = local.tags
+  depends_on                   = [module.acr_identity]
+}
+
+module "return_reminders_job" {
+  source                       = "../../modules/cron_job"
+  name                         = "${local.name}-return-reminders"
+  entrypoint                   = "return-reminders"
+  cron_expression              = var.return_reminders_cron
   resource_group_name          = module.resource_group.name
   location                     = var.location
   container_app_environment_id = module.container_apps_environment.id

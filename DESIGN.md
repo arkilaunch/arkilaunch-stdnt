@@ -255,6 +255,8 @@ No `backdrop-filter: blur()` on content surfaces (perf on cheap Android); the mo
 
 **Platform public wordmark, benefit cards and dashboard preview (CR: platform-landing-branding; feature-card illustrations removed, CR: platform-landing-no-feature-icons; static dashboard image, CR: platform-landing-dashboard-image):** the marketing navigation uses the ArkiLaunch wordmark on its own, without a separate icon. The four product-benefit cards use a clean typographic layout with their 01–04 number labels as the only decorative accent; do not add icons or illustrations. The hero displays a direct screenshot of the ArkiLaunch dashboard with a subtle shadow and no device mockup. Capture it at landscape viewport size with synthetic sample responses; mark it as illustrative sample data. Use responsive WebP sources in the hero and platform social metadata. The screenshot is static, with no scroll-driven hero effect or embedded live application.
 
+**Tenant storefront home (S22 `/` on a tenant host, CR: storefront-landing, 2026-10-16).** Hero first: the tenant tagline as H1, the first sentence of the tenant's About as subhead (fallback copy otherwise), one primary Browse equipment action and, when signed out, a secondary Create account. Hold the hero behind a skeleton until the tenant and fleet load, so the default tagline and image never flash; with no hero or fleet photo the hero is single-column. The equipment preview shows a skeleton while loading, a retry on error, and an empty state when no machine is listed; only a real search miss reads "No equipment matches". The search and See all carry `?q=` into `/equipment`. A How renting works strip follows with four numbered steps (browse and see prices, request a quote, verify your company, sign and pay), styled like the platform onboarding steps: number labels are the only accent, it reveals once on scroll and stays visible under reduced motion. The footer year is live.
+
 ### Domain components (Yardboard-specific)
 
 **Status Pill**; compact state marker for weather, fleet and reconciliation detail. Filled chip, `--radius-xs`, icon + label, mono value where numeric. Draws its color from the weather or reconciliation scale (§2.1). Never color-only; the label carries the meaning. Dense list rows use the quieter Status Badge, including `review`; the review-queue link in the app bar carries an icon, label and plain count. States: `match`, `review`, `discrepancy`, `failed`, `approved` (recon); `available`, `deployed`, `maintenance-due`, `retired` (fleet); weather `clear/yellow/orange/red/stale`. **Built:** `apps/web/src/components/status-pill.tsx`.
@@ -479,6 +481,12 @@ Regenerates this document from shipped tokens/components after each significant 
 **Last documented:** N/A until first run. Token layer and console primitives shipped 2026-08-02 (CR: dsd-marketing-tier). The build-status markers and the `weather-stale` rule this file carried were hand-added and lived only here until `cr-arkilaunch-doc-reconcile-2026-09-19.md` wrote them back into the DSD; this file is materialized from the DSD again, by hand, since `materialize.py` belongs to the external FMD engine and is not vendored in this repo.
 
 ---
+
+### 8.7 Rental QA surfaces and document layouts (2026-10-20)
+
+[Approved CR](docs/cr-arkilaunch-rental-qa-documents.md): signing uses the shared accessible modal with bounded viewport scrolling, keyboard focus handling, retained drafts, a pinned confirmation action and a compact checkout summary. Condition selection retains notes and presents servicing/repair next steps. Deployment lists each equipment window with individual and bulk-due actions. Tenant storefronts use a branded hero and two service cards with optional qualified starting prices; individual fleet-preview prices stay hidden.
+
+Print/PDF outputs share a tenant letterhead, proportional logo, configured accent and font, document reference, readable hierarchy, wrapped descriptions, repeated table headings and numbered pages. Keep headings with their first content and signatures with their labels; avoid clipping, overlapping footers and empty pages. Missing branding uses neutral text styling. EDTR form geometry is preserved.
 
 ## 9. Asset Governance
 

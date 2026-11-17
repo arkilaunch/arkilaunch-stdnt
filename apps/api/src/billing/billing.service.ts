@@ -1,7 +1,9 @@
+import { renderAgreementPdf, renderInvoicePdf, renderReceiptPdf } from './document-pdf.js';
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { and, asc, desc, eq, gte, inArray, isNotNull, lt, ne, type SQL } from 'drizzle-orm';
 import {
   type Tx,
+  addresses,
   auditLogs,
   customers,
   depositAccruals,
@@ -9,10 +11,17 @@ import {
   users,
   edtr,
   edtrReconciliations,
+  equipment,
+  equipmentAssignments,
+  equipmentTypes,
   invoiceLineItems,
   invoices,
   payments,
+  projectSites,
   rentals,
+  rentalAgreements,
+  rentalBillingWeeks,
+  fundedEquipmentDeposits,
   resolveDepositLedger,
   truckRequests,
   withTenantTx,
@@ -48,12 +57,13 @@ export function isoWeek(day: string): { weekStart: string; weekEnd: string } {
   return { weekStart: d.toISOString().slice(0, 10), weekEnd: end.toISOString().slice(0, 10) };
 }
 
-function toInvoiceSummary(row: typeof invoices.$inferSelect, codes: Map<string, string>): InvoiceSummaryResponse {
+function toInvoiceSummary(row: typeof invoices.$inferSelect, codes: Map<string, string>, context?: Pick<InvoiceSummaryResponse, 'customerId' | 'projectSiteId' | 'customerName' | 'location' | 'bookedBy'>): InvoiceSummaryResponse {
   return {
     id: row.id,
     rentalId: row.rentalId,
     truckRequestId: row.truckRequestId,
     bookingCode: invoiceBookingRef(row, codes)?.code ?? null,
+    ...context,
     invoiceType: row.invoiceType,
     amount: Number(row.amount),
     status: row.status,
@@ -152,7 +162,51 @@ export class BillingService {
         rentalIds: rows.map((row) => row.rentalId),
         truckRequestIds: rows.map((row) => row.truckRequestId),
       });
-      return { items: rows.map((row) => toInvoiceSummary(row, codes)), total };
+      const rentalIds = rows.map((row) => row.rentalId).filter((id): id is string => !!id);
+      const truckIds = rows.map((row) => row.truckRequestId).filter((id): id is string => !!id);
+      const rentalRows = rentalIds.length
+        ? await tx.select({ id: rentals.id, customerId: rentals.customerId, siteId: rentals.projectSiteId }).from(rentals).where(inArray(rentals.id, rentalIds))
+        : [];
+      const truckRows = truckIds.length
+        ? await tx.select({ id: truckRequests.id, customerId: truckRequests.customerId, siteId: truckRequests.projectSiteId, requestedBy: truckRequests.requestedBy, dropoff: truckRequests.dropoff }).from(truckRequests).where(inArray(truckRequests.id, truckIds))
+        : [];
+      const bookingActors = rentalIds.length
+        ? await tx.select({ rentalId: auditLogs.entityId, userId: auditLogs.actorId }).from(auditLogs)
+            .where(and(eq(auditLogs.entity, 'rentals'), eq(auditLogs.action, 'CREATE'), inArray(auditLogs.entityId, rentalIds)))
+        : [];
+      const customerIds = [...new Set([...rentalRows, ...truckRows].map((row) => row.customerId).filter((id): id is string => !!id))];
+      const customerRows = customerIds.length
+        ? await tx.select({ id: customers.id, name: customers.companyName }).from(customers).where(inArray(customers.id, customerIds))
+        : [];
+      const siteIds = [...new Set([...rentalRows, ...truckRows].map((row) => row.siteId).filter((id): id is string => !!id))];
+      const siteRows = siteIds.length
+        ? await tx.select({ id: projectSites.id, line1: addresses.line1, barangay: addresses.barangay, city: addresses.city, province: addresses.province })
+            .from(projectSites).innerJoin(addresses, eq(addresses.id, projectSites.addressId)).where(inArray(projectSites.id, siteIds))
+        : [];
+      const userIds = [...new Set([...bookingActors.map((row) => row.userId), ...truckRows.map((row) => row.requestedBy)].filter((id): id is string => !!id))];
+      const userRows = userIds.length
+        ? await tx.select({ id: users.id, first: users.firstName, last: users.lastName }).from(users).where(inArray(users.id, userIds))
+        : [];
+      const byRental = new Map(rentalRows.map((row) => [row.id, row]));
+      const byTruck = new Map(truckRows.map((row) => [row.id, row]));
+      const actorByRental = new Map(bookingActors.map((row) => [row.rentalId, row.userId]));
+      const byCustomer = new Map(customerRows.map((row) => [row.id, row]));
+      const bySite = new Map(siteRows.map((row) => [row.id, [row.line1, row.barangay, row.city, row.province].filter(Boolean).join(', ')]));
+      const byUser = new Map(userRows.map((row) => [row.id, [row.first, row.last].filter(Boolean).join(' ')]));
+      return { items: rows.map((row) => {
+        const rental = row.rentalId ? byRental.get(row.rentalId) : undefined;
+        const truck = row.truckRequestId ? byTruck.get(row.truckRequestId) : undefined;
+        const customerId = rental?.customerId ?? truck?.customerId ?? null;
+        const company = customerId ? byCustomer.get(customerId) : undefined;
+        const siteId = rental?.siteId ?? truck?.siteId;
+        return toInvoiceSummary(row, codes, {
+          customerId,
+          projectSiteId: siteId ?? null,
+          customerName: company?.name ?? null,
+          location: (siteId ? bySite.get(siteId) : null) || truck?.dropoff || null,
+          bookedBy: (truck ? byUser.get(truck.requestedBy) : rental ? byUser.get(actorByRental.get(rental.id) ?? '') : null) || null,
+        });
+      }), total };
     });
   }
 
@@ -168,7 +222,8 @@ export class BillingService {
       const lineItemRows = await tx
         .select()
         .from(invoiceLineItems)
-        .where(eq(invoiceLineItems.invoiceId, id));
+        .where(eq(invoiceLineItems.invoiceId, id))
+        .orderBy(asc(invoiceLineItems.description), asc(invoiceLineItems.id));
       const auditRows = await tx
         .select()
         .from(auditLogs)
@@ -182,6 +237,36 @@ export class BillingService {
         .where(and(eq(payments.invoiceId, id), eq(payments.status, 'paid'), isNotNull(payments.receiptNo)))
         .limit(1);
 
+      const [weekSnapshot] = invoice.rentalId && invoice.billingWeekStart && ['weekly', 'weekly_correction'].includes(invoice.invoiceType)
+        ? await tx.select().from(rentalBillingWeeks)
+            .where(and(eq(rentalBillingWeeks.tenantId, ctx.tenantId), eq(rentalBillingWeeks.rentalId, invoice.rentalId), eq(rentalBillingWeeks.weekStart, invoice.billingWeekStart))).limit(1)
+        : [];
+      let rentalStatement: InvoiceDetailResponse['rentalStatement'] = null;
+      if (invoice.rentalId) {
+        const [rental] = await tx.select({ siteId: rentals.projectSiteId }).from(rentals)
+          .where(and(eq(rentals.tenantId, ctx.tenantId), eq(rentals.id, invoice.rentalId))).limit(1);
+        const [site] = rental ? await tx.select({ line1: addresses.line1, barangay: addresses.barangay, city: addresses.city, province: addresses.province })
+          .from(projectSites).innerJoin(addresses, eq(addresses.id, projectSites.addressId))
+          .where(and(eq(projectSites.tenantId, ctx.tenantId), eq(projectSites.id, rental.siteId))).limit(1) : [];
+        const lineIds = lineItemRows.map((line) => line.equipmentId).filter((value): value is string => !!value);
+        const assignmentIds = lineIds.length ? [] : await tx.select({ equipmentId: equipmentAssignments.equipmentId })
+          .from(equipmentAssignments).where(and(eq(equipmentAssignments.tenantId, ctx.tenantId), eq(equipmentAssignments.rentalId, invoice.rentalId)));
+        const ids = [...new Set([...lineIds, ...assignmentIds.map((row) => row.equipmentId)])];
+        const units = ids.length ? await tx.select({ id: equipment.id, typeName: equipmentTypes.name, model: equipment.model, serialNo: equipment.serialNo })
+          .from(equipment).innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+          .where(and(eq(equipment.tenantId, ctx.tenantId), inArray(equipment.id, ids))) : [];
+        rentalStatement = {
+          jobSite: weekSnapshot?.siteSnapshot.display ?? (site ? [site.line1, site.barangay, site.city, site.province].filter(Boolean).join(', ') : '—'),
+          equipment: weekSnapshot && ['weekly', 'weekly_correction'].includes(invoice.invoiceType) ? weekSnapshot.usageLines
+            .filter((unit) => invoice.invoiceType === 'weekly' || lineIds.includes(unit.equipmentId))
+            .map((unit) => `${unit.label} (SN ${unit.serialNo})`)
+            : units.map((unit) => `${unit.typeName} ${unit.model} (SN ${unit.serialNo})`),
+          weekStart: weekSnapshot?.weekStart ?? null,
+          weekEnd: weekSnapshot ? new Date(new Date(`${weekSnapshot.weekStart}T00:00:00Z`).getTime() + 6 * 86_400_000).toISOString().slice(0, 10) : null,
+          usageLines: invoice.invoiceType === 'weekly' ? weekSnapshot?.usageLines ?? [] : [],
+        };
+      }
+
       return {
         ...toInvoiceSummary(
           invoice,
@@ -194,7 +279,8 @@ export class BillingService {
           unitPrice: Number(item.unitPrice),
           amount: Number(item.amount),
         })),
-        billTo: await billTo(tx, invoice),
+        rentalStatement,
+        billTo: weekSnapshot?.billToSnapshot ?? await billTo(tx, invoice),
         edtrEvidence,
         receiptNo: receipt?.receiptNo ?? null,
         auditTrail: auditRows.map((row) => ({ action: row.action, actorId: row.actorId, timestamp: row.timestamp })),
@@ -209,11 +295,16 @@ export class BillingService {
       if (!rental) throw new NotFoundException({ error: 'rental_not_found' });
 
       const ledger = await resolveDepositLedger(tx, rentalId, ctx.tenantId);
+      let fundedRequired = ledger.depositRequired;
+      if (rental.depositMode === 'per_machine') {
+        const funded = await fundedEquipmentDeposits(tx, ctx.tenantId, rentalId);
+        fundedRequired = round2HalfUp([...funded.values()].reduce((sum, amount) => sum + amount, 0));
+      }
       return {
         rentalId,
         depositRequired: ledger.depositRequired,
         totalDeducted: ledger.totalDeducted,
-        balanceRemaining: round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted)),
+        balanceRemaining: round2HalfUp(Math.max(0, fundedRequired - ledger.totalDeducted)),
         unbilledAccrued: ledger.unbilledAccrued,
         hoursUsed: ledger.hoursUsed,
         hoursOrdered: ledger.hoursOrdered,
@@ -251,19 +342,40 @@ export class BillingService {
       const deductionIds = invoiceRows.filter((i) => i.invoiceType === 'deposit_deduction').map((i) => i.id);
       const deducted = deductionIds.length
         ? await tx
-            .select({ hours: invoiceLineItems.quantity, amount: invoiceLineItems.amount, day: edtr.reportDate })
+            .select({ hours: invoiceLineItems.quantity, amount: invoiceLineItems.amount, day: edtr.reportDate, equipmentId: edtr.equipmentId })
             .from(invoiceLineItems)
             .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, invoiceLineItems.reconciliationId))
             .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
             .where(and(inArray(invoiceLineItems.invoiceId, deductionIds), isNotNull(invoiceLineItems.reconciliationId)))
         : [];
       const accrued = await tx
-        .select({ hours: depositAccruals.hours, amount: depositAccruals.amount, invoiceId: depositAccruals.invoiceId, day: edtr.reportDate })
+        .select({ id: depositAccruals.id, hours: depositAccruals.hours, amount: depositAccruals.amount, invoiceId: depositAccruals.invoiceId, day: edtr.reportDate, equipmentId: edtr.equipmentId })
         .from(depositAccruals)
         .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
         .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
         .where(eq(depositAccruals.rentalId, rentalId));
 
+      const equipmentIds = [...new Set([...deducted, ...accrued].map((row) => row.equipmentId))];
+      const unitRows = equipmentIds.length ? await tx.select({ id: equipment.id, serialNo: equipment.serialNo, model: equipment.model, typeName: equipmentTypes.name })
+        .from(equipment).innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+        .where(and(eq(equipment.tenantId, ctx.tenantId), inArray(equipment.id, equipmentIds))) : [];
+      const unitById = new Map(unitRows.map((unit) => [unit.id, unit]));
+      const correctionAudits = await tx.select({ reason: auditLogs.reason }).from(auditLogs)
+        .where(and(eq(auditLogs.tenantId, ctx.tenantId), eq(auditLogs.entity, 'edtr_late_correction')));
+      const correctionInvoiceIds = new Set(invoiceRows.filter((invoice) => invoice.invoiceType === 'weekly_correction').map((invoice) => invoice.id));
+      const corrections = correctionAudits.flatMap((audit) => {
+        try {
+          const payload = JSON.parse(audit.reason ?? '') as { reason?: string; rentalId?: string; equipmentId?: string; day?: string; grossPhp?: number; depositAppliedPhp?: number; invoiceId?: string | null };
+          if (payload.rentalId !== rentalId || !payload.equipmentId || !payload.day || !payload.reason) return [];
+          if (payload.invoiceId && !correctionInvoiceIds.has(payload.invoiceId)) return [];
+          if (!payload.invoiceId && !equipmentIds.includes(payload.equipmentId)) return [];
+          const unit = unitById.get(payload.equipmentId);
+          return [{ equipmentId: payload.equipmentId, label: unit ? `${unit.typeName} ${unit.model}` : 'Equipment', serialNo: unit?.serialNo ?? payload.equipmentId,
+            day: payload.day, gross: payload.grossPhp ?? 0, fromDeposit: payload.depositAppliedPhp ?? 0, invoiceId: payload.invoiceId ?? null, reason: payload.reason }];
+        } catch { return []; }
+      });
+      const capById = rental.depositMode === 'per_machine'
+        ? await fundedEquipmentDeposits(tx, ctx.tenantId, rentalId) : new Map<string, number>();
       const weeks = new Map<string, StatementWeek>();
       const week = (day: string) => {
         const w = isoWeek(day);
@@ -274,38 +386,87 @@ export class BillingService {
         }
         return row;
       };
+      const machine = (row: StatementWeek, equipmentId: string) => {
+        row.machines ??= [];
+        let line = row.machines.find((entry) => entry.equipmentId === equipmentId);
+        if (!line) {
+          const unit = unitById.get(equipmentId);
+          line = { equipmentId, label: unit ? `${unit.typeName} ${unit.model}` : 'Equipment', serialNo: unit?.serialNo ?? equipmentId,
+            hours: 0, amount: 0, fromDeposit: 0, invoiced: 0, unbilled: 0, paid: 0, outstanding: 0,
+            depositRemaining: null, invoiceId: null };
+          row.machines.push(line);
+        }
+        return line;
+      };
       for (const d of deducted) {
         const row = week(d.day);
+        const unit = machine(row, d.equipmentId);
         row.hours = round2HalfUp(row.hours + Number(d.hours));
         row.amount = round2HalfUp(row.amount + Number(d.amount));
         row.fromDeposit = round2HalfUp(row.fromDeposit + Number(d.amount));
+        unit.hours = round2HalfUp(unit.hours + Number(d.hours));
+        unit.amount = round2HalfUp(unit.amount + Number(d.amount));
+        unit.fromDeposit = round2HalfUp(unit.fromDeposit + Number(d.amount));
       }
       // Each weekly invoice's paid share, spread over the hours it billed.
       const paidByInvoice = new Map<string, number>();
       for (const p of paymentRows) {
         if (p.status === 'paid') paidByInvoice.set(p.invoiceId, (paidByInvoice.get(p.invoiceId) ?? 0) + Number(p.amount));
+        if (p.status === 'refunded') paidByInvoice.set(p.invoiceId, (paidByInvoice.get(p.invoiceId) ?? 0) - Number(p.amount));
       }
-      const paidFraction = (invoiceId: string) => {
-        const amount = Number(invoiceRows.find((i) => i.id === invoiceId)?.amount ?? 0);
-        return amount > 0 ? Math.min(1, (paidByInvoice.get(invoiceId) ?? 0) / amount) : 0;
-      };
+      const paidForAccrual = new Map<string, number>();
+      for (const invoice of invoiceRows.filter((item) => ['weekly', 'weekly_correction'].includes(item.invoiceType))) {
+        const lines = accrued.filter((item) => item.invoiceId === invoice.id).sort((a, b) => a.equipmentId.localeCompare(b.equipmentId) || a.day.localeCompare(b.day) || a.id.localeCompare(b.id));
+        const chargeCents = lines.reduce((sum, line) => sum + Math.round(Number(line.amount) * 100), 0);
+        const paidCents = Math.max(0, Math.min(chargeCents, Math.round((paidByInvoice.get(invoice.id) ?? 0) * 100)));
+        if (!chargeCents || !paidCents) continue;
+        const shares = lines.map((line) => {
+          const exact = paidCents * Math.round(Number(line.amount) * 100) / chargeCents;
+          return { id: line.id, cents: Math.floor(exact), fraction: exact - Math.floor(exact) };
+        });
+        let leftover = paidCents - shares.reduce((sum, line) => sum + line.cents, 0);
+        for (const share of [...shares].sort((a, b) => b.fraction - a.fraction || a.id.localeCompare(b.id))) {
+          if (leftover-- <= 0) break;
+          share.cents += 1;
+        }
+        for (const share of shares) paidForAccrual.set(share.id, share.cents / 100);
+      }
       for (const a of accrued) {
         const row = week(a.day);
-        if (a.invoiceId) row.paid = round2HalfUp(row.paid + Number(a.amount) * paidFraction(a.invoiceId));
+        const unit = machine(row, a.equipmentId);
+        if (a.invoiceId) row.paid = round2HalfUp(row.paid + (paidForAccrual.get(a.id) ?? 0));
+        if (a.invoiceId) unit.paid = round2HalfUp(unit.paid + (paidForAccrual.get(a.id) ?? 0));
         row.hours = round2HalfUp(row.hours + Number(a.hours));
         row.amount = round2HalfUp(row.amount + Number(a.amount));
+        unit.hours = round2HalfUp(unit.hours + Number(a.hours));
+        unit.amount = round2HalfUp(unit.amount + Number(a.amount));
         if (a.invoiceId) row.invoiced = round2HalfUp(row.invoiced + Number(a.amount));
         else row.unbilled = round2HalfUp(row.unbilled + Number(a.amount));
+        if (a.invoiceId) { unit.invoiced = round2HalfUp(unit.invoiced + Number(a.amount)); unit.invoiceId = a.invoiceId; row.invoiceId = a.invoiceId; }
+        else unit.unbilled = round2HalfUp(unit.unbilled + Number(a.amount));
       }
 
-      for (const row of weeks.values()) {
+      const usedByUnit = new Map<string, number>();
+      for (const row of [...weeks.values()].sort((a, b) => a.weekStart.localeCompare(b.weekStart))) {
+        const invoiceIds = [...new Set(accrued.filter((item) => isoWeek(item.day).weekStart === row.weekStart && item.invoiceId).map((item) => item.invoiceId!))];
+        row.invoiceId = invoiceIds.find((id) => invoiceRows.find((invoice) => invoice.id === id)?.invoiceType === 'weekly') ?? null;
+        row.correctionInvoiceIds = invoiceIds.filter((id) => invoiceRows.find((invoice) => invoice.id === id)?.invoiceType === 'weekly_correction');
         row.customerPays = round2HalfUp(row.invoiced + row.unbilled);
         row.outstanding = round2HalfUp(Math.max(0, row.customerPays - row.paid));
+        for (const unit of row.machines ?? []) {
+          const unitInvoiceIds = [...new Set(accrued.filter((item) => isoWeek(item.day).weekStart === row.weekStart && item.equipmentId === unit.equipmentId && item.invoiceId).map((item) => item.invoiceId!))];
+          unit.invoiceId = unitInvoiceIds.find((id) => invoiceRows.find((invoice) => invoice.id === id)?.invoiceType === 'weekly') ?? null;
+          unit.correctionInvoiceIds = unitInvoiceIds.filter((id) => invoiceRows.find((invoice) => invoice.id === id)?.invoiceType === 'weekly_correction');
+          unit.outstanding = round2HalfUp(Math.max(0, unit.invoiced + unit.unbilled - unit.paid));
+          const used = round2HalfUp((usedByUnit.get(unit.equipmentId) ?? 0) + unit.fromDeposit);
+          usedByUnit.set(unit.equipmentId, used);
+          unit.depositRemaining = capById.has(unit.equipmentId) ? round2HalfUp(Math.max(0, capById.get(unit.equipmentId)! - used)) : null;
+        }
       }
 
       const ledger = await resolveDepositLedger(tx, rentalId, ctx.tenantId);
       const charged = round2HalfUp(invoiceRows.filter((i) => i.invoiceType !== 'deposit_deduction').reduce((sum, i) => sum + Number(i.amount), 0));
-      const paid = round2HalfUp(paymentRows.filter((p) => p.status === 'paid').reduce((sum, p) => sum + Number(p.amount), 0));
+      const paid = round2HalfUp(paymentRows.reduce((sum, p) => sum + (p.status === 'paid' ? Number(p.amount) : p.status === 'refunded' ? -Number(p.amount) : 0), 0));
       return {
         rentalId,
         bookingCode: rental.code,
@@ -330,10 +491,12 @@ export class BillingService {
           status: p.status,
           createdAt: p.createdAt.toISOString(),
         })),
+        corrections,
         deposit: {
           required: ledger.depositRequired,
           deducted: ledger.totalDeducted,
-          remaining: round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted)),
+          remaining: rental.depositMode === 'per_machine' ? round2HalfUp(Math.max(0, [...capById.values()].reduce((sum, amount) => sum + amount, 0) - ledger.totalDeducted))
+            : round2HalfUp(Math.max(0, ledger.depositRequired - ledger.totalDeducted)),
         },
         totals: {
           charged,
@@ -345,6 +508,27 @@ export class BillingService {
         lastEmailed: ctx.role === 'customer' ? null : await lastStatementEmail(tx, rentalId),
       };
     });
+  }
+
+  async invoicePdf(ctx: RequestContext, id: string, receipt = false): Promise<StatementPdfResponse> {
+    const invoice = await this.getInvoice(ctx,id);
+    const brand = await this.brand(ctx);
+    const paid = receipt ? await withTenantTx(ctx, tx => tx.select().from(payments).where(and(eq(payments.invoiceId,id),eq(payments.status,'paid'))).orderBy(payments.createdAt,payments.id)) : [];
+    if (receipt && paid.length === 0) throw new NotFoundException({error:'successful_payment_not_found'});
+    const bytes = receipt ? await renderReceiptPdf(invoice,paid,brand) : await renderInvoicePdf(invoice,brand);
+    return {filename:`${receipt?'receipt':'invoice'}-${id}.pdf`,contentBase64:Buffer.from(bytes).toString('base64')};
+  }
+
+  async agreementPdf(ctx:RequestContext,rentalId:string,agreementId?:string):Promise<StatementPdfResponse> {
+    const result=await withTenantTx(ctx, async tx=>{
+      const [rental]=await tx.select().from(rentals).where(eq(rentals.id,rentalId));
+      if(!rental || (ctx.role==='customer' && !(await ownsCustomer(tx,ctx,rental.customerId))))throw new NotFoundException({error:'booking_not_found'});
+      const [agreement]=await tx.select().from(rentalAgreements).where(and(eq(rentalAgreements.rentalId,rentalId),...(agreementId?[eq(rentalAgreements.id,agreementId)]:[]))).orderBy(desc(rentalAgreements.signedAt),desc(rentalAgreements.id)).limit(1);
+      if(!agreement)throw new NotFoundException({error:'signed_agreement_not_found'});
+      return {rental,agreement};
+    });
+    const bytes=await renderAgreementPdf(result.agreement,result.rental.code,await this.brand(ctx));
+    return {filename:`agreement-${result.rental.code}.pdf`,contentBase64:Buffer.from(bytes).toString('base64')};
   }
 
   async statementPdf(ctx: RequestContext, rentalId: string): Promise<StatementPdfResponse> {

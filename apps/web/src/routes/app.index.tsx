@@ -1,12 +1,14 @@
 import { createRoute, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { IncidentResponse, InvoiceSummaryResponse, WeatherSeverity } from '@arkilaunch/shared';
+import { returnDueLabel, type IncidentResponse, type InvoiceSummaryResponse, type WeatherSeverity } from '@arkilaunch/shared';
 import { appLayoutRoute } from './_app.js';
 import { getCurrentRole } from '../lib/guards.js';
 import {
+  bookingsQueries,
   companiesQueries,
   edtrQueries,
+  equipmentQueries,
   referenceQueries,
   fleetUtilizationPct,
   incidentsQueries,
@@ -137,6 +139,50 @@ const TABS: { id: QueueTab; label: string }[] = [
   { id: 'weather', label: 'Weather' },
 ];
 
+// Machines due back within the tenant's widest reminder point; hidden when none are.
+function ReturnsDuePanel() {
+  const { data } = useQuery(bookingsQueries.returnsDue());
+  const items = data?.items ?? [];
+  if (items.length === 0) return null;
+  const overdue = items.filter((i) => i.daysLeft < 0).length;
+  return (
+    <Container
+      flush
+      header={{
+        title: 'Returns due',
+        count: items.length,
+        description: overdue > 0
+          ? `${overdue} overdue. Machines due back in the next ${data!.windowDays} days.`
+          : `Machines due back in the next ${data!.windowDays} days.`,
+      }}
+      footer={
+        <Link to="/app/bookings" search={{ status: 'active' }} className={FOOT_LINK}>
+          Open on-site bookings
+        </Link>
+      }
+    >
+      {items.slice(0, 5).map((item) => (
+        <Link
+          key={item.assignmentId}
+          to="/app/bookings"
+          search={item.code ? { open: item.code } : {}}
+          className={ROW}
+        >
+          <span className="flex flex-col">
+            <span className="font-medium text-text">{item.equipmentLabel}</span>
+            <span className="text-xs text-text-muted">
+              {item.code ?? 'Booking'} · {item.customerName ?? '--'} · back by {formatDate(item.end)}
+            </span>
+          </span>
+          <span className={['shrink-0', item.daysLeft < 0 ? 'font-semibold text-error' : 'text-text'].join(' ')}>
+            {returnDueLabel(item.daysLeft).replace(/^./, (c) => c.toUpperCase())}
+          </span>
+        </Link>
+      ))}
+    </Container>
+  );
+}
+
 function AdminDashboardPage() {
   const { data: snapshot } = useQuery(reportQueries.snapshot());
   const utilizationPct = fleetUtilizationPct(snapshot?.utilization);
@@ -189,8 +235,8 @@ function AdminDashboardPage() {
     return match ? match.model : 'Unknown machine';
   }
 
-  const fleetItems = fleet ?? [];
-  const inMaintenance = fleetItems.filter((e) => e.availabilityStatus === 'maintenance').length;
+  const { data: equipmentTotal } = useQuery(equipmentQueries.list(1));
+  const { data: equipmentAvailable } = useQuery(equipmentQueries.list(1, 0, { status: 'available' }));
   const recoveredHours =
     snapshot?.utilization.fleet.reduce((sum, u) => sum + u.runtimeHours, 0) ?? null;
   const pendingInvoices = invoices?.items ?? [];
@@ -231,9 +277,9 @@ function AdminDashboardPage() {
               {(
                 [
                   ['Sites', sites?.total],
-                  ['Machines', fleet?.length],
-                  ['In maintenance', fleet ? inMaintenance : null],
-                  ['Available', fleet ? fleetItems.filter((e) => e.availabilityStatus === 'available').length : null],
+                  ['Machines', equipmentTotal?.total],
+                  ['Available', equipmentAvailable?.total],
+                  ['Unavailable', equipmentTotal && equipmentAvailable ? equipmentTotal.total - equipmentAvailable.total : null],
                 ] as const
               ).map(([label, value]) => (
                 <div key={label}>
@@ -299,6 +345,8 @@ function AdminDashboardPage() {
           ))
         )}
       </Container>
+
+      <ReturnsDuePanel />
 
       <div className="grid gap-3 sm:grid-cols-2">
         <StatTile

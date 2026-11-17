@@ -21,6 +21,7 @@ export const weatherAlerts = pgTable(
   },
   (table) => [tenantIsolationPolicy(),
     index('weather_alerts_tenant_id_idx').on(table.tenantId),
+    index('weather_alerts_retention_idx').on(table.tenantId, table.effectiveAt),
   ],
 );
 

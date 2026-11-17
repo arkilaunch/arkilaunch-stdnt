@@ -92,6 +92,19 @@ export class EdtrController {
     return this.edtr.get(req.ctx, id);
   }
 
+  @Get(':id/weather-evidence')
+  @RequirePermission('edtr:create', 'edtr:read')
+  weatherEvidence(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.edtr.weatherEvidence(req.ctx, id);
+  }
+
+  @Post(':id/weather-evidence/historical')
+  @RequirePermission('edtr:approve')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  historicalWeather(@Param('id', ParseUUIDPipe) id: string, @Req() req: CtxRequest) {
+    return this.edtr.fetchHistoricalWeather(req.ctx, id);
+  }
+
   @Patch(':id/rotation')
   @RequirePermission('edtr:approve')
   rotate(@Param('id') id: string, @Body() body: EdtrRotationDto, @Req() req: CtxRequest) {

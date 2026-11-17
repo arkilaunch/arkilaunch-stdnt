@@ -1,12 +1,14 @@
 # Design System Document (DSD)
 
+> **Admin operations amendment (2026-11-11):** [Change Record](cr-arkilaunch-admin-operations-clarity.md) separates Active and History bookings for both services; invoice groups identify billed company and location; registration review names the submitter; ticket text and controls fit their desktop and card layouts.
+
 **System Name:** Yardboard (the ArkiLaunch design system)
 **Project:** ArkiLaunch (Web-Based Construction Equipment Rental Management System)
 **Date:** 2026-07-25
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-10-04 (CR: platform-landing-dashboard-image); previous: 2026-10-04 (CR: platform-saas-landing); earlier: 2026-10-01 (CR: customer-company-wizard, kyc-auto-document-scan); 2026-09-30 (CR: frontend-ux-pass, calendar, list density and actions)
 **PRD:** [prd-arkilaunch.md](prd-arkilaunch.md)
 **IDEA:** [idea-arkilaunch.md](idea-arkilaunch.md)
 **Mode:** Product Mode (task-first); the public catalog and landing borrow a thin Brand-Mode layer, noted where it applies.
@@ -387,6 +389,8 @@ No `backdrop-filter: blur()` on content surfaces (perf on cheap Android); the mo
 
 **Platform public wordmark, benefit cards and dashboard preview (CR: platform-landing-branding; feature-card illustrations removed, CR: platform-landing-no-feature-icons; static dashboard image, CR: platform-landing-dashboard-image):** the marketing navigation uses the ArkiLaunch wordmark on its own, without a separate icon. The four product-benefit cards use a clean typographic layout with their 01–04 number labels as the only decorative accent; do not add icons or illustrations. The hero displays a direct screenshot of the ArkiLaunch dashboard with a subtle shadow and no device mockup. Capture it at landscape viewport size with synthetic sample responses; mark it as illustrative sample data. Use responsive WebP sources in the hero and platform social metadata. The screenshot is static, with no scroll-driven hero effect or embedded live application.
 
+**Tenant storefront home (S22 `/` on a tenant host, CR: storefront-landing, 2026-10-16).** Hero first: the tenant tagline as H1, the first sentence of the tenant's About as subhead (fallback copy otherwise), one primary Browse equipment action and, when signed out, a secondary Create account. Hold the hero behind a skeleton until the tenant and fleet load, so the default tagline and image never flash; with no hero or fleet photo the hero is single-column. The equipment preview shows a skeleton while loading, a retry on error, and an empty state when no machine is listed; only a real search miss reads "No equipment matches". The search and See all carry `?q=` into `/equipment`. A How renting works strip follows with four numbered steps (browse and see prices, request a quote, verify your company, sign and pay), styled like the platform onboarding steps: number labels are the only accent, it reveals once on scroll and stays visible under reduced motion. The footer year is live.
+
 ### Domain components (Yardboard-specific)
 
 > **Implementation status, added 2026-09-19 (`cr-arkilaunch-doc-reconcile-2026-09-19.md`).** The `**Built:**` markers below record which primitives exist in code and where. They were hand-added to the materialized `DESIGN.md` and lived only there for six days, in violation of §9's rule that the artifact is never the source of truth. They describe real shipped state and are therefore written back here rather than stripped out. Keep them accurate in this file; `DESIGN.md` inherits them.
@@ -398,6 +402,8 @@ No `backdrop-filter: blur()` on content surfaces (perf on cheap Android); the mo
 **Gauge Readout**; the framed mono numeric tile for a single key figure (diesel price, deposit balance, utilization %, recovered billable hours). Bezelled with `--color-border-strong`, big tabular mono, a small overline label, an optional trend/stale marker. This is the interface's signature moment. **Built:** `apps/web/src/components/gauge-readout.tsx`.
 
 **Weather Banner**; full-width strip (§4.1) driven by the weather scale; leads with a condition icon and short label, then site name, timestamp and a stale marker when cached. Forecast rows and per-machine levels also lead with an icon and short label. A cached reading renders as the dedicated `weather-stale` tone rather than keeping its last-known severity color. **Built:** `apps/web/src/components/weather-banner.tsx`.
+
+**Field-log weather evidence (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** Show saved-reading coverage for AM and PM, with “Insufficient saved weather data” when a comparison cannot be made. “No mismatch found” requires adequate coverage and a weather tick on the sheet. Label reviewer-requested historical reanalysis as modelled supporting evidence; it never appears as a live reading or a finding.
 
 **Evidence Split View**; the reconciliation review surface (§4.1); the original handwritten image beside the extracted, editable fields. **Not yet built** (no consumer screen exists; S7/S8 unbuilt).
 
@@ -637,6 +643,12 @@ Regenerates DESIGN.md from shipped tokens/components after each significant ship
 
 ---
 
+### 8.7 Rental QA surfaces and document layouts (2026-10-20)
+
+[Approved CR](cr-arkilaunch-rental-qa-documents.md): signing uses the shared accessible modal with bounded viewport scrolling, keyboard focus handling, retained drafts, a pinned confirmation action and a compact checkout summary. Condition selection retains notes and presents servicing/repair next steps. Deployment lists each equipment window with individual and bulk-due actions. Tenant storefronts use a branded hero and two service cards with optional qualified starting prices; individual fleet-preview prices stay hidden.
+
+Print/PDF outputs share a tenant letterhead, proportional logo, configured accent and font, document reference, readable hierarchy, wrapped descriptions, repeated table headings and numbered pages. Keep headings with their first content and signatures with their labels; avoid clipping, overlapping footers and empty pages. Missing branding uses neutral text styling. EDTR form geometry is preserved.
+
 ## 9. Materialization
 
 | Target | File | Template | Contents (from DSD) |
@@ -659,6 +671,10 @@ Regenerates DESIGN.md from shipped tokens/components after each significant ship
 **Approval / retirement:** the DSD DRI (ArkiLaunch design owner) approves asset changes; superseded files retire on a version bump and are removed from `public/` once no build references them.
 
 ---
+
+## Rental billing and Admin Bookings amendment (2026-11-15)
+
+See [machine-week billing CR](cr-arkilaunch-machine-week-billing.md). Customer rental invoices place date, billed company, equipment and job site before a six-column billing statement: No., Particulars, Quantity, Unit, Unit Price and Amount. A weekly row includes machine type/model, serial and Monday to Sunday period; deposit applied is listed per machine below the gross rows, followed by net payable. The SOA shows a weekly total and machine detail with deposit remaining alongside any amount due. Print and PDF follow the same information order. Admin Bookings uses the shared compact Active/Past control from Customer truck requests in both service views, with a visible selected state and keyboard focus.
 
 ## Self-Check
 

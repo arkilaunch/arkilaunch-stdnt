@@ -1,3 +1,4 @@
+import { DocumentDownload } from './document-download.js';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -13,11 +14,13 @@ import { buttonClass } from './button.js';
 import { Modal } from './modal.js';
 import { Tabs } from './tabs.js';
 import { StatusBadge } from './status-badge.js';
+import { ReturnCountdown } from './return-countdown.js';
 import { RouteMap } from './route-map.js';
 import { NegotiationThread, inAppNegotiation } from './negotiation-thread.js';
 import { CapReview } from './tier-cap.js';
 import { BookingSide, SiteRepContact } from './booking-actions.js';
 import { MessengerLinks, phoneHref } from './messenger-links.js';
+import { AgreementLine } from './agreement-line.js';
 
 const heading = 'text-heading-md text-text';
 
@@ -33,7 +36,7 @@ export function rentalSteps(b: Pick<BookingDetailResponse, 'status' | 'callConfi
   ];
 }
 
-function Stepper({ steps, cancelled }: { steps: TripStep[]; cancelled: boolean }) {
+function Stepper({ steps, closed }: { steps: TripStep[]; closed: 'Cancelled' | 'Expired' | undefined }) {
   return (
     <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" aria-label="Progress">
       {steps.map((step, i) => (
@@ -46,7 +49,7 @@ function Stepper({ steps, cancelled }: { steps: TripStep[]; cancelled: boolean }
           </span>
         </li>
       ))}
-      {cancelled && <li className="font-semibold text-error">Cancelled</li>}
+      {closed && <li className="font-semibold text-error">{closed}</li>}
     </ol>
   );
 }
@@ -73,7 +76,7 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
   const extensions = booking.changeRequests.filter((request) => request.kind === 'extend');
   return (
     <div className="flex flex-col gap-4">
-      <Stepper steps={rentalSteps(booking)} cancelled={booking.status === 'cancelled'} />
+      <Stepper steps={rentalSteps(booking)} closed={booking.status === 'cancelled' ? 'Cancelled' : booking.status === 'expired' ? 'Expired' : undefined} />
       <Section title="Customer">
         <dl className="flex flex-col gap-1">
           <Row label="Company">{booking.customerName ?? '--'}</Row>
@@ -90,6 +93,9 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className="text-text-muted">
                 {formatDate(item.start)} – {item.end ? formatDate(item.end) : 'open'}
               </span>
+              {item.status === 'active' && <ReturnCountdown end={item.end} />}
+              {item.returnConditionNotes && <p className="w-full whitespace-pre-wrap text-text">Condition on return: {item.returnConditionNotes}</p>}
+              {item.returnNeedsRepair && <StatusBadge status="maintenance" label={item.returnCondition === 'servicing' ? 'Servicing required' : 'Sent for repair'} />}
             </li>
           ))}
           {booking.items.length === 0 && <li className="text-text-muted">No machines assigned.</li>}
@@ -103,6 +109,10 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
             ))}
           </ul>
         )}
+      </Section>
+      <Section title="Rental agreement">
+        <AgreementLine agreement={booking.agreement} />
+        {booking.agreement && <DocumentDownload path={`/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
       </Section>
       <Section title="Site">
         <p className="text-sm text-text">{booking.siteCity ?? booking.siteProvince ?? '--'}</p>
@@ -154,6 +164,8 @@ function RentalBody({ booking }: { booking: BookingDetailResponse }) {
               <span className={invoice.status ==='paid' ? 'text-success' : 'text-text-muted'}>
                 {formatPeso(invoice.amount)} · {formatStatus(invoice.status)}
               </span>
+              <DocumentDownload path={`/invoices/${invoice.id}/pdf`} label="Invoice PDF" />
+              {invoice.status==='paid' && <DocumentDownload path={`/invoices/${invoice.id}/receipt/pdf`} label="Receipt PDF" />}
             </li>
           ))}
         </ul>
@@ -188,7 +200,7 @@ function TruckOverview({ truck }: { truck: TruckRequestResponse }) {
   const cities = route.data?.cities ?? truck.routeCities ?? [];
   return (
     <div className="flex flex-col gap-4">
-      <Stepper steps={tripSteps(truck)} cancelled={truck.status === 'cancelled'} />
+      <Stepper steps={tripSteps(truck)} closed={truck.status === 'cancelled' ? 'Cancelled' : truck.status === 'expired' ? 'Expired' : undefined} />
       <Section title="Route">
         <p className="text-sm font-medium text-text">
           {truck.pickup} → {truck.dropoff}
@@ -328,7 +340,7 @@ export function BookingDrawer({
             <>
               {tab === 'overview' && <RentalBody booking={booking.data} />}
               {tab === 'negotiation' && (
-                <NegotiationThread base={`/bookings/${rentalId}`} disabled={booking.data.status === 'cancelled'} />
+                <NegotiationThread base={`/bookings/${rentalId}`} disabled={booking.data.status === 'cancelled' || booking.data.status === 'expired'} />
               )}
               {tab === 'actions' && <BookingSide booking={booking.data} />}
             </>
@@ -339,7 +351,7 @@ export function BookingDrawer({
               {tab === 'negotiation' && (
                 <NegotiationThread
                   base={`/truck-requests/${shownTruck.id}`}
-                  disabled={shownTruck.status === 'cancelled' || shownTruck.status === 'paid' || shownTruck.status === 'dispatched'}
+                  disabled={shownTruck.status === 'cancelled' || shownTruck.status === 'expired' || shownTruck.status === 'paid' || shownTruck.status === 'dispatched'}
                 />
               )}
               {tab === 'actions' && <RequestRow r={shownTruck} />}

@@ -54,12 +54,12 @@ export async function voidEdtrInvoice(
   if (!invoice) return { ok: false, error: 'invoice_not_found' };
   if (invoice.status === 'paid') return { ok: false, error: 'invoice_paid_refund_instead' };
   const voidable =
-    (invoice.invoiceType === 'weekly' && invoice.status === 'issued') ||
+    (['weekly', 'weekly_correction'].includes(invoice.invoiceType) && invoice.status === 'issued') ||
     (invoice.invoiceType === 'deposit_deduction' && invoice.status !== 'void');
   if (!voidable) return { ok: false, error: 'invoice_not_voidable' };
 
   let released: number;
-  if (invoice.invoiceType === 'weekly') {
+  if (invoice.invoiceType === 'weekly' || invoice.invoiceType === 'weekly_correction') {
     const rows = await tx
       .update(depositAccruals)
       .set({ invoiceId: null })

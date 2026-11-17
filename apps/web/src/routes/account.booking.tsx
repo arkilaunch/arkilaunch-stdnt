@@ -1,7 +1,8 @@
+import { DocumentDownload } from '../components/document-download.js';
 import { createRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { bookingDays, type BookingDetailResponse } from '@arkilaunch/shared';
+import { bookingDays, daysUntilReturn, returnDueLabel, type BookingDetailResponse } from '@arkilaunch/shared';
 import { WeeklyBillingCard } from './statement.js';
 import { accountLayoutRoute } from './_account.js';
 import { bookingsQueries, quotesQueries } from '../lib/queries.js';
@@ -18,7 +19,8 @@ import { ConfirmDialog } from '../components/confirm-dialog.js';
 import { useToast } from '../components/toast.js';
 import { MyEquipmentWeather } from '../components/equipment-weather.js';
 import { apiErrorText, apiPatch, apiPost } from '../lib/api-client.js';
-import { formatDate, formatDateTime, formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { formatDate, formatDateTime, formatInvoiceType, formatPeso, formatStatus, shortCode } from '../lib/format.js';
+import { AgreementLine } from '../components/agreement-line.js';
 
 const STATUS_TONES: Record<string, StatusTone> = {
   confirmed: 'recon-approved',
@@ -41,9 +43,11 @@ export function leaseProgress(
 
   const elapsed = now.getTime() - from;
   const pct = Math.min(100, Math.max(0, Math.round((elapsed / (to - from)) * 100)));
-  const daysRemaining = Math.max(0, Math.ceil((to - now.getTime()) / 86_400_000));
-  return { pct, daysRemaining };
+  // Manila calendar days, matching the return reminders: 0 is due today, negative is overdue.
+  return { pct, daysRemaining: daysUntilReturn(end, now) };
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 type BookingItem = BookingDetailResponse['items'][number];
 
@@ -118,7 +122,10 @@ function MachineCard({ item, onSite }: { item: BookingItem; onSite: boolean }) {
             <div className="h-full bg-primary" style={{ width: `${progress.pct}%` }} />
           </div>
           <p className="text-sm text-text-muted">
-            {progress.pct}% complete &middot; {progress.daysRemaining} day{progress.daysRemaining === 1 ? '' : 's'} remaining
+            {progress.pct}% complete &middot;{' '}
+            <span className={progress.daysRemaining < 0 ? 'font-semibold text-error' : undefined}>
+              {capitalize(returnDueLabel(progress.daysRemaining))}
+            </span>
           </p>
         </div>
       )}
@@ -153,6 +160,7 @@ export function bookingTimeline(booking: BookingDetailResponse): TimelineStep[] 
 }
 
 function Timeline({ booking }: { booking: BookingDetailResponse }) {
+  if (booking.status === 'expired') return <p className="rounded-md border border-border px-3 py-2 text-sm text-text-muted">This booking expired before it was paid. It remains in your history.</p>;
   if (booking.status === 'cancelled') {
     return (
       <p className="rounded-md border border-error px-3 py-2 text-sm text-error">
@@ -206,13 +214,17 @@ function NextStep({ booking }: { booking: BookingDetailResponse }) {
 export function bookingStage(booking: BookingDetailResponse) {
   const onSite = booking.status === 'active' || booking.status === 'completed';
   const paid = onSite || booking.status === 'confirmed' || booking.payments.some((payment) => payment.status === 'paid');
-  return { paid, onSite, cancelled: booking.status === 'cancelled' };
+  return { paid, onSite, cancelled: booking.status === 'cancelled' || booking.status === 'expired' };
 }
 
 function DepositCard({ booking }: { booking: BookingDetailResponse }) {
   const { required, totalDeducted, deductions } = booking.deposit;
   return (
     <Surface radius="md" elevation="sm" className="flex min-w-0 flex-col gap-3 p-5">
+      <h2 className="text-sm font-medium text-text-muted">Rental agreement</h2>
+      <AgreementLine agreement={booking.agreement} />
+      {booking.agreement && <DocumentDownload path={`/me/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
+      {booking.agreement && <DocumentDownload path={`/me/rentals/${booking.id}/agreement/pdf`} label="Download signed agreement (PDF)" />}
       <h2 className="text-sm font-medium text-text-muted">Deposit</h2>
       {required === null ? (
         <p className="text-sm text-text-muted">No deposit is held against this booking yet.</p>
@@ -364,7 +376,7 @@ function BookingDetail({ booking }: { booking: BookingDetailResponse }) {
             className="flex items-center justify-between gap-3 text-sm underline"
           >
             <span className="text-text-muted">
-              {formatStatus(invoice.invoiceType)} &middot; {formatStatus(invoice.status)}
+              {formatInvoiceType(invoice.invoiceType)} &middot; {formatStatus(invoice.status)}
             </span>
             <span className="font-mono text-text">{formatPeso(invoice.amount)}</span>
           </Link>
@@ -412,7 +424,7 @@ function CancelAction({ booking }: { booking: BookingDetailResponse }) {
     onError: (err) => toast.error('That did not go through', apiErrorText(err)),
   });
 
-  if (booking.status === 'cancelled' || hasOpenRequest) return null;
+  if (booking.status === 'cancelled' || booking.status === 'expired' || hasOpenRequest) return null;
   return (
     <>
       <Button variant="ghost" onClick={() => setOpen(true)}>

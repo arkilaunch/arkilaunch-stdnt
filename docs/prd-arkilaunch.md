@@ -5,7 +5,7 @@
 **Version:** 0.1
 **Owner:** ArkiLaunch Team (Almara Construction capstone)
 **Status:** Locked
-**Last reconciled:** 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
+**Last reconciled:** 2026-11-15 (weather evidence coverage amendment). Prior: 2026-11-11 (admin operations amendment). Prior: 2026-10-20 (rental QA amendment). Prior reconciliation: 2026-09-16 (see docs/index.md §1); US-02 AC3 partially met, split recorded 2026-09-16 by `docs/cr-arkilaunch-camera-capture-split.md`; prior 2026-09-07: §5.6's `reconciliation_discrepancy` field note corrected 2026-09-07 by `docs/cr-arkilaunch-m4-money-path-gates.md`; §8 amended 2026-08-20 by `docs/cr-arkilaunch-open-meteo-free-tier.md`
 **BRD:** [brd-arkilaunch.md](brd-arkilaunch.md)
 
 ---
@@ -60,7 +60,7 @@ MoSCoW priorities. IDs are permanent and frozen. Sequencing note (from scrutiny 
 | PRD-F5 | Weather-Aware Module | Open-Meteo poll per project site (lat/long); risk advisories; auto-logged environmental liability incidents. A cron scheduler drives the polling. | Must-Have |
 | PRD-F6 | OCR-assisted KYC & Registration | Extract SEC number and TIN from corporate documents using Azure DI layout plus query fields (not the prebuilt ID model, which covers only US licenses and passports). Human-in-the-loop admin confirms against SEC and BIR portals; BIR ORUS CAPTCHA blocks full automation. | Must-Have |
 | PRD-F7 | Multi-Tenant Access, Identity & RBAC | Tenant onboarding and subscription; NestJS/Passport-JWT identity with short-lived access tokens and rotating refresh tokens carrying tenant_id and role; RBAC over Role/Permission; Postgres row-level tenant isolation. | Must-Have |
-| PRD-F8 | Client Booking Portal | Browse catalog, cart and book, place or modify orders, track transaction status. | Should-Have |
+| PRD-F8 | Client Booking Portal | Browse catalog, cart and book, place or modify orders, track transaction status. **Addendum (2026-10-15, `cr-arkilaunch-return-reminders.md`):** return reminders before each machine's return date at per-tenant points (baseline 5, 3, 1 days) and once when overdue, to the customer and staff. | Should-Have |
 
 ---
 
@@ -107,6 +107,8 @@ Acceptance Criteria:
 Acceptance Criteria:
 - Given a project site with lat/long, when the cron scheduler polls Open-Meteo and a risk threshold is crossed, then the system SHALL raise a site advisory and MUST auto-log an environmental liability incident with the observed conditions and a timestamp.
 - Given Open-Meteo is unavailable, when a scheduled poll runs, then the system SHALL serve the last cached reading, SHALL mark the advisory as stale, and MUST NOT drop the polling cycle silently (it SHALL retry and alert).
+
+**Weather-evidence addendum (2026-11-15, `cr-arkilaunch-weather-evidence-coverage.md`):** Field-log comparisons identify insufficient saved-reading coverage instead of calling an unobserved day clear. A reviewer may request labelled modelled historical weather for a gap in development; it is supporting evidence only. Detailed readings have a 24-month retention target, while incident evidence remains. Client polling and historical lookup remain disabled on the free plan.
 
 **US-06; OCR-assisted KYC with human-in-the-loop verification (PRD-F6, Must-Have)**
 > As the Platform Admin, I want SEC number and TIN extracted from corporate documents and confirmed against government portals, so that only verified rental firms reach production.
@@ -247,7 +249,7 @@ Screen count: **25**. Grouped by area. Every interactive screen defines empty / 
     └── /field/notifications  /field/settings  /field/profile
 ```
 
-**Persistent / global elements:** Top app bar with tenant name, active-tenant badge, notifications (PM alerts, weather advisories, review-queue count), and account menu on every authed screen. Sidebar hidden during onboarding and on the timekeeper console.
+**Persistent / global elements:** Top app bar with tenant name, active-tenant badge, notifications (PM alerts, weather advisories, review-queue count, return reminders), and account menu on every authed screen. Sidebar hidden during onboarding and on the timekeeper console.
 
 **Auth boundaries:** Public: `/`, `/login`, `/register/*`, `/equipment/*`, `/contact`, `/help`, `/terms`, `/privacy`. Authed customer: `/account/*`. Authed tenant: `/app/*` and `/field/*`, scoped to the JWT tenant_id with row-level isolation. Platform admin: `/app/companies/pending`. RBAC gates admin-only routes (`/app/registration`, `/app/companies/*`, `/app/users`, `/app/settings`) from owner and timekeeper roles.
 
@@ -448,3 +450,24 @@ Phases run Planning → Requirements → Design → Development → Testing & QA
 - [x] Section 9: every milestone has entry + exit criteria and one DRI
 - [x] This document answers *what* to build, not *how* (architecture goes in the SDD)
 - [x] AGENTS hard bans applied (no em-dashes); cross-linked to idea/brd/scrutiny
+
+
+## Rental QA amendment (2026-10-20)
+
+Approved [rental QA and documents CR](cr-arkilaunch-rental-qa-documents.md) amends PRD-F4/F7/F8. Checkout signing is a modal with a compact status and explicit signature confirmation. Returned equipment records Good condition, Normal wear, Needs servicing, or Damaged / needs repair, retaining notes. Servicing/repair blocks availability until maintenance clearance. Damage alone never establishes liability: staff document evidence, a clause from the signed snapshot, an agreed estimate and customer consent; Owner alone approves or rejects a separate seven-day damage invoice. Deposits are unchanged.
+
+Deploy equipment individually within its own booked Manila dates; Deploy all due equipment excludes future/expired windows. Returning deployed units preserves scheduled units. Staff can explicitly cancel the undeployed remainder with an audited reason to close the booking; refunds remain separately reviewed.
+
+Tenant storefronts may advertise qualified, tenant-configured starting prices for equipment and trucking independently of binding quotes. Existing PDF/print documents share consistent tenant branding and readable pagination. Invoice, successful-payment receipt and signed-agreement PDF downloads preserve authoritative financial data and the exact signed terms.
+
+## Machine and weekly billing amendment (2026-11-15)
+
+The [machine-week billing CR](cr-arkilaunch-machine-week-billing.md) amends PRD-F2/F3/F8. New bookings collect one frozen consumable deposit per assigned machine, with its own initial invoice line. An approved extension asks for no second deposit or fee. Approved extension-day EDTR usage follows the same machine balance and weekly rental billing as any other day. Existing rentals keep their historical shared deposit.
+
+Each rental's Monday to Sunday bill shows one gross usage row per machine at its approved hours and hourly rate, then deposit applied by machine and net payable. A fully deposit-covered week has a rundown and SOA entry with no payable invoice. The SOA keeps machine IDs and serial numbers distinct even when one weekly invoice and payment are shared. Machine balances do not pay each other's charges.
+
+The rental invoice header shows date, client/company, heavy equipment and job site above the numbered billing table. Booking deposits use item units. A week cannot close before Sunday or while any scheduled machine-day lacks approval or an explicit staff no-work reason. A reviewed late EDTR correction keeps the issued invoice unchanged and is separately labeled. Admin Bookings uses the Customer truck requests Active/Past switch appearance for both services without changing its tables or actions.
+
+## Admin operations amendment (2026-11-11)
+
+The [admin operations CR](cr-arkilaunch-admin-operations-clarity.md) amends PRD-F4/F6/F8. Dashboard fleet totals match unretired Equipment records, with Available and Unavailable counts. Admin bookings separate Active from History for both services. Unpaid equipment rentals expire after their Manila start date passes; unpaid truck bookings expire after their scheduled instant. Paid or deployed work remains active until staff closes it. History retains expired, cancelled and completed records. Admin invoices group by billed company and site or delivery location, with booking code and booking person shown. Registration review identifies the submitting customer, including when one login submitted several companies. Ticket text and actions fit their cells and dialogs.

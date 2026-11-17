@@ -33,6 +33,7 @@ import {
   validateCart,
   hasErrors,
   isSelectableCompany,
+  needsVerification,
   companyStatusLabel,
   MAX_SITE_CONTACT,
   MAX_SITE_NOTES,
@@ -207,7 +208,7 @@ function CartPage() {
   const sites = useQuery(customerSitesQueries.mine());
   const [submitted, setSubmitted] = useState(false);
   const allCompanies = companies.data ?? [];
-  // Only a verified company can be booked against.
+  // Rejected companies cannot rent; pending ones can fill a cart and are stopped on submit.
   const selectable = allCompanies.filter(isSelectableCompany);
   const companyId = chosenCompanyId || (selectable.length === 1 ? selectable[0]!.id : '');
   const company = allCompanies.find((c) => c.id === companyId);
@@ -224,17 +225,12 @@ function CartPage() {
     siteNotes,
   });
   // Spread, not a value: exactOptionalPropertyTypes rejects error={undefined}.
+  const pendingCompany = needsVerification(company) ? company : undefined;
   const show = (field: keyof Omit<CartFieldErrors, 'items'>) => {
-    const message = submitted ? errors[field] : undefined;
+    // A pending company's error lives in the verification note below, which links to the fix.
+    const message = submitted && !(field === 'companyId' && pendingCompany) ? errors[field] : undefined;
     return message ? { error: message } : {};
   };
-
-  useEffect(() => {
-    if (companies.data && companies.data.length === 0) {
-      // replace: Back from registration must not bounce straight here again.
-      void navigate({ to: '/account/companies/new', replace: true });
-    }
-  }, [companies.data, navigate]);
 
   function handleRemove(index: number) {
     removeFromCart(index);
@@ -373,17 +369,12 @@ function CartPage() {
   }
 
   if (companies.isSuccess && selectable.length === 0) {
-    const anyPending = allCompanies.some((c) => c.kycStatus === 'pending');
     return (
       <div className="flex flex-col gap-4">
         <PageHeader title="Shopping cart" />
         <EmptyState
-          title={anyPending ? 'Your company is still being verified' : 'No company can rent yet'}
-          description={
-            anyPending
-              ? 'Your cart is saved. The rental team is checking the documents you uploaded; you can request a quote as soon as a company is verified.'
-              : 'Verification was declined for the companies on your account. Your cart is saved — add another company or contact the rental team.'
-          }
+          title="No company can rent yet"
+          description="Verification was declined for the companies on your account. Your cart is saved — add another company or contact the rental team."
           action={
             <Link to="/account/applications" className={buttonClass('primary')}>See your applications</Link>
           }
@@ -536,6 +527,15 @@ function CartPage() {
                     );
                   })}
                 </Select>
+              )}
+              {pendingCompany && (
+                <p role={submitted ? 'alert' : undefined} className={`text-sm sm:col-span-2 ${submitted ? 'text-error' : 'text-text-muted'}`}>
+                  {pendingCompany.companyName} is awaiting verification. Fill your cart now; you can send the request once the
+                  rental team approves it.{' '}
+                  <Link to="/account/companies/$companyId" params={{ companyId: pendingCompany.id }} className="font-semibold underline">
+                    Finish verification
+                  </Link>
+                </p>
               )}
               <div className="flex flex-col gap-1">
                 <Select

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { weekBillBlock } from './edtr.js';
+import { weekBillBlock, weekClosureBlock } from './edtr.js';
 
 const decided = [
   { date: '2026-10-07', status: 'approved' as const },
@@ -10,6 +10,26 @@ const req = (weekBillableHours: number, sheetBillableHours: number | null, misma
   weekBillableHours,
   sheetBillableHours,
   ...(mismatchNote !== undefined ? { mismatchNote } : {}),
+});
+
+describe('weekClosureBlock', () => {
+  const days = [
+    { equipmentId: 'backhoe', date: '2026-10-05', status: 'approved' as const },
+    { equipmentId: 'roller', date: '2026-10-05', status: 'missing' as const },
+  ];
+  it('waits until after Sunday and checks every machine-day, including a different machine', () => {
+    expect(weekClosureBlock({ today: '2026-10-11', weekEnd: '2026-10-11', days, noWorkDays: [] })).toEqual({ error: 'week_not_ended' });
+    expect(weekClosureBlock({ today: '2026-10-12', weekEnd: '2026-10-11', days, noWorkDays: [] })).toEqual({
+      error: 'week_not_reviewed', days: [{ equipmentId: 'roller', day: '2026-10-05', status: 'missing' }],
+    });
+  });
+  it('accepts one explicit reason for a missing day and rejects duplicates or a false confirmation', () => {
+    const input = { today: '2026-10-12', weekEnd: '2026-10-11', days };
+    const confirmation = { equipmentId: 'roller', day: '2026-10-05', reason: 'Site closed after rain' };
+    expect(weekClosureBlock({ ...input, noWorkDays: [confirmation] })).toBeNull();
+    expect(weekClosureBlock({ ...input, noWorkDays: [confirmation, confirmation] })).toEqual({ error: 'invalid_no_work_confirmation' });
+    expect(weekClosureBlock({ ...input, noWorkDays: [{ ...confirmation, equipmentId: 'backhoe' }] })).toEqual({ error: 'invalid_no_work_confirmation' });
+  });
 });
 
 describe('weekBillBlock', () => {

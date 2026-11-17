@@ -10,13 +10,13 @@ const INVOICE = {
   invoiceType: 'booking', amount: 5000, status: 'issued', dueDate: '2026-10-01', createdAt: '2026-09-01',
 };
 
-function stub(cashStatus: number) {
+function stub(cashStatus: number, invoices: Record<string, unknown>[] = [INVOICE]) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
       const u = String(url);
       if (u.includes('/cash-payment')) return Promise.resolve(new Response('{"error":"invoice_not_payable"}', { status: cashStatus }));
-      const body = u.includes('/invoices') ? { items: [INVOICE], total: 1 } : [];
+      const body = u.includes('/invoices') ? { items: invoices, total: invoices.length } : [];
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     }),
   );
@@ -37,6 +37,18 @@ afterEach(() => {
 });
 
 describe('Invoice drawer', () => {
+  it('groups invoices by billed company and location while showing each transaction', async () => {
+    stub(200, [
+      { ...INVOICE, customerId: '11111111-1111-4111-8111-111111111111', customerName: 'Acme Builders', location: 'Taguig, NCR', bookedBy: 'Ana Cruz' },
+      { ...INVOICE, id: '88888888-8888-4888-8888-888888888888', bookingCode: 'TRK-2', customerId: '11111111-1111-4111-8111-111111111111', customerName: 'Acme Builders', location: 'Makati City', bookedBy: 'Ana Cruz' },
+    ]);
+    setAccessToken(makeToken(makeValidClaims({ role: 'admin' })));
+    await renderRoute('/app/payments');
+    expect(await screen.findByText('Acme Builders · Taguig, NCR')).toBeInTheDocument();
+    expect(screen.getByText('Acme Builders · Makati City')).toBeInTheDocument();
+    expect(screen.getByText('EQR-1')).toBeInTheDocument();
+    expect(screen.getByText('TRK-2')).toBeInTheDocument();
+  });
   it('closes once cash is recorded, so the stale invoice is not offered again', async () => {
     stub(200);
     await recordCash();

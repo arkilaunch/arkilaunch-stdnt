@@ -292,6 +292,7 @@ function CompanyReviewCard({
                 .join(' ')
             }
           />
+          <Submitted label="Email" value={company.submitterEmail} />
           <Submitted label="Mobile" value={company.contactPhone ?? null} />
         </dl>
       </ExpandableSection>
@@ -587,6 +588,8 @@ const COLUMNS: TableColumn<CompanyReviewResponse>[] = [
     cell: (c) => (
       <div className="flex flex-col">
         <span className="font-medium text-text">{c.companyName}</span>
+        <span className="text-xs text-text-muted">Submitted by {[c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown customer'}</span>
+        {c.submitterEmail && <span className="break-all text-xs text-text-muted">{c.submitterEmail}</span>}
         {c.rejection && c.kycStatus === 'pending' && <span className="text-xs text-text-muted">Reapplied after a rejection</span>}
       </div>
     ),

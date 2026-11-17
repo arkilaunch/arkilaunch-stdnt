@@ -1,6 +1,6 @@
 # Non-secret config only; secrets come via TF_VAR_* in CI.
 
-location           = "southeastasia"
+location           = "japaneast"
 # Exact origin, no trailing slash: enableCors compares strings; a mismatch shows as "incorrect email or password".
 web_origin         = "https://arkilaunch.app"
 supabase_url       = "https://ydalnvzyeseycdakofgp.supabase.co"
@@ -10,6 +10,7 @@ enable_ocr_pipeline  = true
 enable_ocr_kyc       = false
 # Dev only; prod flips it after checking active sites against the ~200-site free-tier ceiling.
 enable_weather_poll  = true
+enable_weather_history = true # development review only; historical data is modelled
 enable_diesel_scrape = true
 enable_payments      = true
-enable_turnstile     = true
+enable_turnstile     = false # TEMP: Turnstile secret unavailable after the Azure move; set true once TURNSTILE_SECRET_KEY is in the dev env

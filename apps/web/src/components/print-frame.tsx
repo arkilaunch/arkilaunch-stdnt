@@ -32,9 +32,9 @@ export function PrintFrame({
     <>
       <div className="hidden print:block" style={{ borderBottom: `3px solid ${accent}` }} data-print-letterhead>
         <div className="flex items-start justify-between gap-6 pb-3">
-          <div className="flex items-start gap-3">
+          <div className="flex min-w-0 items-start gap-3">
             {tenant?.logoUrl && <img src={tenant.logoUrl} alt="" className="h-14 w-auto max-w-40 object-contain" />}
-            <div className="text-xs leading-snug text-black">
+            <div className="min-w-0 break-words text-xs leading-snug text-black">
               <p className="text-base font-bold" style={{ color: accent }}>
                 {name}
               </p>
@@ -43,7 +43,7 @@ export function PrintFrame({
               {tin && <p>TIN {tin}</p>}
             </div>
           </div>
-          <div className="text-right text-xs leading-snug text-black">
+          <div className="text-right min-w-0 break-words text-xs leading-snug text-black">
             <p className="text-base font-bold uppercase tracking-wide">{title}</p>
             <p className="font-mono">{docRef}</p>
             {issuedAt && <p>Issued {formatDate(issuedAt)}</p>}
@@ -53,9 +53,9 @@ export function PrintFrame({
         {details.length > 0 && (
           <dl className="grid grid-cols-2 gap-x-6 gap-y-0.5 pb-3 text-xs text-black">
             {details.map(([label, value]) => (
-              <div key={label} className="flex gap-2">
+              <div key={label} className="flex min-w-0 gap-2">
                 <dt className="text-neutral-600">{label}:</dt>
-                <dd className="font-medium">{value}</dd>
+                <dd className="min-w-0 break-words font-medium">{value}</dd>
               </div>
             ))}
           </dl>

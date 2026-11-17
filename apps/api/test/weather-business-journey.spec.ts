@@ -29,6 +29,7 @@ import { SitesService } from '../src/sites/sites.service.js';
 import { NotificationsService } from '../src/notifications/notifications.service.js';
 import { checkoutPaidWebhook } from './paymongo-webhook.js';
 import { fixtureCompanyId } from './fixture-company.js';
+import { SIGNED } from './signed.js';
 // Loaded by path at run time: the jobs package compiles with import.meta, which the API's tsconfig disallows.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const JOBS = '../../../jobs/src/';
@@ -162,7 +163,7 @@ describe('Weather monitoring across the heavy-equipment rental journey', () => {
     const detail = await bookings.get(adminCtx, rentalId);
     expect(detail.quotation?.status).toBe('approved');
     await quotes.accept(customerCtx, detail.quotation!.id);
-    const checkout = await payments.checkout(customerCtx, rentalId);
+    const checkout = await payments.checkout(customerCtx, rentalId, SIGNED);
     const { rawBody, header } = await checkoutPaidWebhook(adminCtx, checkout.invoiceId, webhookSecret);
     await payments.handleWebhook(rawBody, header, webhookSecret);
     const [rental] = await withTenantTx(adminCtx, (tx) => tx.select().from(rentals).where(eq(rentals.id, rentalId)));
@@ -241,7 +242,18 @@ describe('Weather monitoring across the heavy-equipment rental journey', () => {
           tenantId,
           projectSiteId: siteId,
           severity: 'warning',
-          observed: STORM,
+          observed: {
+            ...STORM,
+            equipment: [{
+              equipmentId,
+              rentalId,
+              equipmentName: 'Excavator',
+              equipmentType: 'Excavator',
+              weatherClass: 'earthmoving',
+              level: 'stop_work',
+              reasons: ['heavy rain'],
+            }],
+          },
           isStale: false,
           effectiveAt: new Date(at('07:30').getTime() + i * 30 * 60_000),
           status: 'active',

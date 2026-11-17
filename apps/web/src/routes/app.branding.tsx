@@ -1,3 +1,4 @@
+import { StorefrontPromotionsForm } from '../components/storefront-promotions.js';
 import { createRoute } from '@tanstack/react-router';
 import { appLayoutRoute } from './_app.js';
 import { requireRole } from '../lib/guards.js';
@@ -13,6 +14,7 @@ function BrandingPage() {
         description="How your company looks on your storefront and in the ArkiLaunch directory."
       />
       <BrandingForm basePath="/tenants/me" />
+      <StorefrontPromotionsForm />
       <TestimonialsForm />
     </div>
   );

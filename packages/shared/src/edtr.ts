@@ -223,6 +223,7 @@ export type EdtrBillPreviewResponse = z.infer<typeof EdtrBillPreviewResponseSche
 export const EdtrApproveRequestSchema = z.object({
   reconciliationId: z.string().uuid(),
   adjustments: AdjustmentsSchema.nullable().optional(),
+  correctionReason: z.string().trim().min(3).max(500).optional(),
 });
 export type EdtrApproveRequest = z.infer<typeof EdtrApproveRequestSchema>;
 
@@ -308,6 +309,28 @@ export const EdtrDetailResponseSchema = z.object({
   scanRotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
 });
 export type EdtrDetailResponse = z.infer<typeof EdtrDetailResponseSchema>;
+
+const WeatherEvidenceHalfSchema = z.object({
+  window: z.tuple([z.number(), z.number()]),
+  usedDefaultHours: z.boolean(),
+  expected: z.number().int(),
+  recorded: z.number().int(),
+  sufficient: z.boolean(),
+});
+
+export const EdtrWeatherEvidenceSchema = z.object({
+  reportDate: z.string().nullable(),
+  am: WeatherEvidenceHalfSchema,
+  pm: WeatherEvidenceHalfSchema,
+  historicalAvailable: z.boolean(),
+  historical: z.object({
+    source: z.literal('Open-Meteo Historical Weather API'),
+    model: z.literal('best_match'),
+    fetchedAt: z.string(),
+    readings: z.array(z.object({ time: z.string(), precipMm: z.number(), windKph: z.number(), code: z.number() })),
+  }).nullable(),
+});
+export type EdtrWeatherEvidence = z.infer<typeof EdtrWeatherEvidenceSchema>;
 
 // Downtime causes are null when not recorded (pre-v3 rows), which is NOT zero.
 export interface DayHours {
@@ -524,14 +547,41 @@ export interface EdtrWeekResponse {
   billState: WeekBillState;
   unbilledPhp: number;
   lastBilledAt: string | null;
+  closureDays?: { equipmentId: string; label: string; day: string; status: FieldLogDayStatus }[];
+  closedAt?: string | null;
+  reissueAllowed?: boolean;
 }
 
 export const EdtrWeekBillRequestSchema = z.object({
   weekBillableHours: z.number().finite().min(0).max(24 * 7),
   sheetBillableHours: z.number().finite().min(0).max(24 * 7).nullable(),
   mismatchNote: z.string().trim().max(500).optional(),
+  noWorkDays: z.array(z.object({ equipmentId: z.string().uuid(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), reason: z.string().trim().min(3).max(500) })).optional(),
+  correctionReason: z.string().trim().min(3).max(500).optional(),
 });
 export type EdtrWeekBillRequest = z.infer<typeof EdtrWeekBillRequestSchema>;
+
+export function weekClosureBlock(input: {
+  today: string;
+  weekEnd: string;
+  days: { equipmentId: string; date: string; status: FieldLogDayStatus }[];
+  noWorkDays: { equipmentId: string; day: string; reason: string }[];
+}): { error: 'week_not_ended' | 'week_has_no_scheduled_days' | 'invalid_no_work_confirmation' | 'week_not_reviewed'; days?: { equipmentId: string; day: string; status: FieldLogDayStatus }[] } | null {
+  if (input.today <= input.weekEnd) return { error: 'week_not_ended' };
+  if (input.days.length === 0) return { error: 'week_has_no_scheduled_days' };
+  const expected = new Map(input.days.map((day) => [`${day.equipmentId}|${day.date}`, day]));
+  const confirmed = new Set<string>();
+  for (const entry of input.noWorkDays) {
+    const key = `${entry.equipmentId}|${entry.day}`;
+    if (confirmed.has(key) || expected.get(key)?.status !== 'missing' || entry.reason.trim().length < 3) {
+      return { error: 'invalid_no_work_confirmation' };
+    }
+    confirmed.add(key);
+  }
+  const open = input.days.filter((day) => day.status !== 'approved' && !(day.status === 'missing' && confirmed.has(`${day.equipmentId}|${day.date}`)))
+    .map((day) => ({ equipmentId: day.equipmentId, day: day.date, status: day.status }));
+  return open.length ? { error: 'week_not_reviewed', days: open } : null;
+}
 
 export interface EdtrWeekBillResponse {
   invoiceId: string | null;

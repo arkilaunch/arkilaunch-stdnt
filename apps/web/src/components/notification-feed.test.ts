@@ -7,8 +7,20 @@ import { routeTree } from '../router.js';
 const RENTAL = { rental_id: '11111111-1111-4111-8111-111111111111', booking_code: 'EQR-2026-0001' };
 const TRUCK = { truck_request_id: '22222222-2222-4222-8222-222222222222', booking_code: 'TRK-2026-0001' };
 
+const REMINDER = {
+  ...RENTAL,
+  threshold: 3,
+  days_left: 3,
+  machines: [
+    { assignment_id: 'a1', equipment_id: 'e1', label: 'Excavator · CAT 320 · SN 1', end: '2026-10-18T09:00:00Z' },
+    { assignment_id: 'a2', equipment_id: 'e2', label: 'Crane · SN 2', end: '2026-10-18T09:00:00Z' },
+  ],
+};
+const OVERDUE = { ...REMINDER, threshold: 'overdue', days_left: -1 };
+
 const WRITTEN: Record<FeedArea, [string, Record<string, unknown>][]> = {
   app: [
+    ['equipment_needs_repair', { rental_id: RENTAL.rental_id, equipment_ids: ['e1'] }],
     ['booking_requested', RENTAL],
     ['truck_requested', TRUCK],
     ['call_requested', RENTAL],
@@ -37,6 +49,8 @@ const WRITTEN: Record<FeedArea, [string, Record<string, unknown>][]> = {
     ['truck_cancelled', TRUCK],
     ['payment_on_void_invoice', { invoice_id: '33333333-3333-4333-8333-333333333333', booking_code: 'EQR-2026-0001' }],
     ['hold_expired', { ...RENTAL, audience: 'staff' }],
+    ['return_reminder', { ...REMINDER, audience: 'staff' }],
+    ['return_overdue', { ...OVERDUE, audience: 'staff' }],
   ],
   admin: [
     ['tenant_registered', { application_id: '55555555-5555-4555-8555-555555555555', company_name: 'New Rentals Inc.' }],
@@ -61,6 +75,8 @@ const WRITTEN: Record<FeedArea, [string, Record<string, unknown>][]> = {
     ['equipment_weather_briefing', { project_site_id: '44444444-4444-4444-8444-444444444444', site_name: 'Lot 5, Pasig', level: 'stop_work', machines: [{ equipmentId: 'e1', rentalId: RENTAL.rental_id, equipmentName: 'Crane', equipmentType: 'Crane', level: 'stop_work', reasons: ['Gusts 70 km/h'], hours: ['13:00', '14:00'] }] }],
     ['company_verified', { company_name: 'Acme', customer_id: 'c1' }],
     ['hold_expired', { ...RENTAL, audience: 'customer' }],
+    ['return_reminder', { ...REMINDER, audience: 'customer' }],
+    ['return_overdue', { ...OVERDUE, audience: 'customer' }],
     ['company_rejected', { company_name: 'Acme', customer_id: 'c1' }],
     ['company_review_comment', { company_name: 'Acme', company_id: 'c1', comment: 'Re-upload' }],
   ],
@@ -80,6 +96,13 @@ function registeredPaths(route: { fullPath?: string; children?: unknown }): stri
   return [...(typeof route.fullPath === 'string' ? [route.fullPath] : []), ...children.flatMap(registeredPaths)];
 }
 const ROUTES = new Set(registeredPaths(routeTree as never));
+
+it('names a repair notification and opens the returned booking', () => {
+  expect(describeNotification('equipment_needs_repair', { rental_id: RENTAL.rental_id, equipment_ids: ['e1'] }, 'app'))
+    .toMatchObject({ title: 'Equipment sent for repair', action: {
+      to: '/app/bookings/$bookingId', params: { bookingId: RENTAL.rental_id },
+    } });
+});
 
 describe('describeNotification: every written type has a destination', () => {
   for (const [area, cases] of Object.entries(WRITTEN) as [FeedArea, [string, Record<string, unknown>][]][]) {
@@ -121,6 +144,18 @@ describe('describeNotification: every written type has a destination', () => {
     expect(d?.title).toContain('Lot 5, Pasig');
     expect(d?.body).toContain('Crane - Stop work (13:00-14:00)');
     expect(d?.body).toContain('Brief the operators');
+  });
+
+  it('tells both sides which machines are due back and when', () => {
+    expect(describeNotification('return_reminder', REMINDER, 'account')?.body).toBe(
+      'Excavator · CAT 320 · SN 1 and 1 more on booking EQR-2026-0001 is due in 3 days. Need it longer? Request an extension before then.',
+    );
+    expect(describeNotification('return_overdue', OVERDUE, 'app')).toMatchObject({
+      title: 'Return overdue',
+      action: { to: '/app/bookings', search: { open: 'EQR-2026-0001' } },
+    });
+    expect(notificationKind('return_reminder')).toEqual({ label: 'Booking', tone: 'warning' });
+    expect(notificationKind('return_overdue')).toEqual({ label: 'Booking', tone: 'danger' });
   });
 
   it('names the booking by code, never by UUID fragment', () => {

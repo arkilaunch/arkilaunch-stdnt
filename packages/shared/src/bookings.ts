@@ -1,3 +1,5 @@
+import { ReturnConditionSchema } from './rental-qa.js';
+import { AgreementSummarySchema } from './rental-terms.js';
 import { z } from 'zod';
 import { PaginationQuerySchema } from './pagination.js';
 import { SelectedOptionsSchema } from './fleet.js';
@@ -34,6 +36,7 @@ export type BookingItemRequest = z.infer<typeof BookingItemRequestSchema>;
 
 // Deploy: the operator is a typed name; the timekeeper is a timekeeper user, assigned to the booking's site.
 export const BookingDeliverRequestSchema = z.object({
+  assignmentIds: z.array(z.string().uuid()).min(1).max(100).refine((ids) => new Set(ids).size === ids.length, "Duplicate assignments").optional(),
   operatorName: z.string().trim().min(1).max(120).optional(),
   timekeeperUserId: z.string().uuid().optional(),
 });
@@ -182,10 +185,11 @@ export function sheetQrCheck(
   return qr.rentalId === filed.rentalId.toLowerCase() && qr.equipmentId === filed.equipmentId.toLowerCase() ? 'match' : 'mismatch';
 }
 
-export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled'] as const;
+export const BOOKING_STATUSES = ['pending', 'confirmed', 'active', 'completed', 'cancelled', 'expired'] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 const IsoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const BookingListQuerySchema = PaginationQuerySchema.extend({
+  bucket: z.enum(['active', 'history']).optional(),
   q: z.string().trim().max(80).optional(),
   status: z
     .string()
@@ -218,6 +222,9 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       end: z.coerce.date().nullable(),
       status: z.string(),
       selectedOptions: SelectedOptionsSchema.optional(),
+      returnCondition: ReturnConditionSchema.nullable().optional(),
+      returnConditionNotes: z.string().nullable(),
+      returnNeedsRepair: z.boolean(),
     }),
   ),
   siteContact: z.string().nullable(),
@@ -226,6 +233,8 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
   callRequestedAt: z.coerce.date().nullable(),
   callConfirmedAt: z.coerce.date().nullable(),
   createdAt: z.coerce.date(),
+  // Rental agreement signed for the current quotation, if any.
+  agreement: AgreementSummarySchema.nullable().optional(),
   quotation: z
     .object({
       id: z.string().uuid(),
@@ -254,6 +263,9 @@ export const BookingDetailResponseSchema = BookingSummaryResponseSchema.extend({
       requestedEnd: z.coerce.date().nullable(),
       reason: z.string().nullable(),
       status: z.string(),
+      suggestedChargePhp: z.number().nullable(),
+      chargePhp: z.number().nullable(),
+      invoiceId: z.string().uuid().nullable(),
       createdAt: z.coerce.date(),
     }),
   ),
@@ -342,8 +354,27 @@ export type ChangeRequestCreate = z.infer<typeof ChangeRequestCreateSchema>;
 
 export const ChangeRequestResolveSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
+  chargePhp: z.number().finite().nonnegative().multipleOf(0.01).optional(),
+  chargeReason: z.string().trim().min(1).max(500).optional(),
 });
 export type ChangeRequestResolve = z.infer<typeof ChangeRequestResolveSchema>;
+
+export const BookingReturnRequestSchema = z
+  .object({
+    cancelScheduled: z.boolean().optional(),
+    units: z.array(z.object({
+      assignmentId: z.string().uuid(),
+      condition: ReturnConditionSchema.optional(),
+      conditionNotes: z.string().trim().max(2000).optional(),
+      needsRepair: z.boolean().optional(),
+    })).optional(),
+    confirmIncompleteLogs: z.boolean().optional(),
+    reason: z.string().trim().min(3).max(500).optional(),
+  })
+  .refine((b) => !(b.confirmIncompleteLogs || b.cancelScheduled) || !!b.reason, {
+    message: 'a reason is required', path: ['reason'],
+  });
+export type BookingReturnRequest = z.infer<typeof BookingReturnRequestSchema>;
 
 // Asia/Manila wall-clock HH:MM; openDays 0 = Sunday; blackouts are Manila dates.
 const HhMm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
