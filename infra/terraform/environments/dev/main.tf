@@ -100,7 +100,7 @@ module "resource_group" {
 
 module "container_registry" {
   source              = "../../modules/container_registry"
-  name                = "acrarkilaunch${local.env}" # alphanumeric only, globally unique
+  name                = "acrarkilaunch${local.env}2" # alphanumeric only, globally unique; "2": old sub still holds the unsuffixed name
   resource_group_name = module.resource_group.name
   location            = var.location
   tags                = local.tags
@@ -116,7 +116,7 @@ module "log_analytics" {
 
 module "document_intelligence" {
   source              = "../../modules/document_intelligence"
-  name                = "di-${local.name}"
+  name                = "di-${local.name}2" # "2": old sub still holds di-arkilaunch-dev
   resource_group_name = module.resource_group.name
   location            = var.location
   sku_name            = "F0" # dev: smoke-test tier only, never a real multi-page document

@@ -1,6 +1,6 @@
 # Non-secret config only; secrets come via TF_VAR_* in CI.
 
-location           = "southeastasia"
+location           = "japaneast"
 web_origin         = "https://arkilaunch.app" # placeholder: arkilaunch.app serves dev; prod needs its own host
 supabase_url       = "https://<prod-project-ref>.supabase.co" # fill in against the actual prod Supabase project
 

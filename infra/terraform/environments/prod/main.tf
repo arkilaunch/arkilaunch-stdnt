@@ -97,7 +97,7 @@ module "resource_group" {
 
 module "container_registry" {
   source              = "../../modules/container_registry"
-  name                = "acrarkilaunch${local.env}"
+  name                = "acrarkilaunch${local.env}2" # suffix kept in step with dev and deploy.yml
   resource_group_name = module.resource_group.name
   location            = var.location
   sku                 = "Standard" # prod: higher pull throughput / geo-replication headroom vs dev's Basic

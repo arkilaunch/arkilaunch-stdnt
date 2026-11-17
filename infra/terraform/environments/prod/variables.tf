@@ -1,6 +1,6 @@
 variable "location" {
   type    = string
-  default = "southeastasia" # PH data residency; RA 10173 cross-border basis still open
+  default = "japaneast" # Azure for Students allows only centralindia/japaneast/koreacentral/malaysiawest/japanwest; RA 10173 cross-border basis still open
 }
 
 variable "image_tag" {
