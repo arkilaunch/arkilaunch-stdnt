@@ -56,7 +56,7 @@ resource "azurerm_resource_group" "state" {
 
 # GRS: state must survive a single-region outage.
 resource "azurerm_storage_account" "state" {
-  name                     = "starkilaunchtfstate"
+  name                     = "starkilaunchtfstate2"
   resource_group_name      = azurerm_resource_group.state.name
   location                 = azurerm_resource_group.state.location
   account_tier             = "Standard"
