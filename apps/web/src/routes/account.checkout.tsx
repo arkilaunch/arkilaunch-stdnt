@@ -11,7 +11,6 @@ import { DataPanel } from '../components/data-panel.js';
 import { PageHeader } from '../components/page-header.js';
 import { Surface } from '../components/surface.js';
 import { Button, buttonClass } from '../components/button.js';
-import { CouponField } from '../components/coupon-field.js';
 import { EmptyState } from '../components/empty-state.js';
 import { StatusPill } from '../components/status-pill.js';
 import { Input } from '../components/input.js';
@@ -141,7 +140,6 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
   const navigate = useNavigate();
   const [method, setMethod] = useState<PaymentMethod>('qrph');
   const [unavailable, setUnavailable] = useState(false);
-  const [coupon, setCoupon] = useState<CouponPreviewResponse | null>(null);
   const [accepted, setAccepted] = useState(false);
   const [signedName, setSignedName] = useState('');
   const [signaturePng, setSignaturePng] = useState<string | null>(null);
@@ -161,7 +159,6 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
     mutationFn: (chosen: PaymentMethod) =>
       apiPost<{ checkoutUrl: string | null; invoiceId: string }>(`/bookings/${booking.id}/checkout`, {
         ...(chosen === 'manual' ? { cash: true } : { method: chosen }),
-        ...(coupon ? { couponCode: coupon.code } : {}),
         ...(!signed && terms.data && signaturePng
           ? { agreement: { signedName: signedName.trim(), termsVersion: terms.data.version, signaturePng } }
           : {}),
@@ -279,10 +276,8 @@ function CheckoutForm({ booking }: { booking: BookingDetailResponse }) {
       </fieldset>
 
       <div className="flex min-w-0 flex-col gap-3">
-        <OrderSummary booking={booking} coupon={coupon} />
-        {booking.quotation?.status === 'accepted' && (
-          <CouponField previewPath={`/bookings/${booking.id}/coupon`} applied={coupon} onApplied={setCoupon} />
-        )}
+        <OrderSummary booking={booking} coupon={null} />
+        <p className="text-xs text-text-muted">Coupons cannot reduce the consumable deposit at booking checkout.</p>
 
         <Surface radius="md" elevation="sm" className="flex flex-col gap-3 p-4">
           <h2 className="text-heading-md text-text">Rental agreement</h2>

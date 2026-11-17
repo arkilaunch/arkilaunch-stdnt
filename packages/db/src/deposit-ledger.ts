@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
-import { billingSettings, depositAccruals, invoiceLineItems, invoices } from './schema/billing.js';
-import { quotationItems, quotations, rentalContracts } from './schema/rentals.js';
+import { billingSettings, depositAccruals, edtr, edtrReconciliations, invoiceLineItems, invoices, payments, rentalEquipmentDeposits } from './schema/billing.js';
+import { equipment } from './schema/fleet.js';
+import { equipmentAssignments, quotationItems, quotations, rentalContracts, rentals } from './schema/rentals.js';
 import type { Tx } from './with-tenant-tx.js';
 import { round2HalfUp } from '@arkilaunch/shared';
 
@@ -62,6 +63,112 @@ export interface DepositLedger {
   hoursOrdered: number | null;
 }
 
+export async function createEquipmentDeposits(tx: Tx, tenantId: string, rentalId: string, quotationId?: string): Promise<number> {
+  const [rental] = await tx.select({ mode: rentals.depositMode }).from(rentals)
+    .where(and(eq(rentals.tenantId, tenantId), eq(rentals.id, rentalId))).for('update').limit(1);
+  if (rental?.mode !== 'per_machine') return 0;
+  const assignments = await tx.select({ equipmentId: equipmentAssignments.equipmentId, bookedHours: equipmentAssignments.bookedHours, typeId: equipment.equipmentTypeId })
+    .from(equipmentAssignments).innerJoin(equipment, eq(equipment.id, equipmentAssignments.equipmentId))
+    .where(and(eq(equipmentAssignments.tenantId, tenantId), eq(equipmentAssignments.rentalId, rentalId), ne(equipmentAssignments.status, 'cancelled')));
+  const rates = quotationId
+    ? await tx.select({ typeId: quotationItems.equipmentTypeId, rate: quotationItems.hourlyRatePhp, hours: quotationItems.estimatedHours }).from(quotationItems)
+      .where(and(eq(quotationItems.tenantId, tenantId), eq(quotationItems.quotationId, quotationId)))
+    : [];
+  const settings = await getBillingSettings(tx, tenantId);
+  const byUnit = new Map<string, { typeId: string; hours: number }>();
+  for (const row of assignments) {
+    const current = byUnit.get(row.equipmentId);
+    byUnit.set(row.equipmentId, { typeId: row.typeId, hours: (current?.hours ?? 0) + Number(row.bookedHours ?? 0) });
+  }
+  if (byUnit.size === 0) throw new Error('rental_has_no_equipment');
+  const frozen = await tx.select().from(rentalEquipmentDeposits)
+    .where(and(eq(rentalEquipmentDeposits.tenantId, tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId)));
+  if (frozen.length) {
+    if (frozen.length !== byUnit.size || frozen.some((row) => !byUnit.has(row.equipmentId))) {
+      throw new Error('equipment_deposit_assignment_changed');
+    }
+    return round2HalfUp(frozen.reduce((sum, row) => sum + Number(row.required), 0));
+  }
+  const values = [...byUnit].map(([equipmentId, unit]) => {
+    const matching = rates.filter((row) => row.typeId === unit.typeId);
+    if (matching.some((row) => row.rate !== matching[0]?.rate || row.hours !== matching[0]?.hours)) throw new Error(`quote_ambiguous_equipment_rate:${equipmentId}`);
+    const rate = matching[0];
+    if (quotationId && !rate) throw new Error(`quote_missing_equipment_rate:${equipmentId}`);
+    return { tenantId, rentalId, equipmentId, required: String(depositForQuote(settings, rate ? Number(rate.hours) * Number(rate.rate) : null)) };
+  });
+  await tx.insert(rentalEquipmentDeposits).values(values);
+  const stored = await tx.select({ required: rentalEquipmentDeposits.required }).from(rentalEquipmentDeposits)
+    .where(and(eq(rentalEquipmentDeposits.tenantId, tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId)));
+  return round2HalfUp(stored.reduce((sum, row) => sum + Number(row.required), 0));
+}
+
+// Allocate net paid invoice money across its original lines in cents. Partial
+// refunds reduce the credited deposit on each machine by the same invoice-line
+// proportion; neither an unpaid line nor another machine can fund its balance.
+export function allocatePaidCents(lines: { id: string; amount: number }[], netPaidPhp: number): Map<string, number> {
+  const totalCents = lines.reduce((sum, line) => sum + Math.round(line.amount * 100), 0);
+  const netCents = Math.max(0, Math.min(totalCents, Math.round(netPaidPhp * 100)));
+  if (!totalCents || !netCents) return new Map();
+  const shares = lines.map((line) => {
+    const exact = netCents * Math.round(line.amount * 100) / totalCents;
+    return { id: line.id, cents: Math.floor(exact), fraction: exact - Math.floor(exact) };
+  });
+  let remaining = netCents - shares.reduce((sum, share) => sum + share.cents, 0);
+  for (const share of [...shares].sort((a, b) => b.fraction - a.fraction || a.id.localeCompare(b.id))) {
+    if (remaining-- <= 0) break;
+    share.cents += 1;
+  }
+  return new Map(shares.map((share) => [share.id, share.cents]));
+}
+
+export async function fundedEquipmentDeposits(tx: Tx, tenantId: string, rentalId: string): Promise<Map<string, number>> {
+  const caps = await tx.select({ equipmentId: rentalEquipmentDeposits.equipmentId, required: rentalEquipmentDeposits.required })
+    .from(rentalEquipmentDeposits).where(and(eq(rentalEquipmentDeposits.tenantId, tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId)));
+  const bookingInvoices = await tx.select({ id: invoices.id }).from(invoices)
+    .where(and(eq(invoices.tenantId, tenantId), eq(invoices.rentalId, rentalId), eq(invoices.status, 'paid'), inArray(invoices.invoiceType, ['booking', 'deposit'])));
+  const funded = new Map<string, number>();
+  for (const invoice of bookingInvoices) {
+    const lines = await tx.select({ id: invoiceLineItems.id, equipmentId: invoiceLineItems.equipmentId, amount: invoiceLineItems.amount })
+      .from(invoiceLineItems).where(and(eq(invoiceLineItems.tenantId, tenantId), eq(invoiceLineItems.invoiceId, invoice.id)))
+      .orderBy(invoiceLineItems.id);
+    const money = await tx.select({ amount: payments.amount, status: payments.status }).from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.invoiceId, invoice.id)));
+    const netPaid = money.reduce((sum, row) => sum + (row.status === 'paid' ? Number(row.amount) : row.status === 'refunded' ? -Number(row.amount) : 0), 0);
+    const shares = allocatePaidCents(lines.map((line) => ({ id: line.id, amount: Number(line.amount) })), netPaid);
+    for (const line of lines) if (line.equipmentId) funded.set(line.equipmentId,
+      round2HalfUp((funded.get(line.equipmentId) ?? 0) + (shares.get(line.id) ?? 0) / 100));
+  }
+  return new Map(caps.map((cap) => [cap.equipmentId, Math.min(Number(cap.required), funded.get(cap.equipmentId) ?? 0)]));
+}
+
+export async function resolveEquipmentDepositLedger(tx: Tx, rentalId: string, tenantId: string, equipmentId: string) {
+  const [rental] = await tx.select({ mode: rentals.depositMode }).from(rentals)
+    .where(and(eq(rentals.tenantId, tenantId), eq(rentals.id, rentalId))).limit(1);
+  if (rental?.mode !== 'per_machine') return resolveDepositLedger(tx, rentalId, tenantId);
+  const [cap] = await tx.select({ required: rentalEquipmentDeposits.required }).from(rentalEquipmentDeposits)
+    .where(and(eq(rentalEquipmentDeposits.tenantId, tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId), eq(rentalEquipmentDeposits.equipmentId, equipmentId))).limit(1);
+  if (!cap) throw new Error(`equipment_deposit_missing:${equipmentId}`);
+  const deductions = await tx.select({ invoiceId: invoices.id, amount: invoiceLineItems.amount, createdAt: invoices.createdAt, hours: invoiceLineItems.quantity })
+    .from(invoiceLineItems).innerJoin(invoices, eq(invoices.id, invoiceLineItems.invoiceId))
+    .innerJoin(edtrReconciliations, eq(edtrReconciliations.id, invoiceLineItems.reconciliationId))
+    .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+    .where(and(eq(invoices.tenantId, tenantId), eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void'), eq(edtr.equipmentId, equipmentId)));
+  const accruals = await tx.select({ amount: depositAccruals.amount, hours: depositAccruals.hours, invoiceId: depositAccruals.invoiceId })
+    .from(depositAccruals).innerJoin(edtrReconciliations, eq(edtrReconciliations.id, depositAccruals.reconciliationId))
+    .innerJoin(edtr, eq(edtr.id, edtrReconciliations.edtrId))
+    .where(and(eq(depositAccruals.tenantId, tenantId), eq(depositAccruals.rentalId, rentalId), eq(edtr.equipmentId, equipmentId)));
+  const totalDeducted = round2HalfUp(deductions.reduce((sum, row) => sum + Number(row.amount), 0));
+  return {
+    depositRequired: Number(cap.required),
+    deductions: deductions.map((row) => ({ invoiceId: row.invoiceId, amount: Number(row.amount), createdAt: row.createdAt })),
+    totalDeducted,
+    totalAccrued: round2HalfUp(accruals.reduce((sum, row) => sum + Number(row.amount), 0)),
+    unbilledAccrued: round2HalfUp(accruals.filter((row) => !row.invoiceId).reduce((sum, row) => sum + Number(row.amount), 0)),
+    hoursUsed: round2HalfUp(deductions.reduce((sum, row) => sum + Number(row.hours), 0) + accruals.reduce((sum, row) => sum + Number(row.hours), 0)),
+    hoursOrdered: null,
+  } satisfies DepositLedger;
+}
+
 // Before a weekly invoice: the deposit left pays the oldest waiting hours first; only the rest is invoiced.
 // Hours split in the same ratio as the money, as splitDeduction's callers do.
 export function coverAccruals<T extends { id: string; amount: number; hours: number }>(balance: number, rows: T[]) {
@@ -95,10 +202,12 @@ export function crossesLowBalance(depositRequired: number, before: number, after
 
 // Shared by approve and the ledger read so both compute the same remaining deposit.
 export async function resolveDepositLedger(tx: Tx, rentalId: string, tenantId: string): Promise<DepositLedger> {
+  const [rental] = await tx.select({ mode: rentals.depositMode }).from(rentals)
+    .where(and(eq(rentals.tenantId, tenantId), eq(rentals.id, rentalId))).limit(1);
   const [quotation] = await tx
     .select()
     .from(quotations)
-    .where(eq(quotations.rentalId, rentalId))
+    .where(and(eq(quotations.tenantId, tenantId), eq(quotations.rentalId, rentalId)))
     .orderBy(desc(quotations.createdAt))
     .limit(1);
 
@@ -108,15 +217,25 @@ export async function resolveDepositLedger(tx: Tx, rentalId: string, tenantId: s
     const [contract] = await tx
       .select()
       .from(rentalContracts)
-      .where(eq(rentalContracts.quotationId, quotation.id))
+      .where(and(eq(rentalContracts.tenantId, tenantId), eq(rentalContracts.quotationId, quotation.id)))
       .orderBy(desc(rentalContracts.createdAt))
       .limit(1);
     if (contract) depositRequired = Number(contract.depositRequired);
     const [ordered] = await tx
       .select({ hours: sql<string | null>`sum(${quotationItems.estimatedHours} * ${quotationItems.quantity})` })
       .from(quotationItems)
-      .where(eq(quotationItems.quotationId, quotation.id));
+      .where(and(eq(quotationItems.tenantId, tenantId), eq(quotationItems.quotationId, quotation.id)));
     hoursOrdered = ordered?.hours != null ? Number(ordered.hours) : null;
+  }
+  if (rental?.mode === 'per_machine') {
+    const caps = await tx.select({ required: rentalEquipmentDeposits.required }).from(rentalEquipmentDeposits)
+      .where(and(eq(rentalEquipmentDeposits.tenantId, tenantId), eq(rentalEquipmentDeposits.rentalId, rentalId)));
+    if (caps.length) depositRequired = round2HalfUp(caps.reduce((sum, row) => sum + Number(row.required), 0));
+    else {
+      const assignments = await tx.select({ equipmentId: equipmentAssignments.equipmentId }).from(equipmentAssignments)
+        .where(and(eq(equipmentAssignments.tenantId, tenantId), eq(equipmentAssignments.rentalId, rentalId), ne(equipmentAssignments.status, 'cancelled')));
+      depositRequired = new Set(assignments.map((row) => row.equipmentId)).size * (await getBillingSettings(tx, tenantId)).minDepositPhp;
+    }
   }
   if (depositRequired === null) depositRequired = (await getBillingSettings(tx, tenantId)).minDepositPhp;
 
@@ -124,7 +243,7 @@ export async function resolveDepositLedger(tx: Tx, rentalId: string, tenantId: s
     .select()
     .from(invoices)
     // A voided deduction gives its hours and money back to the deposit.
-    .where(and(eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void')))
+    .where(and(eq(invoices.tenantId, tenantId), eq(invoices.rentalId, rentalId), eq(invoices.invoiceType, 'deposit_deduction'), ne(invoices.status, 'void')))
     .orderBy(desc(invoices.createdAt));
 
   const deductions = deductionRows.map((row) => ({
@@ -138,9 +257,10 @@ export async function resolveDepositLedger(tx: Tx, rentalId: string, tenantId: s
     ? await tx
         .select({ hours: sql<string | null>`sum(${invoiceLineItems.quantity})` })
         .from(invoiceLineItems)
-        .where(inArray(invoiceLineItems.invoiceId, deductionRows.map((row) => row.id)))
+        .where(and(eq(invoiceLineItems.tenantId, tenantId), inArray(invoiceLineItems.invoiceId, deductionRows.map((row) => row.id))))
     : [];
-  const accruals = await tx.select().from(depositAccruals).where(eq(depositAccruals.rentalId, rentalId));
+  const accruals = await tx.select().from(depositAccruals)
+    .where(and(eq(depositAccruals.tenantId, tenantId), eq(depositAccruals.rentalId, rentalId)));
   const totalAccrued = round2HalfUp(accruals.reduce((sum, row) => sum + Number(row.amount), 0));
   const unbilledAccrued = round2HalfUp(accruals.filter((row) => !row.invoiceId).reduce((sum, row) => sum + Number(row.amount), 0));
   const hoursUsed = round2HalfUp(

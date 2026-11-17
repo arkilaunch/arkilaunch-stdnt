@@ -6,6 +6,9 @@ import {
   couponRedemptions,
   coupons,
   customers,
+  createEquipmentDeposits,
+  equipment,
+  equipmentTypes,
   findTenantByInvoiceIdForWebhook,
   findTenantByProviderPaymentIdForWebhook,
   getBillingSettings,
@@ -14,6 +17,7 @@ import {
   payments,
   quotations,
   rentalContracts,
+  rentalEquipmentDeposits,
   rentals,
   tenants,
   truckRequests,
@@ -121,7 +125,7 @@ export class PaymentsService {
         );
       }
 
-      const { quotation, mobAmount, demobAmount, depositAmount, invoiceType } = await this.bookingCharge(tx, ctx, bookingId);
+      const { quotation, mobAmount, demobAmount, depositAmount, invoiceType, depositLines } = await this.bookingCharge(tx, ctx, bookingId);
       // A customer signs the rental agreement once per quotation before any money moves; at the office, staff pay on paper.
       if (!office && ctx.role === 'customer') await this.recordAgreement(tx, ctx, rental, quotation?.id ?? null, body.agreement, signer);
       const amount = round2HalfUp(mobAmount + demobAmount + depositAmount);
@@ -150,20 +154,19 @@ export class PaymentsService {
             dueDate: new Date(),
           })
           .returning();
-        if (invoice && quotation) {
+        if (invoice) {
           const invoiceId = invoice.id;
-          const lines = (
-            [
-              [`${DEPOSIT_LINE_PREFIX} (prepaid hours, quote revision ${quotation.revision})`, depositAmount],
-              ['Mobilization', mobAmount],
-              ['Demobilization', demobAmount],
-            ] as const
-          )
-            .filter(([, value]) => value > 0)
-            .map(([description, value]) => ({
+          const lines = [
+              ...(depositLines.length ? depositLines : [{ description: `${DEPOSIT_LINE_PREFIX}${quotation ? ` (prepaid hours, quote revision ${quotation.revision})` : ''}`, value: depositAmount, equipmentId: null }]),
+              { description: 'Mobilization', value: mobAmount, equipmentId: null },
+              { description: 'Demobilization', value: demobAmount, equipmentId: null },
+            ]
+            .filter((line) => line.value > 0)
+            .map(({ description, value, equipmentId }) => ({
               tenantId: ctx.tenantId,
               invoiceId,
               description,
+              equipmentId,
               unitPrice: String(value),
               amount: String(value),
             }));
@@ -173,8 +176,7 @@ export class PaymentsService {
       if (!invoice) throw new Error('invoices insert returned no row');
       // A coupon is the one thing that re-prices an issued invoice, and only once.
       if (body.couponCode) {
-        if (!quotation) throw new ConflictException({ error: 'coupon_invalid' });
-        invoice = await this.applyCoupon(tx, ctx, invoice, rental.customerId, body.couponCode);
+        throw new ConflictException({ error: 'coupon_not_applicable_to_deposit' });
       }
       // Charge the invoice's amount: a reused issued invoice is never re-priced underneath the customer.
       const chargeAmount = Number(invoice.amount);
@@ -232,6 +234,9 @@ export class PaymentsService {
     }
 
     let depositAmount = (await getBillingSettings(tx, ctx.tenantId)).minDepositPhp;
+    let depositAlreadyPaid = false;
+    const [rental] = await tx.select({ depositMode: rentals.depositMode }).from(rentals).where(eq(rentals.id, bookingId)).limit(1);
+    if (rental?.depositMode === 'per_machine') await createEquipmentDeposits(tx, ctx.tenantId, bookingId, quotation?.id);
     if (quotation) {
       const [contract] = await tx
         .select()
@@ -246,43 +251,33 @@ export class PaymentsService {
         .from(invoices)
         .where(and(eq(invoices.rentalId, bookingId), eq(invoices.invoiceType, 'deposit'), eq(invoices.status, 'paid')))
         .limit(1);
-      if (paidDeposit) depositAmount = 0;
+      depositAlreadyPaid = !!paidDeposit;
     }
+    const depositLines = rental?.depositMode === 'per_machine'
+      ? await tx.select({ equipmentId: rentalEquipmentDeposits.equipmentId, amount: rentalEquipmentDeposits.required, typeName: equipmentTypes.name, model: equipment.model, serialNo: equipment.serialNo })
+          .from(rentalEquipmentDeposits).innerJoin(equipment, eq(equipment.id, rentalEquipmentDeposits.equipmentId))
+          .innerJoin(equipmentTypes, eq(equipmentTypes.id, equipment.equipmentTypeId))
+          .where(eq(rentalEquipmentDeposits.rentalId, bookingId))
+      : [];
+    if (rental?.depositMode === 'per_machine') depositAmount = round2HalfUp(depositLines.reduce((sum, row) => sum + Number(row.amount), 0));
+    if (depositAlreadyPaid) depositAmount = 0;
     const mobAmount = quotation ? Number(quotation.mobilizationPhp ?? 0) : 0;
     const demobAmount = quotation ? Number(quotation.demobilizationPhp ?? 0) : 0;
     const invoiceType = quotation ? 'booking' : 'deposit';
-    return { quotation, mobAmount, demobAmount, depositAmount, invoiceType };
+    return { quotation, mobAmount, demobAmount, depositAmount, invoiceType,
+      depositLines: depositAmount === 0 ? [] : depositLines.map((row) => ({ description: `${DEPOSIT_LINE_PREFIX}: ${row.typeName} ${row.model} (SN ${row.serialNo})`, value: Number(row.amount), equipmentId: row.equipmentId })) };
   }
 
   // Read-only preview; checkout re-checks and claims it.
-  async previewCoupon(ctx: RequestContext, bookingId: string, code: string) {
+  async previewCoupon(ctx: RequestContext, bookingId: string, _code: string): Promise<never> {
     return withTenantTx(ctx, async (tx) => {
       const [rental] = await tx.select().from(rentals).where(eq(rentals.id, bookingId)).limit(1);
       if (!rental || (ctx.role === 'customer' && !(await ownsCustomer(tx, ctx, rental.customerId)))) {
         throw new NotFoundException({ error: 'booking_not_found' });
       }
-      const { quotation, mobAmount, demobAmount, depositAmount } = await this.bookingCharge(tx, ctx, bookingId);
+      const { quotation } = await this.bookingCharge(tx, ctx, bookingId);
       if (!quotation) throw new ConflictException({ error: 'coupon_invalid' });
-      const upfront = round2HalfUp(mobAmount + demobAmount + depositAmount);
-
-      const [applied] = await tx
-        .select({ code: coupons.code, discountPhp: couponRedemptions.discountPhp })
-        .from(couponRedemptions)
-        .innerJoin(coupons, eq(coupons.id, couponRedemptions.couponId))
-        .innerJoin(invoices, eq(invoices.id, couponRedemptions.invoiceId))
-        .where(and(eq(invoices.rentalId, bookingId), eq(invoices.invoiceType, 'booking'), eq(invoices.status, 'issued')))
-        .limit(1);
-      if (applied && applied.code !== code) throw new ConflictException({ error: 'coupon_already_applied' });
-      const discountPhp = applied
-        ? Number(applied.discountPhp)
-        : (await previewCoupon(tx, code, rental.customerId, upfront)).discountPhp;
-      return {
-        code,
-        discountPhp,
-        mobilizationPhp: round2HalfUp(mobAmount + demobAmount),
-        depositPhp: depositAmount,
-        totalPhp: round2HalfUp(upfront - discountPhp),
-      };
+      throw new ConflictException({ error: 'coupon_not_applicable_to_deposit' });
     });
   }
 
@@ -294,6 +289,7 @@ export class PaymentsService {
     customerId: string,
     code: string,
   ) {
+    if (invoice.invoiceType !== 'truck') throw new ConflictException({ error: 'coupon_not_applicable_to_deposit' });
     const [applied] = await tx
       .select({ code: coupons.code })
       .from(couponRedemptions)
@@ -308,10 +304,8 @@ export class PaymentsService {
     await this.closePendingPayments(tx, invoice.id);
 
     const { coupon, discountPhp } = await claimCoupon(tx, code, customerId, Number(invoice.amount));
-    // Lines can't go negative, so the discount comes off each line in turn, the deposit (or trip) line first.
+    // Lines cannot go negative; rental deposit lines never enter this path.
     const lines = await tx.select().from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoice.id));
-    const depositFirst = (d: string) => (d.startsWith(DEPOSIT_LINE_PREFIX) ? 0 : 1);
-    lines.sort((a, b) => depositFirst(a.description) - depositFirst(b.description));
     let left = discountPhp;
     for (const line of lines) {
       const cut = round2HalfUp(Math.min(left, Number(line.amount)));
@@ -355,8 +349,8 @@ export class PaymentsService {
       if ((await this.paymentsPort.getCheckoutSession(payment.providerRef)).paid) {
         throw new ConflictException({ error: 'payment_in_progress' });
       }
-      // An already-expired session refuses to expire again; either way it can no longer be paid.
-      await this.paymentsPort.expireCheckoutSession(payment.providerRef).catch(() => undefined);
+      // An unconfirmed expiry must never turn a payable provider session into a void local invoice.
+      await this.paymentsPort.expireCheckoutSession(payment.providerRef);
     }
     if (pending.length > 0) {
       await tx
@@ -388,8 +382,40 @@ export class PaymentsService {
     }
   }
 
-  // Lowers, never raises (the customer agreed to the price they saw); rent line first, deposit last.
-  // ponytail: a cut into the deposit line doesn't lower deposit_required, so the ledger still credits the full deposit.
+  // Rollout cleanup for extension fees created before usage-only extensions.
+  // Each invoice is rechecked under the tenant transaction; paid invoices remain historical records.
+  async voidLegacyExtensionInvoices(ctx: RequestContext) {
+    return withTenantTx(ctx, async (tx) => {
+      const open = await tx.select({ id: invoices.id }).from(invoices)
+        .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.invoiceType, 'extension'), eq(invoices.status, 'issued')));
+      const voided: string[] = [];
+      const skipped: string[] = [];
+      for (const candidate of open) {
+        try {
+          const [locked] = await tx.select({ id: invoices.id }).from(invoices)
+            .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.id, candidate.id), eq(invoices.status, 'issued'))).for('update').limit(1);
+          if (!locked) continue;
+          const [settled] = await tx.select({ id: payments.id }).from(payments)
+            .where(and(eq(payments.tenantId, ctx.tenantId), eq(payments.invoiceId, candidate.id), inArray(payments.status, ['paid', 'refunded']))).limit(1);
+          if (settled) { skipped.push(candidate.id); continue; }
+          await this.closePendingPayments(tx, candidate.id);
+          const [updated] = await tx.update(invoices).set({ status: 'void' })
+            .where(and(eq(invoices.tenantId, ctx.tenantId), eq(invoices.id, candidate.id), eq(invoices.status, 'issued'))).returning({ id: invoices.id });
+          if (updated) {
+            voided.push(updated.id);
+            await tx.insert(auditLogs).values({ tenantId: ctx.tenantId, actorId: ctx.userId, action: 'UPDATE',
+              entity: 'invoice_voided', entityId: updated.id, reason: 'Unpaid historical extension fee removed; added-day usage bills through EDTR' });
+          }
+        } catch (error) {
+          if (error instanceof HttpException) skipped.push(candidate.id);
+          else throw error;
+        }
+      }
+      return { voided, skipped };
+    });
+  }
+
+  // Lower only, and keep the frozen consumable deposit fully funded.
   async adjustAmount(ctx: RequestContext, invoiceId: string, body: InvoiceAmountUpdate) {
     return withTenantTx(ctx, async (tx) => {
       const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).limit(1);
@@ -402,6 +428,14 @@ export class PaymentsService {
       const target = round2HalfUp(body.amountPhp);
       if (target > current) throw new ConflictException({ error: 'amount_above_invoice', amountPhp: current });
       if (target === current) return { invoiceId, amountPhp: current };
+
+      if (invoice.rentalId && ['booking', 'deposit'].includes(invoice.invoiceType)) {
+        const depositLines = await tx.select({ amount: invoiceLineItems.amount, description: invoiceLineItems.description })
+          .from(invoiceLineItems).where(eq(invoiceLineItems.invoiceId, invoiceId));
+        const depositFloor = round2HalfUp(depositLines.filter((line) => line.description.startsWith(DEPOSIT_LINE_PREFIX))
+          .reduce((sum, line) => sum + Number(line.amount), 0));
+        if (target < depositFloor) throw new ConflictException({ error: 'deposit_cannot_be_discounted', minimumPhp: depositFloor });
+      }
 
       await this.closePendingPayments(tx, invoiceId);
 
@@ -669,7 +703,7 @@ export class PaymentsService {
       const [rental] = invoice?.rentalId
         ? await tx.select().from(rentals).where(eq(rentals.id, invoice.rentalId)).limit(1)
         : [];
-      if (!invoice || !['weekly', 'extension', 'damage'].includes(invoice.invoiceType) || !rental || !(await ownsCustomer(tx, ctx, rental.customerId))) {
+      if (!invoice || !['weekly', 'weekly_correction', 'extension', 'damage'].includes(invoice.invoiceType) || !rental || !(await ownsCustomer(tx, ctx, rental.customerId))) {
         throw new NotFoundException({ error: 'invoice_not_found' });
       }
       if (invoice.status !== 'issued') throw new ConflictException({ error: 'invoice_not_payable', status: invoice.status });

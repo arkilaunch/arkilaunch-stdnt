@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { BookingDetailResponse, ChangeRequestResolve, RescheduleSuggestion } from '@arkilaunch/shared';
 import { BookingReturnRequestSchema, ChangeRequestResolveSchema, localPhMobile } from '@arkilaunch/shared';
 import { bookingsQueries, sitesQueries } from '../lib/queries.js';
-import { ApiError, apiErrorText, apiGet, apiPatch, apiPost, payloadField } from '../lib/api-client.js';
+import { ApiError, apiErrorText, apiGet, apiPatch, apiPost } from '../lib/api-client.js';
 import { formatDate, formatDateTime, formatPeso, formatStatus } from '../lib/format.js';
 import { Container } from './container.js';
 import { Alert } from './alert.js';
@@ -26,11 +26,6 @@ import { MessengerLinks, phoneHref } from './messenger-links.js';
 export function PendingRequests({ booking }: { booking: BookingDetailResponse }) {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [charge, setCharge] = useState('');
-  const [chargeReason, setChargeReason] = useState('');
-  const [chargeError, setChargeError] = useState<string>();
-  const [reasonError, setReasonError] = useState<string>();
-  const [serverNeedsReason, setServerNeedsReason] = useState(false);
   const resolve = useMutation({
     mutationFn: ({ id, body }: { id: string; body: ChangeRequestResolve }) =>
       apiPatch(`/bookings/${booking.id}/change-requests/${id}`, body),
@@ -43,27 +38,10 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
       ]);
       toast.success(decision === 'approved' ? 'Request approved' : 'Request declined', 'The customer has been notified.');
     },
-    onError: (err) => {
-      if (payloadField(err, 'error') === 'extension_charge_required') {
-        setChargeError('Enter the extra charge.');
-        return;
-      }
-      if (payloadField(err, 'error') === 'charge_reason_required') {
-        setServerNeedsReason(true);
-        setReasonError('Explain why the charge differs from the suggestion.');
-        return;
-      }
-      toast.error('Could not resolve the request', apiErrorText(err));
-    },
+    onError: (err) => toast.error('Could not resolve the request', apiErrorText(err)),
   });
   const [ask, setAsk] = useState<{ request: BookingDetailResponse['changeRequests'][number]; decision: 'approved' | 'rejected' } | null>(null);
-  const needsReason = serverNeedsReason || (ask?.request.kind === 'extend' && ask.request.suggestedChargePhp !== null && Number(charge) !== ask.request.suggestedChargePhp);
   function openRequest(request: BookingDetailResponse['changeRequests'][number], decision: 'approved' | 'rejected') {
-    setCharge(request.suggestedChargePhp === null ? '' : String(request.suggestedChargePhp));
-    setChargeReason('');
-    setChargeError(undefined);
-    setReasonError(undefined);
-    setServerNeedsReason(false);
     setAsk({ request, decision });
   }
 
@@ -108,14 +86,7 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
         body={
           ask?.decision === 'approved'
             ? ask.request.kind === 'extend'
-              ? <div className="flex flex-col gap-4">
-                  <p>{booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to {formatDate(ask.request.requestedEnd)}; other machines keep their dates. The customer is notified.</p>
-                  <Input label="Extra charge (PHP)" type="number" numeric min={0} step="0.01" required value={charge}
-                    hint={ask.request.suggestedChargePhp === null ? 'No suggested charge is available. Enter an amount.' : `Suggested: ${formatPeso(ask.request.suggestedChargePhp)}`}
-                    error={chargeError} onChange={(e) => { setCharge(e.target.value); setChargeError(undefined); }} />
-                  {(ask.request.suggestedChargePhp === null || needsReason || reasonError) && <Input label="Reason for change" required={needsReason || !!reasonError} maxLength={500} value={chargeReason} error={reasonError}
-                    onChange={(e) => { setChargeReason(e.target.value); setReasonError(undefined); }} />}
-                </div>
+              ? <p>{booking.items.find((item) => item.id === ask.request.assignmentId)?.equipmentName ?? 'Every machine'} will run to {formatDate(ask.request.requestedEnd)}. Approved hours continue through the deposit and weekly billing. The customer is notified.</p>
               : 'The booking is cancelled for good. The customer is notified.'
             : 'The booking stays as it is. The customer is notified that you declined.'
         }
@@ -123,20 +94,7 @@ export function PendingRequests({ booking }: { booking: BookingDetailResponse })
         pending={resolve.isPending}
         onConfirm={() => {
           if (!ask) return;
-          const extension = ask.decision === 'approved' && ask.request.kind === 'extend';
-          const body = ChangeRequestResolveSchema.safeParse({ decision: ask.decision,
-            ...(extension ? { chargePhp: charge.trim() ? Number(charge) : NaN } : {}),
-            ...(extension && chargeReason.trim() ? { chargeReason: chargeReason.trim() } : {}),
-          });
-          if (!body.success) {
-            setChargeError('Enter a non-negative amount with at most two decimal places.');
-            return;
-          }
-          if (extension && needsReason && !chargeReason.trim()) {
-            setReasonError('Explain why the charge differs from the suggestion.');
-            return;
-          }
-          resolve.mutate({ id: ask.request.id, body: body.data });
+          resolve.mutate({ id: ask.request.id, body: ChangeRequestResolveSchema.parse({ decision: ask.decision }) });
         }}
         onCancel={() => setAsk(null)}
       />

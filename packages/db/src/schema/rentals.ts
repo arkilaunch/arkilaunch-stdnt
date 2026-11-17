@@ -78,6 +78,7 @@ export const rentals = pgTable(
     projectSiteId: uuid('project_site_id')
       .notNull()
       .references(() => projectSites.id),
+    depositMode: text('deposit_mode').notNull().default('shared'), // historical rentals keep their paid shared deposit
     // Assigned by the booking_code_assign trigger, immutable; the sql`NULL` default only makes
     // Drizzle omit the column (the trigger refuses a supplied code).
     code: text('code').notNull().default(sql`NULL`),
@@ -97,6 +98,7 @@ export const rentals = pgTable(
   (table) => [tenantIsolationPolicy(),
     index('rentals_tenant_id_idx').on(table.tenantId),
     check('rentals_site_contact_mobile_chk', sql`${table.siteContactMobile} IS NULL OR ${table.siteContactMobile} ~ '^[+]639[0-9]{9}$'`),
+    check('rentals_deposit_mode_chk', sql`${table.depositMode} IN ('shared', 'per_machine')`),
   ],
 );
 

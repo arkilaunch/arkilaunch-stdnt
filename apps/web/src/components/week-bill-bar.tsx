@@ -22,10 +22,12 @@ export function WeekBillBar({ rentalId, equipmentId, weekStart }: { rentalId: st
   });
   const [sheetText, setSheetText] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [noWorkReasons, setNoWorkReasons] = useState<Record<string, string>>({});
+  const [correctionReason, setCorrectionReason] = useState('');
   const [confirm, setConfirm] = useState(false);
 
   const bill = useMutation({
-    mutationFn: (body: { weekBillableHours: number; sheetBillableHours: number | null; mismatchNote?: string }) =>
+    mutationFn: (body: { weekBillableHours: number; sheetBillableHours: number | null; mismatchNote?: string; noWorkDays?: { equipmentId: string; day: string; reason: string }[]; correctionReason?: string }) =>
       apiPost<EdtrWeekBillResponse>(`/edtr/weeks/${rentalId}/${equipmentId}/${weekStart}/bill`, body),
     onSuccess: (res) => {
       toast.success(
@@ -50,7 +52,10 @@ export function WeekBillBar({ rentalId, equipmentId, weekStart }: { rentalId: st
   const sheetOk = sheet === null || (Number.isFinite(sheet) && sheet >= 0);
   const mismatch = sheet !== null && sheetOk && Math.abs(sheet - total) > WEEK_SUMMARY_TOLERANCE_HOURS;
   const undecided = data.days.filter((d) => d.status === 'pending' || d.status === 'needs_correction').length;
-  const canBill = data.billState !== 'billed' && undecided === 0 && sheetOk && (!mismatch || note.trim().length >= 3);
+  const missing = data.closureDays?.filter((day) => day.status === 'missing') ?? [];
+  const openAcrossRental = data.closureDays?.filter((day) => day.status !== 'approved' && day.status !== 'missing').length ?? undecided;
+  const noWorkReady = missing.every((day) => (noWorkReasons[`${day.equipmentId}|${day.day}`] ?? '').trim().length >= 3);
+  const canBill = (!data.closedAt || data.reissueAllowed) && data.billState !== 'billed' && openAcrossRental === 0 && sheetOk && (!mismatch || note.trim().length >= 3);
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border bg-surface-sunk px-4 py-2 text-sm">
@@ -90,8 +95,10 @@ export function WeekBillBar({ rentalId, equipmentId, weekStart }: { rentalId: st
         />
       )}
       <span className="ml-auto flex items-center gap-2">
-        {data.billState === 'billed' ? (
-          <span className="text-success">✓ Billed{data.lastBilledAt ? ` ${formatDate(data.lastBilledAt.slice(0, 10))}` : ''}</span>
+        {data.reissueAllowed ? (
+          <Button variant="approve" size="field" disabled={!canBill} loading={bill.isPending} onClick={() => setConfirm(true)}>Review &amp; reissue</Button>
+        ) : data.closedAt || data.billState === 'billed' ? (
+          <span className="text-success">✓ {data.billState === 'billed' ? 'Billed' : data.billState === 'covered' ? 'Week closed; covered by deposit' : 'Week closed'}{data.closedAt ? ` ${formatDate(data.closedAt.slice(0, 10))}` : data.lastBilledAt ? ` ${formatDate(data.lastBilledAt.slice(0, 10))}` : ''}</span>
         ) : data.billState === 'covered' && undecided === 0 && total > 0 ? (
           <>
             <span className="text-success">✓ Paid from deposit</span>
@@ -117,19 +124,33 @@ export function WeekBillBar({ rentalId, equipmentId, weekStart }: { rentalId: st
         tone="approve"
         title={`Bill ${total.toFixed(1)} h for the week of ${formatDate(weekStart)}?`}
         body={
-          <p>
-            The customer gets this week&apos;s statement (hours, amount from the deposit, deposit left). Hours past the deposit are
-            invoiced to {data.bookingCode} to pay, and the Statement of Account is emailed.
-          </p>
+          <div className="space-y-3">
+            <p>The customer gets one rental invoice for the week. Deposit applied to each machine is shown separately. The Statement of Account is emailed.</p>
+            {data.reissueAllowed && <label className="block text-sm">Reason for correction
+              <input className="mt-1 w-full rounded-input border border-border bg-surface px-2 py-1 text-text" maxLength={500}
+                value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="Why this closed week is being reissued" />
+            </label>}
+            {!data.reissueAllowed && missing.map((day) => <label key={`${day.equipmentId}|${day.day}`} className="block text-sm">
+              Confirm no work: {day.label}, {formatDate(day.day)}
+              <input className="mt-1 w-full rounded-input border border-border bg-surface px-2 py-1 text-text" maxLength={500}
+                value={noWorkReasons[`${day.equipmentId}|${day.day}`] ?? ''}
+                onChange={(event) => setNoWorkReasons((current) => ({ ...current, [`${day.equipmentId}|${day.day}`]: event.target.value }))}
+                placeholder="Staff reason (required)" />
+            </label>)}
+          </div>
         }
         confirmLabel="Approve & bill"
         pending={bill.isPending}
         onConfirm={async () => {
+          if (data.reissueAllowed && correctionReason.trim().length < 3) { toast.error('Reason needed', 'Enter why this closed week is being reissued.'); return; }
+          if (!data.reissueAllowed && !noWorkReady) { toast.error('Confirm no work', 'Enter a reason for each missing machine-day before closing the week.'); return; }
           await bill
             .mutateAsync({
               weekBillableHours: total,
               sheetBillableHours: sheet,
               ...(note.trim() ? { mismatchNote: note.trim() } : {}),
+              noWorkDays: data.reissueAllowed ? [] : missing.map((day) => ({ equipmentId: day.equipmentId, day: day.day, reason: noWorkReasons[`${day.equipmentId}|${day.day}`]!.trim() })),
+              ...(data.reissueAllowed ? { correctionReason: correctionReason.trim() } : {}),
             })
             .catch(() => undefined);
         }}

@@ -174,7 +174,7 @@ function CouponsPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Coupons"
-        description="Codes your customers enter at checkout. A coupon comes off the rent, never the consumable deposit."
+        description="Codes apply to eligible charges. Rental booking deposits are excluded."
         actions={<Button onClick={() => setCreating(true)}>New coupon</Button>}
       />
       {coupons.isError && <Alert type="error">{apiErrorText(coupons.error)}</Alert>}

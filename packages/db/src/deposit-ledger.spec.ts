@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coverAccruals, crossesLowBalance, depositForQuote, resolveDepositLedger, splitDeduction } from './deposit-ledger.js';
+import { allocatePaidCents, coverAccruals, crossesLowBalance, depositForQuote, resolveDepositLedger, splitDeduction } from './deposit-ledger.js';
 import { customers, invoices, projectSites, rentals } from './schema/index.js';
 import { withTenantTx } from './with-tenant-tx.js';
 import postgres from 'postgres';
@@ -56,6 +56,21 @@ describe('depositForQuote', () => {
     expect(depositForQuote(settings, null)).toBe(5000);
     expect(depositForQuote(settings, 0)).toBe(5000);
     expect(depositForQuote({ minDepositPhp: 5000, depositPct: 0 }, 100000)).toBe(5000);
+  });
+});
+
+describe('deposit payment allocation', () => {
+  it('keeps partial refunds and identical machine deposit lines separate to the cent', () => {
+    const lines = [
+      { id: 'backhoe-1', amount: 5000 },
+      { id: 'backhoe-2', amount: 5000 },
+      { id: 'delivery', amount: 1000 },
+    ];
+    const shares = allocatePaidCents(lines, 5500);
+    expect(shares.get('backhoe-1')).toBe(250000);
+    expect(shares.get('backhoe-2')).toBe(250000);
+    expect(shares.get('delivery')).toBe(50000);
+    expect([...shares.values()].reduce((sum, cents) => sum + cents, 0)).toBe(550000);
   });
 });
 

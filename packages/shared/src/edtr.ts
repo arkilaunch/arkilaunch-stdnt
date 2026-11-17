@@ -223,6 +223,7 @@ export type EdtrBillPreviewResponse = z.infer<typeof EdtrBillPreviewResponseSche
 export const EdtrApproveRequestSchema = z.object({
   reconciliationId: z.string().uuid(),
   adjustments: AdjustmentsSchema.nullable().optional(),
+  correctionReason: z.string().trim().min(3).max(500).optional(),
 });
 export type EdtrApproveRequest = z.infer<typeof EdtrApproveRequestSchema>;
 
@@ -546,14 +547,41 @@ export interface EdtrWeekResponse {
   billState: WeekBillState;
   unbilledPhp: number;
   lastBilledAt: string | null;
+  closureDays?: { equipmentId: string; label: string; day: string; status: FieldLogDayStatus }[];
+  closedAt?: string | null;
+  reissueAllowed?: boolean;
 }
 
 export const EdtrWeekBillRequestSchema = z.object({
   weekBillableHours: z.number().finite().min(0).max(24 * 7),
   sheetBillableHours: z.number().finite().min(0).max(24 * 7).nullable(),
   mismatchNote: z.string().trim().max(500).optional(),
+  noWorkDays: z.array(z.object({ equipmentId: z.string().uuid(), day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), reason: z.string().trim().min(3).max(500) })).optional(),
+  correctionReason: z.string().trim().min(3).max(500).optional(),
 });
 export type EdtrWeekBillRequest = z.infer<typeof EdtrWeekBillRequestSchema>;
+
+export function weekClosureBlock(input: {
+  today: string;
+  weekEnd: string;
+  days: { equipmentId: string; date: string; status: FieldLogDayStatus }[];
+  noWorkDays: { equipmentId: string; day: string; reason: string }[];
+}): { error: 'week_not_ended' | 'week_has_no_scheduled_days' | 'invalid_no_work_confirmation' | 'week_not_reviewed'; days?: { equipmentId: string; day: string; status: FieldLogDayStatus }[] } | null {
+  if (input.today <= input.weekEnd) return { error: 'week_not_ended' };
+  if (input.days.length === 0) return { error: 'week_has_no_scheduled_days' };
+  const expected = new Map(input.days.map((day) => [`${day.equipmentId}|${day.date}`, day]));
+  const confirmed = new Set<string>();
+  for (const entry of input.noWorkDays) {
+    const key = `${entry.equipmentId}|${entry.day}`;
+    if (confirmed.has(key) || expected.get(key)?.status !== 'missing' || entry.reason.trim().length < 3) {
+      return { error: 'invalid_no_work_confirmation' };
+    }
+    confirmed.add(key);
+  }
+  const open = input.days.filter((day) => day.status !== 'approved' && !(day.status === 'missing' && confirmed.has(`${day.equipmentId}|${day.date}`)))
+    .map((day) => ({ equipmentId: day.equipmentId, day: day.date, status: day.status }));
+  return open.length ? { error: 'week_not_reviewed', days: open } : null;
+}
 
 export interface EdtrWeekBillResponse {
   invoiceId: string | null;

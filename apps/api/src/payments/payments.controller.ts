@@ -89,6 +89,12 @@ export class TruckPaymentsController {
     return this.payments.voidBill(req.ctx, id, body);
   }
 
+  @Post('invoices/legacy-extension-cleanup')
+  @RequirePermission('quote:approve')
+  cleanupLegacyExtensions(@Req() req: CtxRequest) {
+    return this.payments.voidLegacyExtensionInvoices(req.ctx);
+  }
+
   @Post('invoices/:id/cash-payment')
   @RequirePermission('quote:approve')
   recordCash(@Param('id') id: string, @Body() body: OfficePaymentDto, @Req() req: CtxRequest) {

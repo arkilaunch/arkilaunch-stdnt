@@ -460,6 +460,14 @@ Deploy equipment individually within its own booked Manila dates; Deploy all due
 
 Tenant storefronts may advertise qualified, tenant-configured starting prices for equipment and trucking independently of binding quotes. Existing PDF/print documents share consistent tenant branding and readable pagination. Invoice, successful-payment receipt and signed-agreement PDF downloads preserve authoritative financial data and the exact signed terms.
 
+## Machine and weekly billing amendment (2026-11-15)
+
+The [machine-week billing CR](cr-arkilaunch-machine-week-billing.md) amends PRD-F2/F3/F8. New bookings collect one frozen consumable deposit per assigned machine, with its own initial invoice line. An approved extension asks for no second deposit or fee. Approved extension-day EDTR usage follows the same machine balance and weekly rental billing as any other day. Existing rentals keep their historical shared deposit.
+
+Each rental's Monday to Sunday bill shows one gross usage row per machine at its approved hours and hourly rate, then deposit applied by machine and net payable. A fully deposit-covered week has a rundown and SOA entry with no payable invoice. The SOA keeps machine IDs and serial numbers distinct even when one weekly invoice and payment are shared. Machine balances do not pay each other's charges.
+
+The rental invoice header shows date, client/company, heavy equipment and job site above the numbered billing table. Booking deposits use item units. A week cannot close before Sunday or while any scheduled machine-day lacks approval or an explicit staff no-work reason. A reviewed late EDTR correction keeps the issued invoice unchanged and is separately labeled. Admin Bookings uses the Customer truck requests Active/Past switch appearance for both services without changing its tables or actions.
+
 ## Admin operations amendment (2026-11-11)
 
 The [admin operations CR](cr-arkilaunch-admin-operations-clarity.md) amends PRD-F4/F6/F8. Dashboard fleet totals match unretired Equipment records, with Available and Unavailable counts. Admin bookings separate Active from History for both services. Unpaid equipment rentals expire after their Manila start date passes; unpaid truck bookings expire after their scheduled instant. Paid or deployed work remains active until staff closes it. History retains expired, cancelled and completed records. Admin invoices group by billed company and site or delivery location, with booking code and booking person shown. Registration review identifies the submitting customer, including when one login submitted several companies. Ticket text and actions fit their cells and dialogs.

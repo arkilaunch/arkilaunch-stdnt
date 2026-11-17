@@ -14,8 +14,13 @@ export async function renderInvoicePdf(
 ): Promise<Uint8Array> {
   const doc = await DocumentPdf.create('Invoice', invoice.id, brand);
   doc.facts([
+    ['Date', pdfDate(invoice.createdAt)],
     ['Booking', invoice.bookingCode ?? '-'],
-    ['Bill to', invoice.billTo?.companyName ?? '-'],
+    ['Client / company', invoice.billTo?.companyName ?? '-'],
+    ...(invoice.rentalStatement ? ([
+      ['Heavy equipment', invoice.rentalStatement.equipment.join(', ') || '-'],
+      ['Job site', invoice.rentalStatement.jobSite],
+    ] as [string, string][]) : []),
     ['Customer TIN', invoice.billTo?.tin ?? '-'],
     ['Billing address', invoice.billTo?.billingAddress ?? '-'],
     ['Type', invoice.invoiceType.replace(/_/g, ' ')],
@@ -23,17 +28,20 @@ export async function renderInvoicePdf(
     ['Due', pdfDate(invoice.dueDate)],
     ['Status', invoice.status],
   ]);
-  doc.heading('Charges');
+  doc.heading('Billing statement');
+  const weekly = invoice.rentalStatement?.usageLines ?? [];
   doc.table(
-    ['Description', 'Quantity', 'Unit price', 'Amount'],
-    invoice.lineItems.map((l) => [
-      l.description,
-      String(l.quantity),
-      pdfMoney(l.unitPrice),
-      pdfMoney(l.amount),
-    ]),
-    [0.49, 0.11, 0.2, 0.2],
+    ['No.', 'Particulars', 'Qty', 'Unit', 'Unit price', 'Amount'],
+    (weekly.length ? weekly.map((unit) => ({ description: `${unit.label} (SN ${unit.serialNo})\nPeriod: ${invoice.rentalStatement!.weekStart} - ${invoice.rentalStatement!.weekEnd}`,
+      quantity: unit.hours, unit: 'hrs', unitPrice: unit.unitPrice, amount: unit.gross }))
+      : invoice.lineItems.map((line) => ({ ...line, unit: invoice.rentalId && ['booking', 'deposit'].includes(invoice.invoiceType) ? 'item' : 'hrs' })))
+      .map((line, index) => [String(index + 1), line.description, String(line.quantity), line.unit, pdfMoney(line.unitPrice), pdfMoney(line.amount)]),
+    [0.06, 0.42, 0.1, 0.1, 0.16, 0.16],
   );
+  if (weekly.length) {
+    doc.heading('Deposit applied by machine');
+    doc.facts(weekly.map((unit) => [`${unit.label} (SN ${unit.serialNo})`, pdfMoney(unit.depositApplied)]));
+  }
   doc.heading('Invoice total');
   doc.facts([['Total charged', pdfMoney(invoice.amount)]]);
   if (invoice.edtrEvidence)

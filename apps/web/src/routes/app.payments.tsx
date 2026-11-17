@@ -91,7 +91,7 @@ export function InvoiceDetail({ invoice, onDone }: { invoice: InvoiceSummaryResp
         {invoice.status === 'issued' && <RecordCash invoice={invoice} onDone={onDone} />}
         {invoice.status === 'issued' && ADJUSTABLE.has(invoice.invoiceType) && <ChangeAmount invoice={invoice} onDone={onDone} />}
         {invoice.status === 'paid' && invoice.invoiceType !== 'deposit_deduction' && <RefundPayment invoice={invoice} />}
-        {((invoice.invoiceType === 'weekly' && invoice.status === 'issued') ||
+        {((['weekly', 'weekly_correction'].includes(invoice.invoiceType) && invoice.status === 'issued') ||
           (invoice.invoiceType === 'deposit_deduction' && invoice.status !== 'void')) && <VoidBill invoice={invoice} onDone={onDone} />}
       </div>
     </div>

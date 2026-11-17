@@ -672,6 +672,10 @@ Print/PDF outputs share a tenant letterhead, proportional logo, configured accen
 
 ---
 
+## Rental billing and Admin Bookings amendment (2026-11-15)
+
+See [machine-week billing CR](cr-arkilaunch-machine-week-billing.md). Customer rental invoices place date, billed company, equipment and job site before a six-column billing statement: No., Particulars, Quantity, Unit, Unit Price and Amount. A weekly row includes machine type/model, serial and Monday to Sunday period; deposit applied is listed per machine below the gross rows, followed by net payable. The SOA shows a weekly total and machine detail with deposit remaining alongside any amount due. Print and PDF follow the same information order. Admin Bookings uses the shared compact Active/Past control from Customer truck requests in both service views, with a visible selected state and keyboard focus.
+
 ## Self-Check
 
 - [x] §0 is fully filled; no `{{PLACEHOLDER}}` values remain in Brand Stance

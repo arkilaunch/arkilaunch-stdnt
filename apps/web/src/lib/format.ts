@@ -92,6 +92,8 @@ export const formatRole = labeler(ROLE_LABELS, 'Unknown role');
 const INVOICE_TYPE_LABELS: Record<string, string> = {
   deposit: 'Deposit',
   deposit_deduction: 'Deposit deduction',
+  weekly: 'Weekly rental',
+  weekly_correction: 'Weekly rental correction',
   rental: 'Rental',
   extension: 'Rental extension',
     damage: 'Equipment damage',
