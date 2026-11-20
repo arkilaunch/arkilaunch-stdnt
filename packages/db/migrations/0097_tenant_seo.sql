@@ -36,7 +36,7 @@ ALTER TABLE "tenants" ADD CONSTRAINT "tenants_location_ph"
 ALTER TABLE "tenants" DROP CONSTRAINT IF EXISTS "tenants_same_as_https";--> statement-breakpoint
 ALTER TABLE "tenants" ADD CONSTRAINT "tenants_same_as_https"
   CHECK (cardinality("same_as") <= 8 AND array_position("same_as", NULL) IS NULL
-    AND (cardinality("same_as") = 0 OR array_to_string("same_as", E'\n') ~ '^https://\S{1,300}(\nhttps://\S{1,300})*$'));--> statement-breakpoint
+    AND (cardinality("same_as") = 0 OR (array_to_string("same_as", E'\n') ~ '^https://\S+(\nhttps://\S+)*$' AND length(array_to_string("same_as", '')) <= 2400)));--> statement-breakpoint
 
 -- lastmod moves only when something a crawler reads changes (not runtime hours or deposits).
 CREATE OR REPLACE FUNCTION touch_content_updated_at() RETURNS trigger

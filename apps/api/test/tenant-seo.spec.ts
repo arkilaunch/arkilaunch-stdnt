@@ -118,7 +118,7 @@ describe('tenant search settings', () => {
     try {
       const attempts = [
         () => sql`update tenants set same_as = '{http://insecure.test}' where id = ${reg.tenantId}`,
-        () => sql`update tenants set latitude = 121, longitude = 14 where id = ${reg.tenantId}`,
+        () => sql`update tenants set latitude = 25, longitude = 121 where id = ${reg.tenantId}`,
         () => sql`update tenants set latitude = 14.6 where id = ${reg.tenantId}`,
         () => sql`update tenants set business_type = 'Casino' where id = ${reg.tenantId}`,
         () => sql`update tenants set seo_title = '' where id = ${reg.tenantId}`,
