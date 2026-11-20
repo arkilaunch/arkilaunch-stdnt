@@ -19,7 +19,7 @@ import { getAccessToken } from '../lib/auth-client.js';
 import { Skeleton } from '../components/skeleton.js';
 import { LoadError } from '../components/load-error.js';
 import { EmptyState } from '../components/empty-state.js';
-import { DEFAULT_SUBHEAD, DEFAULT_TAGLINE, HOME_EYEBROW_SUFFIX, HOW_IT_WORKS, PREVIEW_COUNT, firstSentence, rentable } from '../lib/storefront-content.js';
+import { DEFAULT_SUBHEAD, DEFAULT_TAGLINE, HOME_EYEBROW_SUFFIX, HOW_IT_WORKS, PREVIEW_COUNT, areasLine, firstSentence, rentable } from '../lib/storefront-content.js';
 
 function HowItWorks() {
   const [ref, visible] = useScrollReveal<HTMLElement>();
@@ -90,6 +90,9 @@ function LandingPage() {
             <p className="max-w-lg text-body-lg text-text-muted">
               {firstSentence(tenant?.about) ?? DEFAULT_SUBHEAD}
             </p>
+            {(tenant?.serviceAreas ?? []).length > 0 && (
+              <p className="text-sm text-text-muted">{areasLine(tenant!.serviceAreas!)}</p>
+            )}
             <div className="flex flex-wrap gap-3">
               <Button variant="primary" onClick={() => navigate({ to: '/equipment' })}>
                 Browse equipment

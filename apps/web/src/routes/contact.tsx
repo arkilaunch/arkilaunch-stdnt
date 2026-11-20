@@ -1,13 +1,15 @@
 import { createRoute } from '@tanstack/react-router';
 import { publicLayoutRoute } from './_public.js';
 import { useTenant } from '../lib/tenant.js';
-import { placeLine } from '../lib/storefront-content.js';
+import { hoursLine, placeLine } from '../lib/storefront-content.js';
 import { MessengerLinks, phoneHref } from '../components/messenger-links.js';
 
 function ContactPage() {
   const tenant = useTenant();
   const place = tenant ? placeLine(tenant) : '';
-  const hasContact = Boolean(place || tenant?.phone || tenant?.contactEmail);
+  const hours = hoursLine(tenant?.hours);
+  const areas = tenant?.serviceAreas ?? [];
+  const hasContact = Boolean(place || tenant?.phone || tenant?.contactEmail || hours || areas.length);
   return (
     <div className="flex flex-col gap-4 px-6 py-10 sm:px-10">
       <h1 className="text-display-md text-text">Contact</h1>
@@ -18,6 +20,18 @@ function ContactPage() {
             <>
               <dt className="font-semibold text-text">Address</dt>
               <dd className="text-text-muted">{place}</dd>
+            </>
+          )}
+          {hours && (
+            <>
+              <dt className="font-semibold text-text">Hours</dt>
+              <dd className="text-text-muted">{hours}</dd>
+            </>
+          )}
+          {areas.length > 0 && (
+            <>
+              <dt className="font-semibold text-text">Areas served</dt>
+              <dd className="text-text-muted">{areas.join(', ')}</dd>
             </>
           )}
           {tenant?.phone && (

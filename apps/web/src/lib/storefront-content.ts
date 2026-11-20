@@ -32,6 +32,53 @@ export function rentable(items: CatalogEquipment[]): CatalogEquipment[] {
   return items.filter((eq) => eq.availabilityStatus !== 'maintenance');
 }
 
+export const areasLine = (areas: string[]) => `Serving ${areas.join(', ')}`;
+
 export function placeLine(t: { address?: string | null; city?: string | null; province?: string | null }): string {
   return [t.address, t.city, t.province].filter(Boolean).join(', ');
+}
+
+// Profile links shown in the footer and marked up as sameAs: Facebook first, then the tenant's own links, labeled
+// by site. Only https links ever reach an href.
+const PROFILE_LABELS: [RegExp, string][] = [
+  [/(^|\.)(facebook|fb)\.com$/, 'Facebook'],
+  [/(^|\.)(google\.com|g\.page|goo\.gl|maps\.app\.goo\.gl)$/, 'Google'],
+  [/(^|\.)linkedin\.com$/, 'LinkedIn'],
+  [/(^|\.)instagram\.com$/, 'Instagram'],
+  [/(^|\.)(youtube\.com|youtu\.be)$/, 'YouTube'],
+  [/(^|\.)tiktok\.com$/, 'TikTok'],
+  [/(^|\.)(x|twitter)\.com$/, 'X'],
+];
+
+export interface ProfileLink {
+  label: string;
+  href: string;
+}
+
+export function profileLinks(t: { facebookUrl?: string | null; sameAs?: string[] | null | undefined }): ProfileLink[] {
+  const seen = new Set<string>();
+  const out: ProfileLink[] = [];
+  for (const href of [t.facebookUrl, ...(t.sameAs ?? [])]) {
+    if (!href || !/^https:\/\//i.test(href) || seen.has(href)) continue;
+    seen.add(href);
+    let host = '';
+    try {
+      host = new URL(href).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    out.push({ label: PROFILE_LABELS.find(([re]) => re.test(host))?.[1] ?? host.replace(/^www\./, ''), href });
+  }
+  return out;
+}
+
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// "Mon–Sat, 07:00–17:00" from tenant_calendar's hours (0 = Sunday).
+export function hoursLine(h: { openTime: string; closeTime: string; openDays: number[] } | null | undefined): string | null {
+  if (!h || h.openDays.length === 0) return null;
+  const days = [...new Set(h.openDays)].sort((a, b) => a - b);
+  const contiguous = days.every((d, i) => i === 0 || d === days[i - 1]! + 1);
+  const dayText = contiguous && days.length > 2 ? `${DAY_SHORT[days[0]!]}–${DAY_SHORT[days.at(-1)!]}` : days.map((d) => DAY_SHORT[d]).join(', ');
+  return `${dayText}, ${h.openTime}–${h.closeTime}`;
 }

@@ -11,6 +11,7 @@ import { Input } from './input.js';
 import { Select } from './select.js';
 import { Surface } from './surface.js';
 import { useToast } from './toast.js';
+import { SeoSection } from './seo-form.js';
 
 const DEFAULT_PRIMARY = '#f2a100';
 const DEFAULT_HEADER = '#f5f2eb';
@@ -409,6 +410,8 @@ export function BrandingForm({ basePath }: { basePath: string }) {
           </div>
         </form>
       </Surface>
+
+      <SeoSection basePath={basePath} tenantName={saved.data.legalName} />
     </div>
   );
 }

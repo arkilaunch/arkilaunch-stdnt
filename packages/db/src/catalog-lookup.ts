@@ -3,6 +3,9 @@ import { db } from './client.js';
 
 // @Public, pre-tenant-context: calls narrow SECURITY DEFINER functions, not RLS tables.
 
+// timestamptz may arrive as a Date or a string depending on the driver's parsers.
+const isoOrNull = (v: unknown): string | null => (v == null ? null : new Date(v as string | Date).toISOString());
+
 export interface CatalogEquipmentRow {
   id: string;
   equipmentTypeName: string;
@@ -14,6 +17,7 @@ export interface CatalogEquipmentRow {
   optionGroups: { name: string; values: string[] }[];
   photoCredit: string | null;
   photoSourceUrl: string | null;
+  updatedAt: string | null;
 }
 
 export type CatalogEquipmentDetailRow = CatalogEquipmentRow;
@@ -29,6 +33,7 @@ interface CatalogEquipmentDbRow extends Record<string, unknown> {
   option_groups: { name: string; values: string[] }[] | null;
   photo_credit: string | null;
   photo_source_url: string | null;
+  updated_at?: string | Date | null;
 }
 
 function toCatalogEquipment(row: CatalogEquipmentDbRow): CatalogEquipmentRow {
@@ -43,6 +48,7 @@ function toCatalogEquipment(row: CatalogEquipmentDbRow): CatalogEquipmentRow {
     optionGroups: row.option_groups ?? [],
     photoCredit: row.photo_credit,
     photoSourceUrl: row.photo_source_url,
+    updatedAt: isoOrNull(row.updated_at),
   };
 }
 
@@ -109,6 +115,15 @@ export interface CatalogTenantRow {
   address: string | null;
   city: string | null;
   province: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  businessType: string | null;
+  serviceAreas: string[];
+  location: { lat: number; lng: number } | null;
+  sameAs: string[];
+  // Present only when the tenant publishes its hours.
+  hours: { openTime: string; closeTime: string; openDays: number[] } | null;
+  contentUpdatedAt: string | null;
 }
 
 export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTenantRow | null> {
@@ -130,6 +145,17 @@ export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTena
     address: string | null;
     city: string | null;
     province: string | null;
+    seo_title?: string | null;
+    seo_description?: string | null;
+    business_type?: string | null;
+    service_areas?: string[] | null;
+    latitude?: string | null;
+    longitude?: string | null;
+    same_as?: string[] | null;
+    open_time?: string | null;
+    close_time?: string | null;
+    open_days?: number[] | null;
+    content_updated_at?: string | Date | null;
   }>(sql`select * from catalog_get_tenant(${slug})`);
   const r = rows[0];
   if (!r) return null;
@@ -151,6 +177,14 @@ export async function getCatalogTenantForSlug(slug: string): Promise<CatalogTena
     address: r.address,
     city: r.city,
     province: r.province,
+    seoTitle: r.seo_title ?? null,
+    seoDescription: r.seo_description ?? null,
+    businessType: r.business_type ?? null,
+    serviceAreas: r.service_areas ?? [],
+    location: r.latitude != null && r.longitude != null ? { lat: Number(r.latitude), lng: Number(r.longitude) } : null,
+    sameAs: r.same_as ?? [],
+    hours: r.open_time && r.close_time ? { openTime: r.open_time, closeTime: r.close_time, openDays: r.open_days ?? [] } : null,
+    contentUpdatedAt: isoOrNull(r.content_updated_at),
   };
 }
 

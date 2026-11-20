@@ -8,8 +8,11 @@ import {
   PREVIEW_COUNT,
   PRICE_ON_REQUEST,
   GUEST_CATALOG_TITLE,
+  areasLine,
   firstSentence,
+  hoursLine,
   placeLine,
+  profileLinks,
   rentable,
 } from './storefront-content.js';
 
@@ -24,8 +27,6 @@ export function escapeText(s: string): string {
 const e = escapeText;
 const detailHref = (id: string) => `/equipment/${encodeURIComponent(id)}`;
 const rateLabel = (rate: number | null | undefined) => (rate != null ? `${formatPeso(rate)} / hour` : PRICE_ON_REQUEST);
-// Tenant URLs reach an href only when they are https.
-const safeUrl = (u: string | null | undefined) => (u && /^https:\/\//i.test(u) ? u : null);
 
 export type SnapshotPage =
   | { kind: 'home'; tenant: CatalogTenant; equipment: CatalogEquipment[] }
@@ -38,14 +39,10 @@ function nav(t: CatalogTenant): string {
   return `<header><p>${e(t.name)}</p><nav aria-label="Main"><a href="/equipment">Browse equipment</a> <a href="/contact">Contact</a> <a href="/help">Help center</a></nav></header>`;
 }
 
+// The same footer content the storefront shows: the name and its profile links.
 function footer(t: CatalogTenant): string {
-  const place = placeLine(t);
-  const parts = [`<p>${e(t.name)}</p>`];
-  if (place) parts.push(`<p>${e(place)}</p>`);
-  if (t.phone) parts.push(`<p>${e(t.phone)}</p>`);
-  const fb = safeUrl(t.facebookUrl);
-  if (fb) parts.push(`<p><a href="${e(fb)}" rel="me noopener noreferrer">Facebook</a></p>`);
-  return `<footer>${parts.join('')}</footer>`;
+  const links = profileLinks(t).map((p) => `<li><a href="${e(p.href)}" rel="me noopener noreferrer">${e(p.label)}</a></li>`);
+  return `<footer><p>${e(t.name)}</p>${links.length ? `<ul>${links.join('')}</ul>` : ''}</footer>`;
 }
 
 function home(t: CatalogTenant, items: CatalogEquipment[]): string {
@@ -60,6 +57,7 @@ function home(t: CatalogTenant, items: CatalogEquipment[]): string {
     `<section><p>${e(t.name)} · ${e(HOME_EYEBROW_SUFFIX)}</p>`,
     `<h1>${e(t.tagline || DEFAULT_TAGLINE)}</h1>`,
     `<p>${e(firstSentence(t.about) ?? DEFAULT_SUBHEAD)}</p>`,
+    t.serviceAreas?.length ? `<p>${e(areasLine(t.serviceAreas))}</p>` : '',
     `<p><a href="/equipment">Browse equipment</a></p></section>`,
     offered.length ? `<section><h2>Available equipment</h2><ul>${cards}</ul>${more}</section>` : '',
     `<section><h2>How renting works</h2><ol>${steps}</ol></section>`,
@@ -90,6 +88,9 @@ function contact(t: CatalogTenant): string {
   const place = placeLine(t);
   const rows: string[] = [];
   if (place) rows.push(`<dt>Address</dt><dd>${e(place)}</dd>`);
+  const hours = hoursLine(t.hours);
+  if (hours) rows.push(`<dt>Hours</dt><dd>${e(hours)}</dd>`);
+  if (t.serviceAreas?.length) rows.push(`<dt>Areas served</dt><dd>${e(t.serviceAreas.join(', '))}</dd>`);
   if (t.phone) rows.push(`<dt>Phone</dt><dd>${e(t.phone)}</dd>`);
   if (t.contactEmail) rows.push(`<dt>Email</dt><dd><a href="mailto:${e(t.contactEmail)}">${e(t.contactEmail)}</a></dd>`);
   return `<h1>Contact</h1>${t.about ? `<p>${e(t.about)}</p>` : ''}${rows.length ? `<dl>${rows.join('')}</dl>` : ''}`;
@@ -123,7 +124,10 @@ export function llmsTxt(t: CatalogTenant, origin: string, items: CatalogEquipmen
   if (place) lines.push(`- Address: ${place}`);
   if (t.phone) lines.push(`- Phone: ${t.phone}`);
   if (t.contactEmail) lines.push(`- Email: ${t.contactEmail}`);
-  if (safeUrl(t.facebookUrl)) lines.push(`- Facebook: ${t.facebookUrl}`);
+  const hours = hoursLine(t.hours);
+  if (hours) lines.push(`- Hours: ${hours}`);
+  if (t.serviceAreas?.length) lines.push(`- Areas served: ${t.serviceAreas.join(', ')}`);
+  for (const p of profileLinks(t)) lines.push(`- ${p.label}: ${p.href}`);
   lines.push(`- Website: ${origin}/`, '', '## Pages', '');
   lines.push(`- [Equipment for rent](${origin}/equipment): the full fleet with published hourly rates`);
   lines.push(`- [Contact](${origin}/contact): address, phone and email`);

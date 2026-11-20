@@ -53,6 +53,7 @@ import type {
   SiteEquipmentWeatherResponse,
   TenantApplicationListResponse,
   TenantBranding,
+  TenantSeo,
 } from '@arkilaunch/shared';
 import { apiGet, apiPost } from './api-client.js';
 import {
@@ -165,6 +166,11 @@ export const tenantsQueries = {
     queryOptions({
       queryKey: ['tenants', 'applications', limit, offset] as const,
       queryFn: () => apiGet<TenantApplicationListResponse>(`/tenants/applications?limit=${limit}&offset=${offset}`),
+    }),
+  seo: (basePath: string) =>
+    queryOptions({
+      queryKey: ['seo', basePath] as const,
+      queryFn: () => apiGet<TenantSeo>(`${basePath}/seo`),
     }),
   branding: (basePath: string) =>
     queryOptions({

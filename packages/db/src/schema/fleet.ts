@@ -21,6 +21,8 @@ export const equipment = pgTable(
     serialNo: text('serial_no').notNull(),
     availabilityStatus: text('availability_status').notNull().default('available'),
     runtimeHours: numeric('runtime_hours', { precision: 10, scale: 2 }).notNull().default('0'),
+    // Sitemap lastmod: moved by a trigger (0097) when public listing content changes.
+    contentUpdatedAt: timestamp('content_updated_at', { withTimezone: true }).notNull().defaultNow(),
     // All nullable: added after the table had rows. `model` is the name; modelNumber the part code.
     modelNumber: text('model_number'),
     yearOfManufacture: integer('year_of_manufacture'),

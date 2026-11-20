@@ -39,10 +39,12 @@ export function brandVars(t: TenantBrand | null | undefined): Partial<Record<(ty
   return vars;
 }
 
-type TitleTenant = Pick<CatalogTenant, 'name' | 'city'>;
+type TitleTenant = Pick<CatalogTenant, 'name' | 'city'> & { seoTitle?: string | null | undefined };
 
 // The home title carries the city, so a local search ("equipment rental Quezon City") matches the brand page.
+// The tenant's own SEO title wins when they wrote one.
 export function homeTitle(t: TitleTenant): string {
+  if (t.seoTitle) return t.seoTitle;
   return t.city ? `${t.name} | Equipment rental in ${t.city}` : t.name;
 }
 
@@ -146,10 +148,13 @@ export function equipmentPage(eq: CatalogEquipment, t: CatalogTenant, origin: st
   };
 }
 
+// tenant_calendar's open_days: 0 = Sunday.
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 // The home page's entity: the rental yard as a LocalBusiness, and the storefront it publishes.
 function homeGraph(t: CatalogTenant, origin: string, description: string): Record<string, unknown> {
   const home = `${origin}/`;
-  const business: Record<string, unknown> = { '@type': 'LocalBusiness', '@id': `${origin}/#business`, name: t.name, url: home, description };
+  const business: Record<string, unknown> = { '@type': t.businessType ?? 'LocalBusiness', '@id': `${origin}/#business`, name: t.name, url: home, description };
   if (t.logoUrl ?? t.iconUrl) business.logo = t.logoUrl ?? t.iconUrl;
   if (t.heroUrl ?? t.logoUrl) business.image = t.heroUrl ?? t.logoUrl;
   if (t.phone) business.telephone = t.phone;
@@ -163,7 +168,18 @@ function homeGraph(t: CatalogTenant, origin: string, description: string): Recor
       addressCountry: 'PH',
     };
   }
-  if (t.facebookUrl) business.sameAs = [t.facebookUrl];
+  const sameAs = [...new Set([t.facebookUrl, ...(t.sameAs ?? [])].filter((u): u is string => Boolean(u)))];
+  if (sameAs.length) business.sameAs = sameAs;
+  if (t.serviceAreas?.length) business.areaServed = t.serviceAreas;
+  if (t.location) business.geo = { '@type': 'GeoCoordinates', latitude: t.location.lat, longitude: t.location.lng };
+  if (t.hours?.openDays.length) {
+    business.openingHoursSpecification = {
+      '@type': 'OpeningHoursSpecification',
+      dayOfWeek: [...t.hours.openDays].sort().map((d) => DAY_NAMES[d]),
+      opens: t.hours.openTime,
+      closes: t.hours.closeTime,
+    };
+  }
   const website = { '@type': 'WebSite', '@id': `${origin}/#website`, name: t.name, url: home, inLanguage: 'en-PH', publisher: { '@id': `${origin}/#business` } };
   return { '@context': 'https://schema.org', '@graph': [business, website] };
 }
@@ -174,7 +190,7 @@ export function headTags(t: CatalogTenant, url: URL, detail?: PageDetail | null)
   const canonical = `${url.origin}${path === '/' ? '/' : path}`;
   const title = pageTitle(path, t, detail?.title) ?? t.name;
   const description =
-    detail?.description ?? t.tagline ?? t.about?.slice(0, 160) ?? `Heavy equipment rentals from ${t.name}.`;
+    detail?.description ?? (path === '/' ? t.seoDescription : null) ?? t.tagline ?? t.about?.slice(0, 160) ?? `Heavy equipment rentals from ${t.name}.`;
   const image = detail?.imageUrl ?? t.heroUrl ?? t.iconUrl ?? t.logoUrl;
   const icon = t.iconUrl ?? t.logoUrl;
   const theme = t.headerColor ?? t.primaryColor;
@@ -217,8 +233,20 @@ export interface SitemapEntry {
   lastmod?: string | null;
 }
 
-export function tenantSitemapEntries(equipmentIds: string[]): SitemapEntry[] {
-  return [...INDEXABLE, ...equipmentIds.map((id) => `/equipment/${encodeURIComponent(id)}`)].map((path) => ({ path }));
+const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : null);
+const latest = (dates: (string | null | undefined)[]) => dates.filter((d): d is string => Boolean(d)).sort().at(-1) ?? null;
+
+// lastmod: the tenant's content change for its own pages; the newest listing for the catalog; each unit's own.
+export function tenantSitemapEntries(
+  t: Pick<CatalogTenant, 'contentUpdatedAt'> | null,
+  items: Pick<CatalogEquipment, 'id' | 'updatedAt'>[],
+): SitemapEntry[] {
+  const site = t?.contentUpdatedAt ?? null;
+  const pages = INDEXABLE.map((path) => ({
+    path,
+    lastmod: day(path === '/equipment' ? latest([site, ...items.map((i) => i.updatedAt)]) : path === '/' || path === '/contact' ? site : null),
+  }));
+  return [...pages, ...items.map((i) => ({ path: `/equipment/${encodeURIComponent(i.id)}`, lastmod: day(i.updatedAt) }))];
 }
 
 export function sitemapXml(origin: string, entries: SitemapEntry[]): string {

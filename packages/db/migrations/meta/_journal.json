@@ -673,6 +673,13 @@
       "when": 1794787200000,
       "tag": "0096_rental_machine_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1795132800000,
+      "tag": "0097_tenant_seo",
+      "breakpoints": true
     }
   ]
 }

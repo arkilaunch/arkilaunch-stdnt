@@ -154,6 +154,8 @@ export const CatalogEquipmentSchema = z.object({
   optionGroups: z.array(EquipmentOptionGroupSchema).optional(),
   photoCredit: z.string().nullable().optional(),
   photoSourceUrl: z.string().nullable().optional(),
+  // Sitemap lastmod (ISO timestamp); nullish for an API revision that predates it.
+  updatedAt: z.string().nullish(),
 });
 export type CatalogEquipment = z.infer<typeof CatalogEquipmentSchema>;
 

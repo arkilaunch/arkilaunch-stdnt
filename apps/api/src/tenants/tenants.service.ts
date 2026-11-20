@@ -8,6 +8,8 @@ import {
   EmailTakenError,
   pgError,
   getTenantBranding,
+  getTenantSeo,
+  updateTenantSeo,
   getTenantPaymongoAccount,
   setTenantPaymongoAccount,
   setTenantBrandingImage,
@@ -38,8 +40,10 @@ import type {
   TenantBranding,
   TestimonialWrite,
   TenantBrandingUpdateRequest,
+  TenantSeo,
+  TenantSeoUpdateRequest,
 } from '@arkilaunch/shared';
-import { isTenantSlug, PlatformCompanyListResponseSchema } from '@arkilaunch/shared';
+import { isTenantSlug, PlatformCompanyListResponseSchema, TenantSeoSchema } from '@arkilaunch/shared';
 import { AuthService } from '../auth/auth.service.js';
 import { StorageService, equipmentBucket } from '../storage/storage.service.js';
 import { DISPLAY_IMAGE_TYPES, validateUpload } from '../storage/upload-validation.js';
@@ -214,6 +218,23 @@ If you did not register, ignore this email.`,
       throw err;
     }
     return this.getBranding(tenantId);
+  }
+
+  // Same tenant contract as branding. Parsed, not cast: a stray business_type fails loudly.
+  async getSeo(tenantId: string): Promise<TenantSeo> {
+    const row = await getTenantSeo(tenantId);
+    if (!row) throw new NotFoundException({ error: 'company_not_found' });
+    return TenantSeoSchema.parse(row);
+  }
+
+  async updateSeo(ctx: RequestContext, tenantId: string, input: TenantSeoUpdateRequest): Promise<TenantSeo> {
+    try {
+      await updateTenantSeo(tenantId, ctx.userId, input);
+    } catch (err) {
+      if (err instanceof CompanyNotFoundError) throw new NotFoundException({ error: 'company_not_found' });
+      throw err;
+    }
+    return this.getSeo(tenantId);
   }
 
   async getPaymongoAccount(tenantId: string) {

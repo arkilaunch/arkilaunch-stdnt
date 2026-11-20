@@ -267,6 +267,63 @@ export async function updateTenantBranding(
   }
 }
 
+// Search and AI-answer presence (CR tenant-seo-geo). Its own write, so a branding save can never wipe it.
+export interface TenantSeoInput {
+  seoTitle: string | null;
+  seoDescription: string | null;
+  businessType: string | null;
+  serviceAreas: string[];
+  location: { lat: number; lng: number } | null;
+  sameAs: string[];
+  publishHours: boolean;
+}
+
+export interface TenantHoursRow {
+  openTime: string;
+  closeTime: string;
+  openDays: number[];
+}
+
+export async function updateTenantSeo(tenantId: string, actorUserId: string, s: TenantSeoInput): Promise<void> {
+  try {
+    await db.execute(
+      sql`select tenants_update_seo(${tenantId}, ${actorUserId}, ${s.seoTitle}, ${s.seoDescription}, ${s.businessType},
+        array(select jsonb_array_elements_text(${JSON.stringify(s.serviceAreas)}::jsonb)), ${s.location?.lat ?? null}::numeric, ${s.location?.lng ?? null}::numeric,
+        array(select jsonb_array_elements_text(${JSON.stringify(s.sameAs)}::jsonb)), ${s.publishHours})`,
+    );
+  } catch (err) {
+    rethrowCompanyNotFound(err);
+  }
+}
+
+export async function getTenantSeo(tenantId: string): Promise<(TenantSeoInput & { hours: TenantHoursRow | null }) | null> {
+  const rows = await db.execute<{
+    seo_title: string | null;
+    seo_description: string | null;
+    business_type: string | null;
+    service_areas: string[] | null;
+    latitude: string | null;
+    longitude: string | null;
+    same_as: string[] | null;
+    publish_hours: boolean;
+    open_time: string | null;
+    close_time: string | null;
+    open_days: number[] | null;
+  }>(sql`select * from tenants_get_seo(${tenantId})`);
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    seoTitle: r.seo_title,
+    seoDescription: r.seo_description,
+    businessType: r.business_type,
+    serviceAreas: r.service_areas ?? [],
+    location: r.latitude !== null && r.longitude !== null ? { lat: Number(r.latitude), lng: Number(r.longitude) } : null,
+    sameAs: r.same_as ?? [],
+    publishHours: r.publish_hours,
+    hours: r.open_time && r.close_time ? { openTime: r.open_time, closeTime: r.close_time, openDays: r.open_days ?? [] } : null,
+  };
+}
+
 export async function setTenantBrandingImage(
   tenantId: string,
   actorUserId: string,

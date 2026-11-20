@@ -24,6 +24,9 @@ const tenant: CatalogTenant = {
   address: '12 Mindanao Ave',
   city: 'Quezon City',
   province: 'Metro Manila',
+  serviceAreas: ['Quezon City', 'Bulacan'],
+  hours: { openTime: '07:00', closeTime: '17:00', openDays: [1, 2, 3, 4, 5, 6] },
+  sameAs: ['https://www.linkedin.com/company/almara'],
 };
 const unit: CatalogEquipment = {
   id: '22222222-2222-4222-8222-222222222222',

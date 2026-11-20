@@ -12,6 +12,7 @@ import {
 import {
   CatalogEquipmentListResponseSchema,
   CatalogEquipmentSchema,
+  CatalogTenantSchema,
   CatalogTestimonialListResponseSchema,
   isSelfLoadingTruckType,
   type CatalogEquipment,
@@ -35,7 +36,8 @@ export class CatalogService {
   async getTenant(slug: string): Promise<CatalogTenant> {
     const tenant = await getCatalogTenantForSlug(slug);
     if (!tenant) throw new NotFoundException({ error: 'tenant_not_found' });
-    return toBranding(tenant);
+    // Parsed, not cast: the edge Worker writes these fields into public HTML.
+    return CatalogTenantSchema.parse(toBranding(tenant));
   }
 
   async listTenants(query: CatalogTenantListQuery): Promise<CatalogTenantListResponse> {

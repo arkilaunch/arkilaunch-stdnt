@@ -180,8 +180,93 @@ export const TenantBrandingSchema = z.object({
 });
 export type TenantBranding = z.infer<typeof TenantBrandingSchema>;
 
+// --- Search and AI-answer presence (CR tenant-seo-geo P3). Written through its own endpoint, so a branding save
+// never touches these fields. Every rule matches a DB CHECK in 0097.
+
+export const SchemaOrgBusinessTypeSchema = z.enum(['LocalBusiness', 'HomeAndConstructionBusiness', 'GeneralContractor']);
+export type SchemaOrgBusinessType = z.infer<typeof SchemaOrgBusinessTypeSchema>;
+
+// Lands in an href on a public page: https, no credentials or port, normalized.
+const HttpsUrlSchema = z
+  .string()
+  .trim()
+  .max(300)
+  .transform((value, ctx) => {
+    let url: URL | null = null;
+    try {
+      url = new URL(value);
+    } catch {
+      // not a URL; reported below
+    }
+    if (!url || url.protocol !== 'https:' || url.port || url.username || url.password || url.href.length > 300) {
+      ctx.addIssue({ code: 'custom', message: 'Enter a full link starting with https://' });
+      return z.NEVER;
+    }
+    return url.href;
+  });
+
+// Empty means "not set": stored as NULL, never as an empty string.
+const textOrNull = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .transform((v) => (v ? v : null));
+
+const dedupe = (items: string[]) => [...new Map(items.map((i) => [i.toLowerCase(), i])).values()];
+
+// The yard itself, inside the Philippines (a swapped lat/long falls outside).
+export const TenantLocationSchema = z
+  .object({ lat: z.number().min(4.5).max(21.5), lng: z.number().min(116).max(127) })
+  .strict();
+export type TenantLocation = z.infer<typeof TenantLocationSchema>;
+
+// tenant_calendar's hours: HH:MM (Asia/Manila) and days 0 = Sunday ... 6 = Saturday.
+export const TenantHoursSchema = z.object({
+  openTime: z.string(),
+  closeTime: z.string(),
+  openDays: z.array(z.number().int().min(0).max(6)),
+});
+export type TenantHours = z.infer<typeof TenantHoursSchema>;
+
+export const TenantSeoUpdateRequestSchema = z
+  .object({
+    seoTitle: textOrNull(70),
+    seoDescription: textOrNull(160),
+    businessType: SchemaOrgBusinessTypeSchema.nullable(),
+    serviceAreas: z.array(z.string().trim().min(1).max(100)).max(20).transform(dedupe),
+    location: TenantLocationSchema.nullable(),
+    sameAs: z.array(HttpsUrlSchema).max(8).transform(dedupe),
+    publishHours: z.boolean(),
+  })
+  .strict();
+export type TenantSeoUpdateRequest = z.infer<typeof TenantSeoUpdateRequestSchema>;
+
+export const TenantSeoSchema = z.object({
+  seoTitle: z.string().nullable(),
+  seoDescription: z.string().nullable(),
+  businessType: SchemaOrgBusinessTypeSchema.nullable(),
+  serviceAreas: z.array(z.string()),
+  location: TenantLocationSchema.nullable(),
+  sameAs: z.array(z.string()),
+  publishHours: z.boolean(),
+  // Read-only here: edited in Settings. Shown so the owner sees what publishing would show.
+  hours: TenantHoursSchema.nullable(),
+});
+export type TenantSeo = z.infer<typeof TenantSeoSchema>;
+
+// The SEO fields are nullish so a Worker or SPA running ahead of the API still parses the older payload.
 export const CatalogTenantSchema = TenantBrandingSchema.omit({ legalName: true, slug: true }).extend({
   name: z.string(),
+  seoTitle: z.string().nullish(),
+  seoDescription: z.string().nullish(),
+  businessType: SchemaOrgBusinessTypeSchema.nullish(),
+  serviceAreas: z.array(z.string()).nullish(),
+  location: TenantLocationSchema.nullish(),
+  sameAs: z.array(z.string()).nullish(),
+  hours: TenantHoursSchema.nullish(),
+  contentUpdatedAt: z.string().nullish(),
 });
 export type CatalogTenant = z.infer<typeof CatalogTenantSchema>;
 

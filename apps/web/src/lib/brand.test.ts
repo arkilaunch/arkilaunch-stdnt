@@ -219,7 +219,7 @@ describe('robots and sitemap', () => {
   });
 
   it('lists the public pages and equipment, with lastmod when known', () => {
-    const xml = sitemapXml('https://almara.arkilaunch.app', tenantSitemapEntries(['e1']));
+    const xml = sitemapXml('https://almara.arkilaunch.app', tenantSitemapEntries(null, [{ id: 'e1' }]));
     expect(xml).toContain('<url><loc>https://almara.arkilaunch.app/</loc></url>');
     expect(xml).toContain('<loc>https://almara.arkilaunch.app/equipment/e1</loc>');
     expect(xml).not.toContain('/app');
@@ -238,5 +238,55 @@ describe('webManifest', () => {
     expect(m).toMatchObject({ name: 'Almara Equipment Rentals', short_name: 'Almara', theme_color: '#123456' });
     expect(m.icons[0]).toEqual({ src: 'https://cdn/almara-icon.png', sizes: 'any', purpose: 'any' });
     expect(m.icons).toHaveLength(4); // the platform PNGs stay so the browser can always install
+  });
+});
+
+describe('tenant SEO fields (CR tenant-seo-geo P3)', () => {
+  const tuned: CatalogTenant = {
+    ...almara,
+    seoTitle: 'Almara Construction | Heavy Equipment Rental in Quezon City',
+    seoDescription: 'Excavators and dump trucks for rent across Metro Manila.',
+    businessType: 'HomeAndConstructionBusiness',
+    serviceAreas: ['Quezon City', 'Bulacan'],
+    location: { lat: 14.676, lng: 121.0437 },
+    sameAs: ['https://www.linkedin.com/company/almara', 'https://www.facebook.com/almara'],
+    hours: { openTime: '07:00', closeTime: '17:00', openDays: [6, 1, 2, 3, 4, 5] },
+  };
+
+  it('uses the owner-written title and description on the home page only', () => {
+    const home = headTags(tuned, new URL('https://almara.arkilaunch.app/'));
+    expect(pageTitle('/', tuned)).toBe('Almara Construction | Heavy Equipment Rental in Quezon City');
+    expect(home).toContain('<meta name="description" content="Excavators and dump trucks for rent across Metro Manila." />');
+    const contact = headTags(tuned, new URL('https://almara.arkilaunch.app/contact'));
+    expect(contact).toContain('content="Precision industrial equipment for every project."');
+  });
+
+  it('enriches the business node: type, areas, geo, hours and deduped profile links', () => {
+    const [ld] = ldBlocks(headTags(tuned, new URL('https://almara.arkilaunch.app/')));
+    const [business] = ld!['@graph'] as Record<string, unknown>[];
+    expect(business).toMatchObject({
+      '@type': 'HomeAndConstructionBusiness',
+      areaServed: ['Quezon City', 'Bulacan'],
+      geo: { '@type': 'GeoCoordinates', latitude: 14.676, longitude: 121.0437 },
+      openingHoursSpecification: {
+        dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+        opens: '07:00',
+        closes: '17:00',
+      },
+    });
+    expect(business!.sameAs).toEqual(['https://www.facebook.com/almara', 'https://www.linkedin.com/company/almara']);
+  });
+
+  it('dates sitemap entries from tenant and listing changes', () => {
+    const entries = tenantSitemapEntries({ contentUpdatedAt: '2026-11-01T03:00:00.000Z' }, [
+      { id: 'e1', updatedAt: '2026-11-15T03:00:00.000Z' },
+      { id: 'e2', updatedAt: null },
+    ]);
+    const at = (p: string) => entries.find((e) => e.path === p)?.lastmod;
+    expect(at('/')).toBe('2026-11-01');
+    expect(at('/equipment')).toBe('2026-11-15');
+    expect(at('/equipment/e1')).toBe('2026-11-15');
+    expect(at('/equipment/e2')).toBeNull();
+    expect(at('/terms')).toBeNull();
   });
 });

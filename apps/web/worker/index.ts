@@ -183,8 +183,8 @@ async function tenantSitemap(env: Env, ctx: ExecutionContext, slug: string, orig
       : new Response('Try again shortly', { status: 503, headers: { 'Retry-After': '60' } });
   }
   // ponytail: first 100 units (the API's page cap); page through if a tenant lists more.
-  const ids = list.ok ? list.data.items.map((i) => i.id) : [];
-  return new Response(sitemapXml(origin, tenantSitemapEntries(ids)), { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+  const items = list.ok ? list.data.items : [];
+  return new Response(sitemapXml(origin, tenantSitemapEntries(tenant.data, items)), { headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
 }
 
 // Every active storefront's sitemap, so finding the platform finds its tenants.

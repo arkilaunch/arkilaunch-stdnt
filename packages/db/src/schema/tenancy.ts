@@ -1,4 +1,4 @@
-import { index, jsonb, pgPolicy, pgTable, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, jsonb, numeric, pgPolicy, pgTable, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { appAuthenticated, tenantIsolationPolicy } from '../rls.js';
 
@@ -29,6 +29,16 @@ export const tenants = pgTable(
     address: text('address'),
     city: text('city'),
     province: text('province'),
+    // Search and AI-answer presence (CR tenant-seo-geo). Written only through tenants_update_seo; CHECKs in 0097.
+    seoTitle: text('seo_title'),
+    seoDescription: text('seo_description'),
+    businessType: text('business_type'), // schema.org LocalBusiness | HomeAndConstructionBusiness | GeneralContractor
+    serviceAreas: text('service_areas').array().notNull().default(sql`'{}'`),
+    latitude: numeric('latitude', { precision: 8, scale: 6 }), // the yard's location, inside the PH box
+    longitude: numeric('longitude', { precision: 9, scale: 6 }),
+    sameAs: text('same_as').array().notNull().default(sql`'{}'`), // https profile links
+    publishHours: boolean('publish_hours').notNull().default(false), // tenant_calendar hours on the storefront
+    contentUpdatedAt: timestamp('content_updated_at', { withTimezone: true }).notNull().defaultNow(), // trigger, 0097
     // NULL = cash only. Written only through tenants_set_paymongo_account.
     paymongoAccountId: text('paymongo_account_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -27,6 +27,7 @@ import {
   TenantApplicationListQueryDto,
   TenantRegisterDto,
   TenantBrandingUpdateDto,
+  TenantSeoUpdateDto,
   PaymongoAccountUpdateDto,
 } from './dto.js';
 import type { CtxRequest, MulterFile } from '../common/request.js';
@@ -81,6 +82,19 @@ export class TenantsController {
   @RequirePermission('tenant:manage')
   updateMyBranding(@Body() body: TenantBrandingUpdateDto, @Req() req: CtxRequest) {
     return this.tenants.updateBranding(req.ctx, req.ctx.tenantId, body);
+  }
+
+  // Search & AI visibility: its own write, so a branding save never touches it.
+  @Get('me/seo')
+  @RequirePermission('tenant:manage')
+  mySeo(@Req() req: CtxRequest) {
+    return this.tenants.getSeo(req.ctx.tenantId);
+  }
+
+  @Patch('me/seo')
+  @RequirePermission('tenant:manage')
+  updateMySeo(@Body() body: TenantSeoUpdateDto, @Req() req: CtxRequest) {
+    return this.tenants.updateSeo(req.ctx, req.ctx.tenantId, body);
   }
 
   @Post('me/branding/:kind')
@@ -145,6 +159,18 @@ export class TenantsController {
     @Req() req: CtxRequest,
   ) {
     return this.tenants.updateBranding(req.ctx, id, body);
+  }
+
+  @Get(':id/seo')
+  @RequirePermission('tenant:approve')
+  companySeo(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenants.getSeo(id);
+  }
+
+  @Patch(':id/seo')
+  @RequirePermission('tenant:approve')
+  updateCompanySeo(@Param('id', ParseUUIDPipe) id: string, @Body() body: TenantSeoUpdateDto, @Req() req: CtxRequest) {
+    return this.tenants.updateSeo(req.ctx, id, body);
   }
 
   // Until set, online payments are collected on ArkiLaunch's parent account (TODO(paymongo-child-accounts)).

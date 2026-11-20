@@ -44,7 +44,7 @@ Two design choices made while building:
 |---|---|---|
 | P1 | Tenant `robots.txt` builder (crawler decision); real 404s at the edge; `og:locale` and Twitter tags; home LocalBusiness + WebSite `@graph`; equipment BreadcrumbList + Product/Offer; titles and descriptions that carry the city and rate; listing `<a>` links; visible breadcrumb; branded not-found page; platform sitemap index | Built (branch `feat/tenant-seo-geo-p1`) |
 | P2 | Edge HTML snapshot inside `#root`, a query-cache seed (no flash), `/llms.txt` | Built (branch `feat/tenant-seo-geo-p1`) |
-| P3 | Tenant SEO fields (migration 0097, `/tenants/{me,:id}/seo`), published hours, LocalBusiness enrichment, sitemap `lastmod` | Not started |
+| P3 | Tenant SEO fields (migration 0097, `/tenants/{me,:id}/seo`), published hours, LocalBusiness enrichment, sitemap `lastmod` | Built (branch `feat/tenant-seo-geo-p1`); DB-backed specs run in CI |
 | P4 | `tenant_faqs` (RLS), editor, home FAQ section, FAQPage markup | Not started |
 | P5 | Owner checklist, `docs/runbook-search-console.md`, Almara content entered through the UI | Not started |
 

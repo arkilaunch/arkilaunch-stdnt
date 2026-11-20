@@ -6,6 +6,7 @@ import { PlatformChrome } from './platform.index.js';
 import { useTenant } from '../lib/tenant.js';
 import { FloatingNav } from '../components/floating-nav.js';
 import { SkipLink } from '../components/skip-link.js';
+import { profileLinks } from '../lib/storefront-content.js';
 import { FacebookIcon } from '../components/icons.js';
 
 type FooterTo = NonNullable<LinkProps['to']>;
@@ -39,6 +40,7 @@ const FOOTER_COLUMNS: { title: string; links: { label: string; to: FooterTo }[] 
 export function MarketingChrome({ children }: { children: ReactNode }) {
   const tenant = useTenant();
   const tenantName = tenant?.name ?? '';
+  const profiles = tenant ? profileLinks(tenant) : [];
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <SkipLink />
@@ -56,18 +58,24 @@ export function MarketingChrome({ children }: { children: ReactNode }) {
             <p className="mt-2 text-sm text-text-inverse/70">
               {tenantName} &copy; {new Date().getFullYear()}. All rights reserved. Powered by ArkiLaunch.
             </p>
-            {tenant?.facebookUrl && (
+            {profiles.length > 0 && (
               <div className="mt-4">
                 <p className="text-sm font-medium">Follow us</p>
-                <a
-                  href={tenant.facebookUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex min-h-11 items-center gap-2 text-sm text-text-inverse/70 hover:text-text-inverse hover:underline"
-                >
-                  <FacebookIcon className="h-5 w-5" />
-                  Facebook
-                </a>
+                <ul className="mt-1 flex flex-wrap gap-x-5">
+                  {profiles.map((p) => (
+                    <li key={p.href}>
+                      <a
+                        href={p.href}
+                        target="_blank"
+                        rel="me noopener noreferrer"
+                        className="inline-flex min-h-11 items-center gap-2 text-sm text-text-inverse/70 hover:text-text-inverse hover:underline"
+                      >
+                        {p.label === 'Facebook' && <FacebookIcon className="h-5 w-5" />}
+                        {p.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
