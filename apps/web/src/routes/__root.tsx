@@ -1,4 +1,4 @@
-import { createRootRoute, Outlet, useRouterState } from '@tanstack/react-router';
+import { createRootRoute, Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { ApiError } from '../lib/api-client.js';
@@ -18,6 +18,20 @@ function TenantNotFound() {
       <a href={platformOrigin()} className="text-sm font-semibold text-text underline">
         Go to ArkiLaunch
       </a>
+    </main>
+  );
+}
+
+// The edge Worker answers these URLs 404; this is what a person sees on them.
+function PageNotFound() {
+  return (
+    <main id="main" className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg px-4 text-center">
+      <h1 className="text-display-md text-text">Page not found</h1>
+      <p className="max-w-sm text-sm text-text-muted">This page does not exist or has moved.</p>
+      <div className="flex gap-4 text-sm font-semibold text-text">
+        <Link to="/" className="underline">Home</Link>
+        {currentHost.kind === 'tenant' && <Link to="/equipment" className="underline">Browse equipment</Link>}
+      </div>
     </main>
   );
 }
@@ -45,7 +59,7 @@ function RootLayout() {
       }
       return;
     }
-    const title = tenant.data ? pageTitle(pathname, tenant.data.name) : null;
+    const title = tenant.data ? pageTitle(pathname, tenant.data) : null;
     if (title) document.title = title;
   }, [tenant.data, pathname]);
 
@@ -63,4 +77,4 @@ function RootLayout() {
   );
 }
 
-export const rootRoute = createRootRoute({ component: RootLayout });
+export const rootRoute = createRootRoute({ component: RootLayout, notFoundComponent: PageNotFound });

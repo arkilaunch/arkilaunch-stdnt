@@ -161,6 +161,7 @@ function LandingPage() {
                     {...(imageUrl ? { imageUrl } : {})}
                     model={eq.model}
                     make={eq.equipmentTypeName}
+                    equipmentId={eq.id}
                     onRent={() => navigate({ to: '/equipment/$equipmentId', params: { equipmentId: eq.id } })}
                   />
                 );

@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router';
 import { Button } from './button.js';
 import { EquipmentSchematic } from './equipment-schematic.js';
 import { formatPeso } from '../lib/format.js';
@@ -14,7 +15,12 @@ export interface EquipmentCardProps {
   rentLabel?: string;
   onRent?: () => void;
   onViewDetails?: () => void;
+  /** Renders the model as a real link to its page, so crawlers can reach every listing. */
+  equipmentId?: string;
 }
+
+const MODEL_LINK =
+  'rounded-sm text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
 
 export function EquipmentCard({
   showPrice = true,
@@ -28,6 +34,7 @@ export function EquipmentCard({
   rentLabel = 'Rent',
   onRent,
   onViewDetails,
+  equipmentId,
 }: EquipmentCardProps) {
   return (
     <div
@@ -45,12 +52,12 @@ export function EquipmentCard({
       <div className="flex flex-1 flex-col gap-4 p-5">
         <div className="min-w-0">
           <h3 className="text-heading-md text-text">
-            {onViewDetails ? (
-              <button
-                type="button"
-                onClick={onViewDetails}
-                className="rounded-sm text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
+            {equipmentId ? (
+              <Link to="/equipment/$equipmentId" params={{ equipmentId }} className={MODEL_LINK}>
+                {model}
+              </Link>
+            ) : onViewDetails ? (
+              <button type="button" onClick={onViewDetails} className={MODEL_LINK}>
                 {model}
               </button>
             ) : (

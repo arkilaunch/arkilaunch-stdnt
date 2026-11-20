@@ -135,7 +135,6 @@ function ConfigureRentalDialog({
 }
 
 function EquipmentPage() {
-  const navigate = useNavigate();
   const [query, setQuery] = useState(equipmentRoute.useSearch().q ?? '');
   const [category, setCategory] = useState('');
   const [offset, setOffset] = useState(0);
@@ -217,11 +216,9 @@ function EquipmentPage() {
                 {...(imageUrl ? { imageUrl } : {})}
                 model={eq.model}
                 make={eq.equipmentTypeName}
+                equipmentId={eq.id}
                 onRent={() =>
                   setConfiguring(eq)
-                }
-                onViewDetails={() =>
-                  navigate({ to: '/equipment/$equipmentId', params: { equipmentId: eq.id } })
                 }
               />
             );

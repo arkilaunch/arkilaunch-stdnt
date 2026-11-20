@@ -17,4 +17,7 @@ for (const path of ['/register', '/login', '/app/inventory', '/privacy']) {
   assert.match(html, /noindex, nofollow/);
   assert.doesNotMatch(html, /SoftwareApplication/);
 }
+const index = await (await fetch(`${origin}/sitemap.xml`)).text();
+assert.match(index, /<sitemapindex/);
+assert.match(index, /sitemap-pages.xml/);
 console.log('Worker SEO passed: homepage indexed with canonical metadata; private/resource routes remain noindex.');

@@ -135,3 +135,56 @@ describe('tenant storefront', () => {
     view.unmount();
   });
 });
+
+describe('storefront links and detail pages', () => {
+  const unit = {
+    id: '22222222-2222-4222-8222-222222222222',
+    model: 'Test machine',
+    equipmentTypeName: 'Back Hoe',
+    availabilityStatus: 'available',
+    rateValue: 1500,
+    photoUri: null,
+  };
+  function stubDetail(detail: { status: number; body?: object }) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const href = String(url);
+        if (href.includes('/catalog/tenant')) return Promise.resolve(new Response(JSON.stringify({ name: 'Test rentals', city: 'Quezon City' })));
+        if (/\/catalog\/equipment\/[^?]+/.test(href))
+          return Promise.resolve(new Response(JSON.stringify(detail.body ?? { error: 'x' }), { status: detail.status }));
+        return Promise.resolve(new Response(JSON.stringify({ items: [unit] })));
+      }),
+    );
+  }
+
+  it('links each listing by URL so crawlers can reach it', async () => {
+    stubDetail({ status: 200, body: unit });
+    const view = await renderRoute('/equipment');
+    expect(await screen.findByRole('link', { name: 'Test machine' })).toHaveAttribute('href', `/equipment/${unit.id}`);
+    view.unmount();
+  });
+
+  it('shows the breadcrumb the page markup describes', async () => {
+    stubDetail({ status: 200, body: unit });
+    const view = await renderRoute(`/equipment/${unit.id}`);
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' });
+    expect(crumbs).toHaveTextContent('Home›Equipment›Test machine');
+    expect(screen.getByRole('heading', { level: 1, name: 'Test machine' })).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('treats a malformed id (API 400) as a missing listing', async () => {
+    stubDetail({ status: 400 });
+    const view = await renderRoute('/equipment/not-a-uuid');
+    expect(await screen.findByText('Equipment not found')).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('shows a page-not-found screen for an unrouted path', async () => {
+    stubDetail({ status: 404 });
+    const view = await renderRoute('/no-such-page');
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    view.unmount();
+  });
+});

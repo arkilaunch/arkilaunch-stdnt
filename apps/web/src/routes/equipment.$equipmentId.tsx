@@ -14,7 +14,7 @@ import { LoadError } from '../components/load-error.js';
 import { addToCart, defaultRentalWindow } from '../lib/cart-client.js';
 import { getAccessToken } from '../lib/auth-client.js';
 import { pageTitle } from '../lib/brand.js';
-import { useTenantName } from '../lib/tenant.js';
+import { useTenant } from '../lib/tenant.js';
 import { useCatalogRates } from '../lib/catalog-rates.js';
 
 function EquipmentDetailPage() {
@@ -30,17 +30,18 @@ function EquipmentDetailPage() {
   } = useQuery(catalogQueries.equipmentDetail(equipmentId));
 
   // The same title the edge Worker writes (lib/brand.ts).
-  const tenantName = useTenantName();
+  const tenant = useTenant();
   useEffect(() => {
-    const title = equipment && tenantName ? pageTitle(`/equipment/${equipmentId}`, tenantName, equipment.model) : null;
+    const title = equipment && tenant ? pageTitle(`/equipment/${equipmentId}`, tenant, equipment.model) : null;
     if (title) document.title = title;
-  }, [equipment, tenantName, equipmentId]);
+  }, [equipment, tenant, equipmentId]);
 
   if (isPending) {
     return <Skeleton label="Loading equipment" rows={2} className="px-6 py-10 sm:px-10" />;
   }
 
-  if (error && !(error instanceof ApiError && error.status === 404)) {
+  // A malformed id is answered 400 by the API: to a visitor it is the same missing listing.
+  if (error && !(error instanceof ApiError && (error.status === 404 || error.status === 400))) {
     return (
       <div className="px-6 py-10 sm:px-10">
         <LoadError
@@ -70,6 +71,20 @@ function EquipmentDetailPage() {
 
   return (
     <div className="flex flex-col gap-6 px-6 py-10 sm:px-10">
+      {/* Matches the page's BreadcrumbList markup (lib/brand.ts equipmentPage). */}
+      <nav aria-label="Breadcrumb" className="text-sm text-text-muted">
+        <ol className="flex flex-wrap items-center gap-x-2">
+          <li>
+            <Link to="/" className="hover:underline">Home</Link>
+          </li>
+          <li aria-hidden="true">›</li>
+          <li>
+            <Link to="/equipment" className="hover:underline">Equipment</Link>
+          </li>
+          <li aria-hidden="true">›</li>
+          <li aria-current="page" className="text-text">{equipment.model}</li>
+        </ol>
+      </nav>
       <div
         className={[
 'flex aspect-video items-center justify-center overflow-hidden rounded-md bg-bg',

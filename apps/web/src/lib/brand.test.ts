@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import type { CatalogTenant } from '@arkilaunch/shared';
-import { brandVars, headTags, isIndexable, onPrimaryFor, pageTitle, robotsFor, sitemapXml, webManifest } from './brand.js';
+import type { CatalogEquipment, CatalogTenant } from '@arkilaunch/shared';
+import {
+  brandVars,
+  equipmentPage,
+  headTags,
+  isIndexable,
+  isKnownPath,
+  onPrimaryFor,
+  pageTitle,
+  sitemapXml,
+  tenantRobotsTxt,
+  tenantSitemapEntries,
+  webManifest,
+} from './brand.js';
+
+const ldBlocks = (html: string) =>
+  [...html.matchAll(/<script type="application\/ld\+json">(.*?)<\/script>/g)].map((m) => JSON.parse(m[1]!) as Record<string, unknown>);
 
 describe('onPrimaryFor', () => {
   it('picks the higher-contrast text color', () => {
@@ -36,16 +51,23 @@ describe('brandVars', () => {
 });
 
 describe('pageTitle', () => {
-  it('titles storefront pages after their heading', () => {
-    expect(pageTitle('/', 'Almara Construction')).toBe('Almara Construction');
-    expect(pageTitle('/equipment', 'Almara Construction')).toBe('Equipment for hire | Almara Construction');
-    expect(pageTitle('/contact/', 'Almara Construction')).toBe('Contact | Almara Construction');
-    expect(pageTitle('/app/branding', 'Almara Construction')).toBe('Almara Construction');
+  const qc = { name: 'Almara Construction', city: 'Quezon City' };
+
+  it('titles storefront pages after their heading, with the city for local search', () => {
+    expect(pageTitle('/', qc)).toBe('Almara Construction | Equipment rental in Quezon City');
+    expect(pageTitle('/equipment', qc)).toBe('Equipment for rent in Quezon City | Almara Construction');
+    expect(pageTitle('/contact/', qc)).toBe('Contact | Almara Construction');
+    expect(pageTitle('/app/branding', qc)).toBe('Almara Construction');
+  });
+
+  it('drops the city when the tenant has none', () => {
+    expect(pageTitle('/', { name: 'Almara Construction', city: null })).toBe('Almara Construction');
+    expect(pageTitle('/equipment', { name: 'Almara Construction', city: null })).toBe('Equipment for rent | Almara Construction');
   });
 
   it('leaves an equipment page to title itself with its model', () => {
-    expect(pageTitle('/equipment/abc', 'Almara Construction')).toBeNull();
-    expect(pageTitle('/equipment/abc', 'Almara Construction', 'CAT D6R')).toBe('CAT D6R | Almara Construction');
+    expect(pageTitle('/equipment/abc', qc)).toBeNull();
+    expect(pageTitle('/equipment/abc', qc, 'CAT D6R')).toBe('CAT D6R | Almara Construction');
   });
 });
 
@@ -77,12 +99,23 @@ describe('headTags', () => {
     expect(html).toContain('<meta property="og:image" content="https://cdn.test/icon.png" />');
     expect(html).toContain('<link rel="icon" href="https://cdn.test/icon.png" />');
     expect(html).toContain('<meta name="theme-color" content="#a23e01" />');
-    const ld = JSON.parse(/<script type="application\/ld\+json">(.*)<\/script>/.exec(html)![1]!);
-    expect(ld).toMatchObject({ '@type': 'Organization', name: 'Almara Construction', sameAs: ['https://www.facebook.com/almara'] });
-    expect(ld.address).toMatchObject({ addressLocality: 'Pasig', addressCountry: 'PH' });
+    expect(html).toContain('<meta property="og:locale" content="en_PH" />');
+    expect(html).toContain('<meta name="twitter:title" content="Almara Construction | Equipment rental in Pasig" />');
+    expect(html).toContain('<meta name="twitter:image" content="https://cdn.test/icon.png" />');
+    const [ld] = ldBlocks(html);
+    const [business, website] = ld!['@graph'] as Record<string, unknown>[];
+    expect(business).toMatchObject({
+      '@type': 'LocalBusiness',
+      '@id': 'https://almara.arkilaunch.app/#business',
+      name: 'Almara Construction',
+      telephone: '0917 000 0000',
+      sameAs: ['https://www.facebook.com/almara'],
+    });
+    expect(business!.address).toMatchObject({ addressLocality: 'Pasig', addressRegion: 'Metro Manila', addressCountry: 'PH' });
+    expect(website).toMatchObject({ '@type': 'WebSite', publisher: { '@id': 'https://almara.arkilaunch.app/#business' } });
   });
 
-  it('keeps JSON-LD to the home page and uses the detail on an equipment page', () => {
+  it('keeps the business graph to the home page and uses the detail on an equipment page', () => {
     const html = headTags(almara, new URL('https://almara.arkilaunch.app/equipment/x/'), {
       title: 'CAT D6R',
       description: 'CAT D6R (Bulldozer) for rent from Almara Construction.',
@@ -104,6 +137,59 @@ describe('headTags', () => {
   });
 });
 
+const d6r: CatalogEquipment = {
+  id: '11111111-1111-4111-8111-111111111111',
+  equipmentTypeName: 'Bulldozer',
+  model: 'CAT D6R',
+  availabilityStatus: 'available',
+  photoUri: 'https://cdn.test/d6r.jpg',
+  rateType: 'hourly',
+  rateValue: 2500,
+};
+
+describe('equipmentPage', () => {
+  const origin = 'https://almara.arkilaunch.app';
+
+  it('describes the unit locally, with its hourly rate', () => {
+    const page = equipmentPage(d6r, almara, origin);
+    expect(page.title).toBe('CAT D6R');
+    expect(page.description).toMatch(/^CAT D6R bulldozer for rent in Pasig from Almara Construction \(₱2,500\.00\/hour\)\.$/);
+    expect(page.description.length).toBeLessThanOrEqual(160);
+  });
+
+  it('marks up the breadcrumb and a lease offer seller-linked to the business', () => {
+    const [crumbs, product] = equipmentPage(d6r, almara, origin).jsonLd!;
+    expect(crumbs).toMatchObject({ '@type': 'BreadcrumbList' });
+    expect((crumbs!.itemListElement as unknown[]).length).toBe(3);
+    expect(product).toMatchObject({
+      '@type': 'Product',
+      name: 'CAT D6R',
+      category: 'Bulldozer',
+      offers: {
+        price: 2500,
+        priceCurrency: 'PHP',
+        priceSpecification: { unitCode: 'HUR' },
+        businessFunction: 'http://purl.org/goodrelations/v1#LeaseOut',
+        seller: { '@id': `${origin}/#business` },
+      },
+    });
+  });
+
+  it('claims no offer when the page shows "Price on request"', () => {
+    const page = equipmentPage({ ...d6r, rateValue: null }, { ...almara, city: null }, origin);
+    expect(page.jsonLd!.map((ld) => ld['@type'])).toEqual(['BreadcrumbList']);
+    expect(page.description).toBe('CAT D6R bulldozer for rent from Almara Construction.');
+  });
+
+  it('writes one escaped script per block into the head', () => {
+    const evil = { ...d6r, model: '</script><script>alert(1)</script>' };
+    const html = headTags(almara, new URL(`${origin}/equipment/${d6r.id}`), equipmentPage(evil, almara, origin));
+    expect(html).not.toContain('<script>alert');
+    expect(ldBlocks(html)).toHaveLength(2);
+    expect(html.match(/<\/script>/g)).toHaveLength(2);
+  });
+});
+
 describe('isIndexable', () => {
   it('opens the public storefront pages only', () => {
     for (const p of ['/', '/equipment', '/equipment/abc', '/contact/', '/help', '/terms', '/privacy']) expect(isIndexable(p), p).toBe(true);
@@ -111,15 +197,33 @@ describe('isIndexable', () => {
   });
 });
 
+describe('isKnownPath', () => {
+  it('knows the router paths and nothing else', () => {
+    for (const p of ['/', '/equipment/', '/login', '/register/company', '/app', '/app/inventory', '/account/cart', '/field/scan', '/admin/companies'])
+      expect(isKnownPath(p), p).toBe(true);
+    for (const p of ['/nope', '/equipment/a/b', '/application', '/fieldwork', '/wp-login.php', '/contact/us']) expect(isKnownPath(p), p).toBe(false);
+  });
+});
+
 describe('robots and sitemap', () => {
-  it('points the sitemap at the tenant host', () => {
-    expect(robotsFor('User-agent: *\nDisallow: /app/\n\nSitemap: https://arkilaunch.app/sitemap.xml\n', 'https://almara.arkilaunch.app')).toContain(
-      'Sitemap: https://almara.arkilaunch.app/sitemap.xml',
-    );
-    const xml = sitemapXml('https://almara.arkilaunch.app', ['e1']);
-    expect(xml).toContain('<loc>https://almara.arkilaunch.app/</loc>');
+  it('opens public pages to search, answer and training crawlers, never the signed-in areas', () => {
+    const robots = tenantRobotsTxt('https://almara.arkilaunch.app');
+    for (const bot of ['Googlebot', 'GPTBot', 'ClaudeBot', 'Google-Extended', 'OAI-SearchBot', 'PerplexityBot', '*'])
+      expect(robots).toContain(`User-agent: ${bot}\n`);
+    expect(robots).toContain('Allow: /\n');
+    for (const p of ['/app/', '/account/', '/field/', '/admin/', '/activate', '/reset-password']) expect(robots).toContain(`Disallow: ${p}\n`);
+    // Sign-in pages stay crawlable so crawlers see their noindex.
+    expect(robots).not.toMatch(/Disallow: \/(login|signup|register)/);
+    expect(robots).toContain('Sitemap: https://almara.arkilaunch.app/sitemap.xml');
+    expect(robots).not.toMatch(/Disallow: \/\n/);
+  });
+
+  it('lists the public pages and equipment, with lastmod when known', () => {
+    const xml = sitemapXml('https://almara.arkilaunch.app', tenantSitemapEntries(['e1']));
+    expect(xml).toContain('<url><loc>https://almara.arkilaunch.app/</loc></url>');
     expect(xml).toContain('<loc>https://almara.arkilaunch.app/equipment/e1</loc>');
     expect(xml).not.toContain('/app');
+    expect(sitemapXml('https://a.test', [{ path: '/', lastmod: '2026-11-20' }])).toContain('<loc>https://a.test/</loc><lastmod>2026-11-20</lastmod>');
   });
 });
 describe('webManifest', () => {

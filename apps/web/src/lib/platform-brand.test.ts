@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PLATFORM_TITLE, platformHeadTags } from './platform-brand.js';
+import { PLATFORM_TITLE, platformHeadTags, sitemapIndexXml } from './platform-brand.js';
 
 describe('platform marketing metadata', () => {
   it('provides canonical and social metadata and factual software structured data', () => {
@@ -18,5 +18,14 @@ describe('platform marketing metadata', () => {
     expect(html).not.toContain('<script>');
     expect(html).toContain('&quot;&lt;script&gt;');
     expect(html).toContain('\\u003cscript>');
+  });
+});
+
+describe('sitemapIndexXml', () => {
+  it('indexes the platform pages and each storefront sitemap, escaped', () => {
+    const xml = sitemapIndexXml(['https://arkilaunch.app/sitemap-pages.xml', 'https://almara.arkilaunch.app/sitemap.xml?a=1&b=<2>']);
+    expect(xml).toContain('<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    expect(xml).toContain('<sitemap><loc>https://arkilaunch.app/sitemap-pages.xml</loc></sitemap>');
+    expect(xml).toContain('sitemap.xml?a=1&amp;b=&lt;2&gt;');
   });
 });

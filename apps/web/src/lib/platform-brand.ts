@@ -2,6 +2,14 @@
 export const PLATFORM_TITLE = 'ArkiLaunch | Equipment rental management software';
 export const PLATFORM_DESCRIPTION = 'Manage your equipment fleet, quotations, dispatch, field timesheets and billing in one place. Launch your rental company storefront with ArkiLaunch.';
 
+// The platform's own pages plus every active storefront's sitemap. Cross-host entries count once the platform domain
+// is a verified Search Console Domain property (docs/runbook-search-console.md).
+export function sitemapIndexXml(locs: string[]): string {
+  const xml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const items = locs.map((loc) => `  <sitemap><loc>${xml(loc)}</loc></sitemap>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</sitemapindex>\n`;
+}
+
 export function platformHeadTags(origin: string): string {
   const canonical = `${origin}/`;
   const image = `${origin}/images/platform-dashboard.webp`;
