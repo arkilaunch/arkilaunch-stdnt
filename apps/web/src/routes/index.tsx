@@ -19,13 +19,7 @@ import { getAccessToken } from '../lib/auth-client.js';
 import { Skeleton } from '../components/skeleton.js';
 import { LoadError } from '../components/load-error.js';
 import { EmptyState } from '../components/empty-state.js';
-
-const HOW_IT_WORKS = [
-  { title: 'Browse and see prices', body: 'Every machine shows its published rate. No account needed to look.' },
-  { title: 'Request a quote', body: 'Pick dates and a site. The rental team confirms the price with you.' },
-  { title: 'Verify your company', body: 'Upload your company documents once. Staff check them before your first booking.' },
-  { title: 'Sign and pay', body: 'Sign the rental agreement on screen and pay the deposit to lock in your dates.' },
-];
+import { DEFAULT_SUBHEAD, DEFAULT_TAGLINE, HOME_EYEBROW_SUFFIX, HOW_IT_WORKS, PREVIEW_COUNT, firstSentence, rentable } from '../lib/storefront-content.js';
 
 function HowItWorks() {
   const [ref, visible] = useScrollReveal<HTMLElement>();
@@ -45,12 +39,7 @@ function HowItWorks() {
   );
 }
 
-// The first sentence of the tenant's About text, so the hero subhead is theirs when they wrote one.
-export function firstSentence(text: string | null | undefined): string | null {
-  const trimmed = text?.trim();
-  if (!trimmed) return null;
-  return trimmed.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? trimmed;
-}
+export { firstSentence };
 
 function LandingPage() {
   const navigate = useNavigate();
@@ -64,7 +53,7 @@ function LandingPage() {
   const signedIn = Boolean(getAccessToken());
 
   const available = useMemo(
-    () => (catalog.data?.items ?? []).filter((eq) => eq.availabilityStatus !== 'maintenance'),
+    () => rentable(catalog.data?.items ?? []),
     [catalog.data],
   );
   const equipment = useMemo(
@@ -82,7 +71,6 @@ function LandingPage() {
     return [...counts].sort(([a], [b]) => a.localeCompare(b));
   }, [available]);
 
-  const PREVIEW_COUNT = 6;
   const preview = equipment.slice(0, PREVIEW_COUNT);
   const firstPhoto = catalog.data?.items.find((eq) => eq.photoUri)?.photoUri;
   const heroImage = tenant?.heroUrl ?? firstPhoto;
@@ -95,12 +83,12 @@ function LandingPage() {
       {heroReady ? (
         <section className={`grid items-center gap-10 lg:gap-16 ${heroImage ? 'lg:grid-cols-2' : ''}`}>
           <div className="flex min-w-0 flex-col gap-6">
-            <p className="text-sm font-semibold uppercase tracking-wider text-text-muted">{tenant?.name ?? 'Equipment rental'} &middot; Equipment and hauling</p>
+            <p className="text-sm font-semibold uppercase tracking-wider text-text-muted">{tenant?.name ?? 'Equipment rental'} &middot; {HOME_EYEBROW_SUFFIX}</p>
             <h1 className="max-w-xl text-display-lg font-semibold tracking-tight text-pretty text-text lg:text-display-xl">
-              {tenant?.tagline || 'Industrial equipment, ready to rent'}
+              {tenant?.tagline || DEFAULT_TAGLINE}
             </h1>
             <p className="max-w-lg text-body-lg text-text-muted">
-              {firstSentence(tenant?.about) ?? 'Browse the fleet, see the rates, pick your dates and request a quote online.'}
+              {firstSentence(tenant?.about) ?? DEFAULT_SUBHEAD}
             </p>
             <div className="flex flex-wrap gap-3">
               <Button variant="primary" onClick={() => navigate({ to: '/equipment' })}>

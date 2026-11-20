@@ -6,6 +6,7 @@ import { router } from './router.js';
 import { ApiError } from './lib/api-client.js';
 import { bootstrapSession, watchSessionOwner } from './lib/auth-client.js';
 import { ToastProvider } from './components/toast.js';
+import { applyCatalogSeed } from './lib/catalog-seed.js';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -30,6 +31,7 @@ if ('serviceWorker' in navigator) {
 }
 
 // The access token is memory-only: rehydrate before the router's guards run, or authed reloads bounce to /login.
+applyCatalogSeed(queryClient);
 watchSessionOwner();
 bootstrapSession().finally(() => {
   createRoot(rootElement).render(

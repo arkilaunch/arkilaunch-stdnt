@@ -13,6 +13,7 @@ import {
   type PageDetail,
 } from '../src/lib/brand.js';
 import { PLATFORM_TITLE, platformHeadTags, sitemapIndexXml } from '../src/lib/platform-brand.js';
+import { llmsTxt, seedScript, snapshotHtml, type CatalogSeed, type SnapshotPage } from '../src/lib/snapshot.js';
 
 // Writes the tenant's own head tags into the shared SPA shell; any failure serves the untouched shell.
 
@@ -102,11 +103,15 @@ async function tenantPage(request: Request, env: Env, ctx: ExecutionContext, slu
 
   let status = isKnownPath(url.pathname) ? 200 : 404;
   let detail: PageDetail | null = null;
+  let unit: CatalogEquipment | null = null;
   const id = /^\/equipment\/([^/]+)\/?$/.exec(url.pathname)?.[1];
   if (id && !UUID.test(id)) status = 404;
   else if (id) {
     const eq = await equipmentOf(env, ctx, slug, id);
-    if (eq.ok) detail = equipmentPage(eq.data, tenant, url.origin);
+    if (eq.ok) {
+      unit = eq.data;
+      detail = equipmentPage(eq.data, tenant, url.origin);
+    }
     else if (eq.missing) status = 404;
   }
 
@@ -131,8 +136,43 @@ async function tenantPage(request: Request, env: Env, ctx: ExecutionContext, slu
       element: (e) => void e.setAttribute('href', '/fonts/ibm-plex-sans-variable.woff2'),
     });
   }
+  // Crawlers that run no JavaScript read the body too: the same content the React page renders, built from the same data.
+  const snap = status === 200 ? await snapshotFor(env, ctx, slug, url.pathname, tenant, unit) : null;
+  if (snap) {
+    rewriter = rewriter
+      .on('div#root', { element: (e) => void e.setInnerContent(snapshotHtml(snap.page), { html: true }) })
+      .on('head', { element: (e) => void e.append(seedScript(snap.seed), { html: true }) });
+  }
   const page = rewriter.transform(await shell());
   return status === 200 ? page : withStatus(page, status);
+}
+
+const trim = (p: string) => (p.length > 1 ? p.replace(/\/$/, '') : p);
+
+async function snapshotFor(
+  env: Env,
+  ctx: ExecutionContext,
+  slug: string,
+  pathname: string,
+  tenant: CatalogTenant,
+  unit: CatalogEquipment | null,
+): Promise<{ page: SnapshotPage; seed: CatalogSeed } | null> {
+  const path = trim(pathname);
+  if (path === '/contact') return { page: { kind: 'contact', tenant }, seed: { tenant } };
+  if (unit) return { page: { kind: 'detail', tenant, eq: unit }, seed: { tenant, detail: unit } };
+  if (path !== '/' && path !== '/equipment') return null;
+  const list = await equipmentListOf(env, ctx, slug);
+  if (!list.ok) return null;
+  const items = list.data.items;
+  return { page: { kind: path === '/' ? 'home' : 'equipment', tenant, equipment: items }, seed: { tenant, equipment: list.data } };
+}
+
+async function tenantLlms(env: Env, ctx: ExecutionContext, slug: string, origin: string): Promise<Response> {
+  const [tenant, list] = await Promise.all([tenantOf(env, ctx, slug), equipmentListOf(env, ctx, slug)]);
+  if (!tenant.ok) return new Response('Not found', { status: tenant.missing ? 404 : 503 });
+  return new Response(llmsTxt(tenant.data, origin, list.ok ? list.data.items : []), {
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': `max-age=${CACHE_SECONDS}` },
+  });
 }
 
 async function tenantSitemap(env: Env, ctx: ExecutionContext, slug: string, origin: string): Promise<Response> {
@@ -180,6 +220,7 @@ export default {
       return new Response(tenantRobotsTxt(url.origin), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
     }
     if (url.pathname === '/sitemap.xml') return tenantSitemap(env, ctx, slug, url.origin);
+    if (url.pathname === '/llms.txt') return tenantLlms(env, ctx, slug, url.origin);
     // The tenant's installable app: its name and colors on the home screen; the static platform manifest otherwise.
     if (url.pathname === '/manifest.webmanifest') {
       const tenant = await tenantOf(env, ctx, slug);

@@ -43,7 +43,7 @@ Two design choices made while building:
 | Phase | Scope | Status |
 |---|---|---|
 | P1 | Tenant `robots.txt` builder (crawler decision); real 404s at the edge; `og:locale` and Twitter tags; home LocalBusiness + WebSite `@graph`; equipment BreadcrumbList + Product/Offer; titles and descriptions that carry the city and rate; listing `<a>` links; visible breadcrumb; branded not-found page; platform sitemap index | Built (branch `feat/tenant-seo-geo-p1`) |
-| P2 | Edge HTML snapshot inside `#root`, a query-cache seed (no flash), `/llms.txt` | Not started |
+| P2 | Edge HTML snapshot inside `#root`, a query-cache seed (no flash), `/llms.txt` | Built (branch `feat/tenant-seo-geo-p1`) |
 | P3 | Tenant SEO fields (migration 0097, `/tenants/{me,:id}/seo`), published hours, LocalBusiness enrichment, sitemap `lastmod` | Not started |
 | P4 | `tenant_faqs` (RLS), editor, home FAQ section, FAQPage markup | Not started |
 | P5 | Owner checklist, `docs/runbook-search-console.md`, Almara content entered through the UI | Not started |
@@ -68,6 +68,14 @@ Two design choices made while building:
   - Listing names are `<Link>`s.
   - The detail page has a visible breadcrumb and treats an API 400 (malformed id) as not found.
   - The root route has a `notFoundComponent`.
+
+## 4b. P2 detail
+
+- `apps/web/src/lib/storefront-content.ts`: one source for the storefront strings (How renting works, default tagline and subhead, guest catalog heading, `firstSentence`, `rentable`, `placeLine`). `routes/index.tsx`, `routes/equipment.tsx` and `routes/contact.tsx` read it.
+- `apps/web/src/lib/snapshot.ts`: `snapshotHtml` (home, catalog, detail, contact; every tenant string escaped; only https links), `seedScript`, `llmsTxt`.
+- `apps/web/src/lib/catalog-seed.ts`: `applyCatalogSeed`, called in `main.tsx` before React mounts.
+- Worker: writes the snapshot and seed on the four pages when the page exists; serves `/llms.txt`.
+- The snapshot is a subset of what the React page shows. `routes/storefront-parity.test.tsx` fails if any snapshot heading, link or value is missing from the rendered page (it caught the guest catalog heading during the build).
 
 ## 5. Compliance
 

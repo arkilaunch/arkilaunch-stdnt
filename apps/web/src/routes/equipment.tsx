@@ -6,6 +6,7 @@ import { storefrontLayoutRoute } from './_storefront.js';
 import { EquipmentCard } from '../components/equipment-card.js';
 import { useShellNav } from '../components/sidebar-shell.js';
 import { PageHeader } from '../components/page-header.js';
+import { CATALOG_DESCRIPTION, CATALOG_TITLE, GUEST_CATALOG_TITLE } from '../lib/storefront-content.js';
 import { SearchFilterBar } from '../components/search-filter-bar.js';
 import { PAGE_SIZE, Pagination } from '../components/pagination.js';
 import { equipmentImageUrl } from '../lib/equipment-images.js';
@@ -173,9 +174,9 @@ function EquipmentPage() {
     <div className={inShell ? 'grid gap-6' : 'grid gap-6 px-4 py-12 sm:px-8'}>
       <div className="flex min-w-0 flex-col gap-6">
       {inShell ? (
-        <PageHeader title="Browse equipment" description="Pick a machine, set its dates, and add it to your cart." />
+        <PageHeader title={CATALOG_TITLE} description={CATALOG_DESCRIPTION} />
       ) : (
-        <h1 className="text-display-md text-text lg:text-display-lg">Equipment for hire</h1>
+        <h1 className="text-display-md text-text lg:text-display-lg">{GUEST_CATALOG_TITLE}</h1>
       )}
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">

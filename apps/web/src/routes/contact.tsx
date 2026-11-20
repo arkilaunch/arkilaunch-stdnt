@@ -1,11 +1,12 @@
 import { createRoute } from '@tanstack/react-router';
 import { publicLayoutRoute } from './_public.js';
 import { useTenant } from '../lib/tenant.js';
+import { placeLine } from '../lib/storefront-content.js';
 import { MessengerLinks, phoneHref } from '../components/messenger-links.js';
 
 function ContactPage() {
   const tenant = useTenant();
-  const place = [tenant?.address, tenant?.city, tenant?.province].filter(Boolean).join(', ');
+  const place = tenant ? placeLine(tenant) : '';
   const hasContact = Boolean(place || tenant?.phone || tenant?.contactEmail);
   return (
     <div className="flex flex-col gap-4 px-6 py-10 sm:px-10">
