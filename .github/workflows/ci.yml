@@ -268,7 +268,8 @@ jobs:
           test/tenant-isolation.spec.ts
 
   console-e2e:
-    runs-on: ubuntu-latest
+    # Playwright 1.55.1 supports Chromium on Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17
