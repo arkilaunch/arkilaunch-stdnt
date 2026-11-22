@@ -18,7 +18,7 @@ test('operations screens fit phone, tablet and desktop widths', async ({ page },
       await page.goto(screen.path);
       await expect(page.getByRole('heading', { name: screen.title, exact: true }).first()).toBeVisible();
       await expect(page.locator('[aria-busy="true"]')).toHaveCount(0);
-      if (screen.slug === 'field-logs') await expect(page.getByTestId('rental-group').first()).toBeVisible();
+      if (screen.slug === 'field-logs') await expect(page.getByTestId('machine-group').first()).toBeVisible();
       if (screen.slug === 'equipment') await expect(page.getByRole('heading', { name: /Excavator/i }).first()).toBeVisible();
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
       if (width === 360 || width === 1440) {

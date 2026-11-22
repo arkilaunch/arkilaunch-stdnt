@@ -82,7 +82,7 @@ async function logInCustomer(page: Page) {
 }
 
 async function finishScan(page: Page, next: Locator, adjustCorners = false) {
-  const use = page.getByRole('button', { name: /Use scan|Use original photo/ });
+  const use = page.getByRole('button', { name: /^(Use scan|Use original photo|Use anyway)$/ });
   const reviewReady = async () => (await use.isVisible()) && (await use.isEnabled());
   await expect.poll(async () => (await next.isVisible()) || (await reviewReady()), { timeout: 60_000 }).toBe(true);
   if (await reviewReady()) {
@@ -320,6 +320,7 @@ async function expectNoHorizontalScroll(page: Page) {
 // check, by design, and none of these is ours to automate. A bot check or an
 // unreachable site skips with the reason rather than failing the suite.
 test.describe('@external registry pages', () => {
+  test.skip(process.env.RUN_EXTERNAL_REGISTRY_TESTS !== 'true', 'Opt in to live third-party registry smoke tests with RUN_EXTERNAL_REGISTRY_TESTS=true');
   test.beforeEach(({ page }, testInfo) => {
     void page;
     test.skip(testInfo.project.name !== 'desktop');

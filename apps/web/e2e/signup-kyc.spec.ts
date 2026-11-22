@@ -51,7 +51,9 @@ for (const width of [360, 375, 390, 430, 1440]) {
     const response = await responsePromise;
     expect(response.status()).toBe(201);
     expect(response.request().postDataJSON()).toMatchObject({ firstName: 'Ana', lastName: 'Peña', mobileNumber: '+639171234567', jobTitle: 'Site Engineer' });
-    await expect(page).toHaveURL(/\/account\/companies\/new/);
+    await expect(page).toHaveURL(/\/equipment$/);
+    await page.goto('/account/applications');
+    await page.getByRole('link', { name: 'Create company', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Add a company' })).toBeVisible();
     const me = await page.evaluate(async () => {
       const { authorizedFetch } = await import('/src/lib/auth-client.ts');

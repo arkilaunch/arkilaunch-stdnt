@@ -17,6 +17,7 @@ test.describe('company documents', () => {
     await expect(page.getByRole('complementary', { name: 'Sidebar' })).toHaveCount(0);
     const png = await page.screenshot({ clip: { x: 0, y: 0, width: 64, height: 64 } });
     const file = (name: string) => ({ name, mimeType: 'image/png', buffer: png });
+    const acceptPhoto = page.getByRole('button', { name: /^(Use scan|Use original photo|Use anyway)$/ });
 
     // A scan that ran and read nothing stops the step; with OCR down the user types it instead.
     let ocrDown = false;
@@ -31,11 +32,11 @@ test.describe('company documents', () => {
     await page.getByRole('button', { name: 'Continue' }).click();
     // Capture the applicant's ID.
     await page.getByTestId('doc-government_id-file').setInputFiles(file('id.png'));
-    await page.getByRole('button', { name: /Use scan|Use original photo/ }).click();
+    await acceptPhoto.click();
     await expect(page.getByText('Document not accepted')).toBeVisible();
     ocrDown = true;
     await page.getByTestId('doc-government_id-file').setInputFiles(file('id.png'));
-    await page.getByRole('button', { name: /Use scan|Use original photo/ }).click();
+    await acceptPhoto.click();
 
     // Step 2: the customer confirms what the ID says.
     await page.getByLabel('First name').fill('Juan');
@@ -57,9 +58,9 @@ test.describe('company documents', () => {
     const next = page.getByRole('button', { name: 'Next: optional DTI certificate' });
     await expect(next).toBeDisabled();
     await page.getByTestId('doc-company_registration-file').setInputFiles(file('sec.png'));
-    await page.getByRole('button', { name: /Use scan|Use original photo/ }).click();
+    await acceptPhoto.click();
     await page.getByTestId('doc-dti_certificate-file').setInputFiles(file('dti.png'));
-    await page.getByRole('button', { name: /Use scan|Use original photo/ }).click();
+    await acceptPhoto.click();
 
     const name = `E2E Docs Corp ${Date.now()}`;
     await page.getByLabel('Company name').fill(name);
