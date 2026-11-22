@@ -83,7 +83,14 @@ export async function rentalJourney(page: Page, info: TestInfo, checkDetail = fa
     } else {
       await expect(page.getByLabel('Rental start')).toBeVisible();
     }
-    await page.getByRole('combobox', { name: 'Project site', exact: true }).click();
+    const company = page.getByRole('combobox', { name: 'Company', exact: true });
+    if (await company.isVisible()) {
+      await company.click();
+      await page.getByRole('option', { name: 'Almara Sample Customer Co.', exact: true }).click();
+    }
+    const site = page.getByRole('combobox', { name: 'Project site', exact: true });
+    await expect(site).toBeEnabled();
+    await site.click();
     await page.getByRole('option').filter({ hasNotText: /Select|No sites|proof needed/ }).first().click();
     await page.getByLabel('Site access notes').evaluate(el => el.scrollIntoView({ block: 'end' }));
     await noOverflow(page);
