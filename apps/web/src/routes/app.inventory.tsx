@@ -318,14 +318,11 @@ function InventoryPage() {
                     aria-label={eq.serialNo}
                   >
                     <InventoryImage equipment={eq} photo={photo} />
-                    <div className="flex min-w-0 flex-col items-start gap-2 px-5 pt-4">
-                      <div className="min-w-0 w-full">
-                        <p className="text-heading-md text-text">{eq.model}</p>
-                        <p className="font-mono text-xs tabular-nums text-text-muted">
-                          {eq.serialNo}
-                        </p>
-                      </div>
-                      <StatusPill tone={meta.tone} label={meta.label} icon={meta.icon} className="shrink-0" />
+                    <div className="min-w-0 px-5 pt-4">
+                      <p className="text-heading-md text-text">{eq.model}</p>
+                      <p className="font-mono text-xs tabular-nums text-text-muted">
+                        {eq.serialNo}
+                      </p>
                     </div>
                     {eq.nextBlock && (
                       <div className="px-5 pt-2">
@@ -341,8 +338,11 @@ function InventoryPage() {
                         </button>
                       </div>
                     )}
+                    <div className="mt-auto flex px-5 pb-4 pt-2">
+                      <StatusPill tone={meta.tone} label={meta.label} icon={meta.icon} />
+                    </div>
                     {manageable && (
-                      <div className="mt-auto flex items-center justify-between gap-2 border-t border-border px-5 py-4">
+                      <div className="flex items-center justify-between gap-2 border-t border-border px-5 py-4">
                         <Button variant="secondary" className="min-w-0 px-4" onClick={() => setServicing({ unit: eq })}>
                           Report &amp; maintenance
                         </Button>

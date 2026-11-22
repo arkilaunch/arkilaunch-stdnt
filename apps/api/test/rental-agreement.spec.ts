@@ -77,6 +77,7 @@ describe('Rental agreement at checkout', () => {
       await sql`delete from payments where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoice_line_items where invoice_id in (select id from invoices where rental_id = any(${ids}))`;
       await sql`delete from invoices where rental_id = any(${ids})`;
+      await sql`delete from rental_equipment_deposits where rental_id = any(${ids})`;
       await sql`delete from rentals where id = any(${ids})`;
     }
     await sql`delete from rental_terms_settings where tenant_id = ${customerCtx.tenantId}`;
