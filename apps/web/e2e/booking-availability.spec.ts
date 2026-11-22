@@ -13,7 +13,7 @@ function localDate(d: Date): string {
 test('booking disables taken dates', async ({ page }) => {
   await signInAsCustomer(page);
   await page.goto('/equipment');
-  await page.locator('h3 button').first().click();
+  await page.locator('h3').getByRole('link').first().click();
   await expect(page).toHaveURL(/\/equipment\/[0-9a-f-]{36}/);
   const equipmentId = page.url().split('/equipment/')[1]!.split(/[?#]/)[0]!;
 
@@ -49,9 +49,9 @@ test('booking disables taken dates', async ({ page }) => {
 
   try {
     await page.goto('/equipment');
-    const card = page.locator('h3 button').first();
+    const card = page.locator(`h3 a[href="/equipment/${equipmentId}"]`);
     await expect(card).toBeVisible();
-    await page.getByRole('button', { name: /rent/i }).first().click();
+    await card.locator('..').locator('..').locator('..').getByRole('button', { name: 'Rent', exact: true }).click();
     const dialog = page.getByRole('dialog');
     const calendar = dialog.getByRole('group', { name: /^Rental dates/ });
     await expect(calendar).toBeVisible();

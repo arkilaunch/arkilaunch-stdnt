@@ -80,7 +80,7 @@ for (const brand of brands) {
       await fixture(page, brand, kind === 'quotation' ? 'owner' : 'customer');
       const path: Record<Kind, string> = { invoice: `/account/invoices/${invoiceId}`, soa: `/account/bookings/${rentalId}/statement`, quotation: `/app/quotes/${quoteId}/print` };
       await page.goto(path[kind]);
-      if (kind === 'invoice') await expect(page.getByRole('heading', { name: 'Itemized costs' })).toBeVisible();
+      if (kind === 'invoice') await expect(page.getByRole('heading', { name: 'Billing statement', exact: true })).toBeVisible();
       else if (kind === 'soa') await expect(page.getByRole('heading', { name: 'Hours by week' })).toBeVisible();
       else await expect(page.getByLabel('Quote line items')).toBeVisible();
       await page.emulateMedia({ media: 'print', reducedMotion: 'reduce' });

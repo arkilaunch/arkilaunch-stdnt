@@ -22,7 +22,7 @@ export async function rentalJourney(page: Page, info: TestInfo, checkDetail = fa
   try {
     await page.goto('/equipment');
     // Migration 0079's inherited costs exceed the seed backhoe's card; the excavator remains quotable.
-    const model = page.getByRole('button', { name: 'Komatsu PC200', exact: true });
+    const model = page.getByRole('link', { name: 'Komatsu PC200', exact: true });
     await expect(model).toBeVisible();
     await noOverflow(page);
     if (checkDetail) {

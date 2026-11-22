@@ -44,6 +44,10 @@ for (const width of [360, 375, 390, 393, 430, 1440]) {
     expect(realDetail.ok()).toBe(true);
     const booking = await realDetail.json();
     booking.callConfirmedAt = new Date().toISOString();
+    booking.agreement = {
+      signedName: 'QA Customer', signedAt: booking.callConfirmedAt, termsVersion: 'v1',
+      signaturePng: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=',
+    };
     if (booking.quotation) booking.quotation.status = 'accepted';
     await page.route(`**/api/v1/bookings/${bookingId}`, (route) => route.fulfill({ json: booking }));
     let chosenMethod: string | undefined;
