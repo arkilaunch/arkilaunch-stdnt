@@ -21,7 +21,7 @@ export function ContainerHeader({ title, count, description, actions, filter, pa
           </h2>
           {description && <p className="mt-0.5 text-sm text-text-muted">{description}</p>}
         </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+        {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">{actions}</div>}
       </div>
       {(filter || pagination) && (
         <div className="flex flex-wrap items-center justify-between gap-3">

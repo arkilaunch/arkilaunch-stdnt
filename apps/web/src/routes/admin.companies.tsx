@@ -225,7 +225,7 @@ function Stats({ items }: { items: PlatformCompany[] }) {
   const active = items.filter((c) => c.status === 'active').length;
   const sum = (pick: (c: PlatformCompany) => number) => items.reduce((n, c) => n + pick(c), 0);
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-4">
       <Stat label="Companies" value={String(items.length)} detail={`${active} active, ${items.length - active} inactive`} />
       <Stat label="Equipment listed" value={String(sum((c) => c.equipmentCount))} />
       <Stat label="Rentals" value={String(sum((c) => c.rentalsCount))} />

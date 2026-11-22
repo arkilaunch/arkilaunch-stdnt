@@ -227,7 +227,7 @@ export function ScanReview({ detail, onRotate }: ScanReviewProps) {
     <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
       <div className="min-w-0 flex-1">
         {imageUrl && (
-          <div className="mb-2 flex items-center gap-2" role="group" aria-label="How to show the sheet">
+          <div className="mb-2 flex flex-wrap items-center gap-2" role="group" aria-label="How to show the sheet">
             {/* The photo first: it is what the reader saw. B/W is an optional aid, and can speckle on shadowed shots. */}
             {(['original', 'scanned'] as const).map((option) => (
               <button

@@ -137,7 +137,7 @@ export function Modal({
         tabIndex={-1}
         className={[
  placement ==='right'
-            ? 'relative flex h-dvh w-full flex-col border-l border-border bg-surface shadow-lg'
+            ? 'relative flex h-dvh w-full min-w-0 flex-col border-l border-border bg-surface shadow-lg'
             : fullScreen
               ? 'relative flex h-dvh w-full flex-col bg-surface shadow-lg'
             : 'relative flex max-h-[90dvh] w-full flex-col rounded-t-md border border-border bg-surface shadow-lg sm:rounded-md',
