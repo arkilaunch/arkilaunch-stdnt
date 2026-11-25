@@ -80,7 +80,7 @@ for (const brand of brands) {
       await fixture(page, brand, kind === 'quotation' ? 'owner' : 'customer');
       const path: Record<Kind, string> = { invoice: `/account/invoices/${invoiceId}`, soa: `/account/bookings/${rentalId}/statement`, quotation: `/app/quotes/${quoteId}/print` };
       await page.goto(path[kind]);
-      if (kind === 'invoice') await expect(page.getByRole('heading', { name: 'Itemized costs' })).toBeVisible();
+      if (kind === 'invoice') await expect(page.getByRole('heading', { name: 'Billing statement' })).toBeVisible();
       else if (kind === 'soa') await expect(page.getByRole('heading', { name: 'Hours by week' })).toBeVisible();
       else await expect(page.getByLabel('Quote line items')).toBeVisible();
       await page.emulateMedia({ media: 'print', reducedMotion: 'reduce' });
@@ -88,6 +88,7 @@ for (const brand of brands) {
       await expect(head).toBeVisible();
       await expect(head).toContainText(brand.name);
       await expect(head).toContainText(companyName);
+      await expect(page.locator('[data-print-footer]')).toHaveText(brand.name);
       if (kind !== 'quotation') await expect(head).toContainText(address);
       await expect(head).toHaveCSS('border-bottom-color', brand.key === 'inter' ? 'rgb(23, 107, 82)' : 'rgb(155, 69, 29)');
       await expect(page.locator('button:visible')).toHaveCount(0);
