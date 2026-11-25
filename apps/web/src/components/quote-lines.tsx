@@ -70,6 +70,9 @@ function RateBreakdownList({ line }: { line: QuoteLine }) {
 export function QuoteLines({ quote, typeName, detailed = false }: { quote: QuoteDetail; typeName?: (id: string) => string; detailed?: boolean }) {
   return (
     <div className="flex flex-col gap-3">
+      {quote.lineItems.length === 0 && (
+        <p className="rounded-md bg-surface-sunk p-3 text-sm text-text-muted">This revision was saved without an itemized breakdown.</p>
+      )}
       <ul aria-label="Quote line items" className="flex flex-col gap-2 border-b border-border pb-3">
         {quote.lineItems.map((line, i) => (
           <li key={i} className={`flex items-start justify-between gap-3 text-sm ${detailed ? 'flex-wrap rounded-md bg-surface-sunk p-4' : ''}`}>

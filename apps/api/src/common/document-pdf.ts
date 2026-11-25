@@ -21,7 +21,6 @@ export class DocumentPdf {
     private font: PDFFont,
     private bold: PDFFont,
     private title: string,
-    private reference: string,
     private brand: StatementBrand,
   ) {}
   static async create(
@@ -55,7 +54,6 @@ export class DocumentPdf {
       await pdf.embedFont(normal, { subset: false }),
       await pdf.embedFont(strong, { subset: false }),
       title,
-      reference,
       brand,
     );
     doc.newPage();
@@ -87,7 +85,7 @@ export class DocumentPdf {
     }
     doc.y = Math.min(doc.y, top - (inset ? 52 : 0)) - 8;
     doc.heading(title);
-    if (reference) doc.paragraph(reference);
+    if (reference) doc.paragraph(`Reference: ${reference}`);
     return doc;
   }
   private text(value: string, x: number, y: number, size = 9, font = this.font) {
@@ -217,11 +215,12 @@ export class DocumentPdf {
           color: rgb(0.94, 0.95, 0.96),
         });
       lines.forEach((cell, i) => {
-        cell
-          .slice(offset, offset + count)
-          .forEach((line, j) =>
-            this.text(line, x + 6, this.y - 15 - j * 12, 8, header ? this.bold : this.font),
-          );
+        const font = header ? this.bold : this.font;
+        const monetary = !header && /^-?PHP [\d,.]+$/.test(cell.join(' '));
+        cell.slice(offset, offset + count).forEach((line, j) => {
+          const left = monetary ? x + columns[i]! - 6 - font.widthOfTextAtSize(line, 8) : x + 6;
+          this.text(line, left, this.y - 15 - j * 12, 8, font);
+        });
         x += columns[i]!;
       });
       this.y -= height;
@@ -282,17 +281,17 @@ export class DocumentPdf {
   async finish(): Promise<Uint8Array> {
     this.flushHeading(0);
     const pages = this.pdf.getPages();
-    pages.forEach((page, i) =>
-      this.wrap(
-        `${this.reference ? `${this.reference} | ` : ''}Page ${i + 1} of ${pages.length}`,
-        WIDTH,
-        7,
-      )
-        .slice(0, 2)
-        .forEach((line, j) =>
-          page.drawText(line, { x: M, y: 34 - j * 9, size: 7, font: this.font, color: MUTED }),
-        ),
-    );
+    pages.forEach((page, i) => {
+      const count = `Page ${i + 1} of ${pages.length}`;
+      const size = 8;
+      const countWidth = this.font.widthOfTextAtSize(count, size);
+      page.drawLine({ start: { x: M, y: 47 }, end: { x: W - M, y: 47 }, thickness: 0.5, color: MUTED });
+      const brandLines = this.wrap(this.brand.name || 'Rental company', WIDTH - countWidth - 20, size);
+      brandLines.slice(0, 2).forEach((line, j) =>
+        page.drawText(line, { x: M, y: 33 - j * 10, size, font: this.font, color: MUTED }),
+      );
+      page.drawText(count, { x: W - M - countWidth, y: 33, size, font: this.font, color: MUTED });
+    });
     return this.pdf.save();
   }
 }

@@ -65,14 +65,7 @@ export function PrintFrame({
         className="hidden print:flex fixed inset-x-0 bottom-0 justify-between gap-4 border-t border-neutral-300 bg-white px-1 pt-1 text-[9px] text-neutral-600"
         data-print-footer
       >
-        <span>
-          {name}
-          {tin ? ` · TIN ${tin}` : ''}
-        </span>
-        <span className="font-mono">
-          {title} {docRef}
-        </span>
-        <span>Printed {printedAt()} (Asia/Manila)</span>
+        <span>{name}</span>
       </div>
     </>
   );

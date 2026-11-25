@@ -52,6 +52,18 @@ describe('Negotiation finalised', () => {
   });
 });
 
+it('shows the issued total and explains missing historical line items', async () => {
+  setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    const body = String(url).includes('/bookings/') ? BOOKING
+      : String(url).includes('/quotes/') ? { lineItems: [], total: 100000 } : [];
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  }));
+  await renderRoute(`/account/negotiation/${BOOKING_ID}`);
+  expect(await screen.findByText(/saved without an itemized breakdown/)).toBeVisible();
+  expect(screen.getByText(/Quoted total/)).toHaveTextContent('100,000.00');
+});
+
 it('keeps the pending quote ahead of an available conversation', async () => {
   vi.stubEnv('VITE_ENABLE_IN_APP_NEGOTIATION', 'true');
   setAccessToken(makeToken(makeValidClaims({ role: 'customer' })));

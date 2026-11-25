@@ -14,7 +14,6 @@ export async function renderInvoicePdf(
 ): Promise<Uint8Array> {
   const doc = await DocumentPdf.create('Invoice', invoice.id, brand);
   doc.facts([
-    ['Date', pdfDate(invoice.createdAt)],
     ['Booking', invoice.bookingCode ?? '-'],
     ['Client / company', invoice.billTo?.companyName ?? '-'],
     ...(invoice.rentalStatement ? ([

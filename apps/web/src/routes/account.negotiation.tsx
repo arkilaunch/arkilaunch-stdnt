@@ -75,8 +75,7 @@ function QuoteCard({ booking }: { booking: BookingDetailResponse }) {
           <StatusPill tone="recon-approved" label="Agreed" icon={<Check className="size-full" />} />
         )}
       </div>
-      <LineItems quoteId={quote.id} />
-      <p className="font-mono text-3xl font-semibold text-text">{formatPeso(quote.totalPhp)}</p>
+      <LineItems quoteId={quote.id} fallbackTotal={quote.totalPhp} />
 
       {quote.status === 'approved' && !expired && (
         <>
@@ -337,10 +336,17 @@ function NegotiationFinalRoute() {
   );
 }
 
-function LineItems({ quoteId }: { quoteId: string }) {
+function LineItems({ quoteId, fallbackTotal }: { quoteId: string; fallbackTotal?: number | null }) {
   const quote = useQuery({ ...quotesQueries.detail(quoteId), enabled: Boolean(quoteId) });
-  if (!quote.data?.lineItems.length) return null;
-  return <QuoteLines quote={quote.data} />;
+  if (quote.isError) return <p role="alert">Could not load the quotation. <button type="button" className="underline" onClick={() => void quote.refetch()}>Try again</button></p>;
+  if (!quote.data) return <p role="status">Loading quotation details...</p>;
+  if (!quote.data.lineItems.length) return (
+    <div className="space-y-2">
+      <p className="text-sm text-text-muted">This revision was saved without an itemized breakdown.</p>
+      {fallbackTotal != null && <p className="font-mono text-xl font-semibold">Quoted total {formatPeso(fallbackTotal)}</p>}
+    </div>
+  );
+  return <QuoteLines quote={quote.data} detailed />;
 }
 
 function Row({ label, value }: { label: string; value: string }) {

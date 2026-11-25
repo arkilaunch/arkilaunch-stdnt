@@ -69,7 +69,7 @@ function CostBreakdown({ booking }: { booking: BookingDetailResponse }) {
           options={quotesQueries.detail(booking.quotation.id)}
           emptyTitle="No itemized costs yet"
           emptyDescription="The rental team has not added equipment costs to this quote yet."
-          isEmpty={(quote) => quote.lineItems.length === 0}
+          isEmpty={() => false}
           render={(quote) => (
             <>
               <p className="text-sm text-text-muted">Quote revision {quote.revision} &middot; {formatStatus(quote.status)}</p>
