@@ -57,7 +57,7 @@ function QuotePrintPage() {
           <span className="font-semibold">{q.customerName}</span>
         </p>
       )}
-      <QuoteLines quote={q} detailed />
+      <QuoteLines quote={q} detailed expandRates />
       <p className="text-xs text-text-muted">
         Fuel priced at {q.dieselPrice.toFixed(2)} PHP per litre (as of {q.dieselPriceDate}). Prices in Philippine pesos.
       </p>

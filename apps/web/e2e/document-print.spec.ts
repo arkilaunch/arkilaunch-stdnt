@@ -112,3 +112,19 @@ for (const brand of brands) {
     });
   }
 }
+
+test('a single quotation line prints on one letter page', async ({ page }) => {
+  await fixture(page, brands[0], 'owner');
+  await page.route('**/api/v1/quotes/' + quoteId, route => route.fulfill({ json: {
+    id: quoteId, revision: 1, status: 'approved', customerName: companyName, bookingCode: 'EQR-QA-PRINT-0001',
+    createdAt: '2026-11-25T00:00:00Z', dieselPrice: 58, dieselPriceDate: '2026-11-25', subtotal: 1200,
+    total: 1200, discount: 0, mobilization: 0, demobilization: 0,
+    lineItems: [{ kind: 'custom', description: 'Equipment transport', quantity: 1, subtotal: 1200 }],
+  } }));
+  await page.goto('/app/quotes/' + quoteId + '/print');
+  await expect(page.getByText('Equipment transport', { exact: false })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  const { PDFDocument } = await import('pdf-lib');
+  const document = await PDFDocument.load(await page.pdf({ format: 'Letter', printBackground: true }));
+  expect(document.getPageCount()).toBe(1);
+});

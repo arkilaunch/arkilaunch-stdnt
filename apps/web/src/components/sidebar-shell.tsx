@@ -50,7 +50,7 @@ export function SidebarShell({ navGroups, navTitle, tenantLabel, children, hideN
 
   return (
     <ShellNavContext.Provider value={{ navGroups, tenantLabel }}>
-      <div className="flex min-h-screen flex-col bg-bg">
+      <div className="flex min-h-screen flex-col bg-bg print:min-h-0">
         <SkipLink />
         <AppBar
           tenantLabel={tenantLabel}

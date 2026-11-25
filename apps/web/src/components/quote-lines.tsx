@@ -46,7 +46,7 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
 }
 
 // Same look as the trucking breakdown; the summary says "per hour", so Total reads as the all-in rate.
-function RateBreakdownList({ line }: { line: QuoteLine }) {
+function RateBreakdownList({ line, expanded }: { line: QuoteLine; expanded: boolean }) {
   const b = line.rateBreakdown!;
   const lines = [
     { label: 'Rent', amountPhp: b.rent },
@@ -55,7 +55,7 @@ function RateBreakdownList({ line }: { line: QuoteLine }) {
     { label: `Fuel (${formatPeso(b.dieselPhp)}/L diesel)`, amountPhp: b.fuel },
   ];
   return (
-    <details className="mt-2 max-w-sm text-sm">
+    <details open={expanded} className="mt-2 max-w-sm text-sm">
       <summary className="cursor-pointer text-text-muted">Price breakdown per hour</summary>
       <div className="mt-2">
         <PriceBreakdown price={{ km: 0, lines, totalPhp: b.allIn }} />
@@ -67,7 +67,7 @@ function RateBreakdownList({ line }: { line: QuoteLine }) {
   );
 }
 
-export function QuoteLines({ quote, typeName, detailed = false }: { quote: QuoteDetail; typeName?: (id: string) => string; detailed?: boolean }) {
+export function QuoteLines({ quote, typeName, detailed = false, expandRates = false }: { quote: QuoteDetail; expandRates?: boolean; typeName?: (id: string) => string; detailed?: boolean }) {
   return (
     <div className="flex flex-col gap-3">
       {quote.lineItems.length === 0 && (
@@ -79,7 +79,7 @@ export function QuoteLines({ quote, typeName, detailed = false }: { quote: Quote
             <div className="min-w-0 flex-1 text-text">
               {line.quantity} &times; {lineName(line, typeName)}
               <span className={`block text-text-muted ${detailed ? 'mt-2 text-sm' : 'text-xs'}`}>{detailed && line.kind === 'equipment' ? 'Pricing basis: ' : ''}{lineDetail(line, detailed)}</span>
-              {line.kind === 'equipment' && line.rateBreakdown && <RateBreakdownList line={line} />}
+              {line.kind === 'equipment' && line.rateBreakdown && <RateBreakdownList line={line} expanded={expandRates} />}
               {detailed && line.kind === 'equipment' && (
                 <span className="mt-1 block text-sm text-text-muted">{count(line.estimatedHours)} quoted billable hours per unit</span>
               )}
